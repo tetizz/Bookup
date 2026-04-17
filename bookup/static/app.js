@@ -43,7 +43,7 @@ const el = {
 
 function init() {
   el.username.value = defaults.username || "trixize1234";
-  el.timeClasses.value = defaults.time_classes || "rapid,blitz";
+  el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games || 40;
   el.enginePath.value = defaults.engine_path || "";
   el.depth.value = defaults.depth || 13;
@@ -87,7 +87,7 @@ async function runAnalysis() {
 function renderProfile(payload) {
   const profile = payload.profile;
   el.heroTitle.textContent = `${payload.username}'s profile`;
-  el.heroSummary.textContent = `Analyzed ${profile.games_analyzed} ${payload.time_classes.join(", ")} games. Focused on recurring openings, where you lose the most value, and what the engine wants in your most common positions.`;
+  el.heroSummary.textContent = `Imported ${payload.games_imported} games across ${payload.archives_found} archive months for ${payload.time_classes.join(", ")}. Focused on recurring openings, where you lose the most value, and what the engine wants in your most common positions.`;
 
   const metrics = [
     ["Castle rate", `${profile.style_metrics.castle_rate}%`],

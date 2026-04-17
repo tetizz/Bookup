@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import chess
@@ -282,5 +282,5 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             for (color, opening), count in color_openings.most_common(8)
         ],
         "improvements": improvements,
-        "opening_advice": [entry.__dict__ for entry in advice],
+        "opening_advice": [asdict(entry) for entry in advice],
     }

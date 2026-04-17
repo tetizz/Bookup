@@ -9,7 +9,7 @@ import requests
 
 
 HEADERS = {
-    "User-Agent": "Bookup/0.1 (+local desktop study app)",
+    "User-Agent": "Bookup/0.2 (username: trixize1234; contact: https://github.com/tetizz/Bookup)",
 }
 
 
@@ -30,10 +30,22 @@ def _get_json(url: str) -> dict:
     return response.json()
 
 
+def fetch_archives(username: str) -> list[str]:
+    return list(_get_json(f"https://api.chess.com/pub/player/{username}/games/archives").get("archives", []))
+
+
+def normalize_time_classes(values: Iterable[str]) -> set[str]:
+    normalized = {value.strip().lower() for value in values if value.strip()}
+    if not normalized or normalized == {"all"}:
+        return set()
+    return normalized
+
+
 def fetch_games(username: str, time_classes: Iterable[str], max_games: int) -> list[ImportedGame]:
-    target = {value.strip().lower() for value in time_classes if value.strip()}
-    archives = _get_json(f"https://api.chess.com/pub/player/{username}/games/archives").get("archives", [])
+    target = normalize_time_classes(time_classes)
+    archives = fetch_archives(username)
     imported: list[ImportedGame] = []
+    username_lc = username.lower()
 
     for archive_url in reversed(archives):
         month = _get_json(archive_url)
@@ -43,11 +55,11 @@ def fetch_games(username: str, time_classes: Iterable[str], max_games: int) -> l
                 continue
             white = raw_game.get("white", {})
             black = raw_game.get("black", {})
-            if str(white.get("username", "")).lower() == username.lower():
+            if str(white.get("username", "")).lower() == username_lc:
                 color = "white"
                 opponent = str(black.get("username", "Unknown"))
                 result = str(white.get("result", ""))
-            elif str(black.get("username", "")).lower() == username.lower():
+            elif str(black.get("username", "")).lower() == username_lc:
                 color = "black"
                 opponent = str(white.get("username", "Unknown"))
                 result = str(black.get("result", ""))

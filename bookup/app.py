@@ -12,7 +12,7 @@ from flask import Flask, jsonify, render_template, request
 import webview
 
 from .analysis import analyse_games
-from .chesscom import fetch_games
+from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .engine import EngineSession, EngineSettings, default_engine_path
 
 
@@ -47,7 +47,7 @@ def index() -> str:
     config = load_config()
     defaults = {
         "username": config.get("username", "trixize1234"),
-        "time_classes": config.get("time_classes", "rapid,blitz"),
+        "time_classes": config.get("time_classes", "all"),
         "max_games": int(config.get("max_games", 40)),
         "engine_path": config.get("engine_path", default_engine_path()),
         "depth": int(config.get("depth", 13)),
@@ -64,7 +64,9 @@ def profile() -> tuple:
     if not username:
         return jsonify({"error": "Chess.com username is required."}), 400
 
-    time_classes = [item.strip() for item in str(payload.get("time_classes", "rapid")).split(",") if item.strip()]
+    raw_time_classes = str(payload.get("time_classes", "all")).strip()
+    time_classes = [item.strip() for item in raw_time_classes.split(",") if item.strip()]
+    normalized_time_classes = normalize_time_classes(time_classes)
     max_games = max(1, min(200, int(payload.get("max_games", 40))))
     engine_path = str(payload.get("engine_path", "")).strip()
     if not engine_path:
@@ -80,7 +82,7 @@ def profile() -> tuple:
     save_config(
         {
             "username": username,
-            "time_classes": ",".join(time_classes),
+            "time_classes": raw_time_classes or "all",
             "max_games": max_games,
             "engine_path": engine_path,
             "depth": settings.depth,
@@ -90,7 +92,8 @@ def profile() -> tuple:
     )
 
     try:
-        games = fetch_games(username, time_classes, max_games)
+        archives = fetch_archives(username)
+        games = fetch_games(username, normalized_time_classes, max_games)
     except Exception as exc:
         return jsonify({"error": f"Could not import Chess.com games: {exc}"}), 502
 
@@ -108,7 +111,9 @@ def profile() -> tuple:
     return jsonify(
         {
             "username": username,
-            "time_classes": time_classes,
+            "time_classes": sorted(normalized_time_classes) if normalized_time_classes else ["all public games"],
+            "archives_found": len(archives),
+            "games_imported": len(games),
             "profile": profile_data,
         }
     )
