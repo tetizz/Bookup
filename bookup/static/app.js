@@ -15,6 +15,11 @@ const PIECE_ASSETS = {
 };
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
+const phaseColors = {
+  opening: "#3ef0a0",
+  middlegame: "#5ca0ff",
+  endgame: "#ff5c63",
+};
 
 const el = {
   username: document.getElementById("usernameInput"),
@@ -28,9 +33,31 @@ const el = {
   status: document.getElementById("status"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
+  badgeWinRate: document.getElementById("badgeWinRate"),
+  badgeChaos: document.getElementById("badgeChaos"),
+  badgeColor: document.getElementById("badgeColor"),
+  radarWrap: document.getElementById("radarWrap"),
   styleMetrics: document.getElementById("styleMetrics"),
   styleSummary: document.getElementById("styleSummary"),
-  openingList: document.getElementById("openingList"),
+  firstMoveLead: document.getElementById("firstMoveLead"),
+  firstMoveList: document.getElementById("firstMoveList"),
+  openingListWhite: document.getElementById("openingListWhite"),
+  openingListBlack: document.getElementById("openingListBlack"),
+  phaseBreakdown: document.getElementById("phaseBreakdown"),
+  whereGamesEnd: document.getElementById("whereGamesEnd"),
+  phaseBars: document.getElementById("phaseBars"),
+  gameLengthStats: document.getElementById("gameLengthStats"),
+  resignationStats: document.getElementById("resignationStats"),
+  colorWhite: document.getElementById("colorWhite"),
+  colorBlack: document.getElementById("colorBlack"),
+  opponentStrength: document.getElementById("opponentStrength"),
+  clockLine: document.getElementById("clockLine"),
+  clockPhaseStats: document.getElementById("clockPhaseStats"),
+  castlingPie: document.getElementById("castlingPie"),
+  castlingStats: document.getElementById("castlingStats"),
+  timeControlChart: document.getElementById("timeControlChart"),
+  hourlyChart: document.getElementById("hourlyChart"),
+  dossierGrid: document.getElementById("dossierGrid"),
   improvementList: document.getElementById("improvementList"),
   adviceList: document.getElementById("adviceList"),
   board: document.getElementById("board"),
@@ -55,7 +82,7 @@ function init() {
 }
 
 async function runAnalysis() {
-  setStatus("Importing games and building profile...");
+  setStatus("Importing games and building scout report...");
   el.analyze.disabled = true;
   try {
     const response = await fetch("/api/profile", {
@@ -72,9 +99,7 @@ async function runAnalysis() {
       }),
     });
     const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Profile build failed.");
-    }
+    if (!response.ok) throw new Error(payload.error || "Profile build failed.");
     renderProfile(payload);
     setStatus(`Analyzed ${payload.profile.games_analyzed} games for ${payload.username}.`);
   } catch (error) {
@@ -86,40 +111,293 @@ async function runAnalysis() {
 
 function renderProfile(payload) {
   const profile = payload.profile;
-  el.heroTitle.textContent = `${payload.username}'s profile`;
-  el.heroSummary.textContent = `Imported ${payload.games_imported} games across ${payload.archives_found} archive months for ${payload.time_classes.join(", ")}. Focused on recurring openings, where you lose the most value, and what the engine wants in your most common positions.`;
+  el.heroTitle.textContent = `${payload.username} scout report`;
+  el.heroSummary.textContent = profile.scout_brief;
+  el.badgeWinRate.textContent = `${profile.hero_stats.win_rate}%`;
+  el.badgeChaos.textContent = `${profile.hero_stats.chaos_index}/100`;
+  el.badgeColor.textContent = profile.hero_stats.better_as;
 
-  const metrics = [
-    ["Castle rate", `${profile.style_metrics.castle_rate}%`],
-    ["Early queen rate", `${profile.style_metrics.early_queen_rate}%`],
-    ["Capture rate", `${profile.style_metrics.capture_rate}%`],
-    ["Checks / game", `${profile.style_metrics.checks_per_game}`],
-  ];
-  el.styleMetrics.innerHTML = metrics.map(([label, value]) => `
-    <div class="metric">
-      <div class="metric-label">${label}</div>
-      <div class="metric-value">${value}</div>
-    </div>
-  `).join("");
-  el.styleSummary.textContent = profile.style_summary;
+  renderRadar(profile.radar || {});
+  renderStyleMetrics(profile.style_metrics || {});
+  el.styleSummary.textContent = profile.style_summary || "";
 
-  renderOpenings(profile.top_openings || []);
+  renderFirstMove(profile.first_move_repertoire || {});
+  renderOpenings(profile.top_openings_by_color || {});
+  renderPhaseBreakdown(profile.phase_breakdown || []);
+  renderWhereGamesEnd(profile.phase_breakdown || []);
+  renderGameLength(profile.game_length || {});
+  renderResignation(profile.resignation || {});
+  renderColorRecord(profile.color_record || {});
+  renderOpponentStrength(profile.opponent_strength || []);
+  renderClock(profile.clock || {});
+  renderCastling(profile.castling || {});
+  renderTimeControl(profile.time_control || {});
+  renderDossier(profile.dossier || []);
   renderImprovements(profile.improvements || []);
   renderAdvice(profile.opening_advice || []);
 }
 
-function renderOpenings(openings) {
-  if (!openings.length) {
-    el.openingList.className = "stack empty";
-    el.openingList.textContent = "No opening profile yet.";
+function renderStyleMetrics(metrics) {
+  const items = [
+    ["Chaos Index", `${Math.round(metrics.chaos_index || 0)}/100`, "accent-danger", "Thrives in chaos — keep it structured."],
+    ["Aggression Index", `${Math.round(metrics.aggression_index || 0)}/100`, "accent-danger", "Highly aggressive — lots of captures and checks."],
+    ["Capture Rate", `${metrics.capture_rate || 0}%`, "accent-danger", "captures / moves"],
+    ["Forcing Rate", `${metrics.forcing_rate || 0}%`, "accent-gold", "forcing / moves"],
+    ["Avg Captures/Game", `${metrics.avg_captures_per_game || 0}`, "accent-good", "captures each game"],
+    ["Tactical Bursts", `${metrics.tactical_bursts || 0}`, "accent-good", "consecutive forcing moves"],
+  ];
+  el.styleMetrics.innerHTML = items.map(([label, value, accent, note]) => `
+    <div class="metric">
+      <div class="metric-label">${label}</div>
+      <div class="metric-value ${accent}">${value}</div>
+      <div class="metric-note">${note}</div>
+    </div>
+  `).join("");
+}
+
+function renderFirstMove(data) {
+  const top = data.top_move;
+  if (!top) {
+    el.firstMoveLead.textContent = "No white first-move data yet.";
+    el.firstMoveList.className = "stack empty";
+    el.firstMoveList.textContent = "No first-move repertoire yet.";
     return;
   }
-  el.openingList.className = "stack";
-  el.openingList.innerHTML = openings.map((item) => `
+  el.firstMoveLead.innerHTML = `
+    First move repertoire as White
+    <strong>${top.move}</strong>
+    ${top.pct}% · ${top.count}x
+  `;
+  el.firstMoveList.className = "stack";
+  el.firstMoveList.innerHTML = (data.items || []).map((item, index) => `
     <div class="item">
-      <div class="item-title">${item.opening}</div>
-      <div class="item-sub">You reached this as ${item.color} in ${item.count} games.</div>
+      <div class="item-title">${index + 1}. ${item.move}</div>
+      <div class="item-sub">${item.pct}% · ${item.count} games</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${item.pct}%"></div></div>
     </div>
+  `).join("");
+}
+
+function renderOpenings(byColor) {
+  renderOpeningColumn(el.openingListWhite, byColor.white || [], "white");
+  renderOpeningColumn(el.openingListBlack, byColor.black || [], "black");
+}
+
+function renderOpeningColumn(node, items, side) {
+  if (!items.length) {
+    node.className = "stack empty";
+    node.textContent = `No ${side} opening profile yet.`;
+    return;
+  }
+  node.className = "stack";
+  node.innerHTML = items.map((item, index) => `
+    <div class="item">
+      <div class="item-title">${index + 1}. ${item.opening}</div>
+      <div class="item-sub">${item.count}x · ${item.win_rate}% win rate</div>
+      <div class="record-line">
+        <span class="record-win">${item.record.wins}W</span>
+        <span class="record-draw">${item.record.draws}D</span>
+        <span class="record-loss">${item.record.losses}L</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderPhaseBreakdown(phases) {
+  el.phaseBreakdown.innerHTML = phases.map((item) => `
+    <article class="phase-card ${item.phase}">
+      <div class="metric-label">${item.label}</div>
+      <div class="phase-big"><strong>${item.games}</strong><span>(${item.pct}%)</span></div>
+      <div class="phase-record">
+        <span class="record-win">${item.wins}W</span>
+        <span class="record-loss">${item.losses}L</span>
+        <span class="record-draw">${item.draws}D</span>
+        <span>${item.avg_seconds_per_move}s/mv</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill ${item.phase === "middlegame" ? "blue" : item.phase === "endgame" ? "red" : ""}" style="width:${item.pct}%"></div></div>
+    </article>
+  `).join("");
+}
+
+function renderWhereGamesEnd(phases) {
+  el.whereGamesEnd.innerHTML = renderDonut(phases.map((item) => ({
+    label: item.label,
+    value: item.games,
+    color: phaseColors[item.phase],
+  })));
+
+  el.phaseBars.className = "stack";
+  el.phaseBars.innerHTML = phases.map((item) => `
+    <div class="item">
+      <div class="item-title">${item.label}</div>
+      <div class="record-line">
+        <span class="record-win">${item.wins} wins</span>
+        <span class="record-loss">${item.losses} losses</span>
+        <span class="record-draw">${item.draws} draws</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill ${item.phase === "middlegame" ? "blue" : item.phase === "endgame" ? "red" : ""}" style="width:${Math.max(item.wins + item.losses + item.draws ? (item.wins / (item.wins + item.losses + item.draws)) * 100 : 0, 3)}%"></div>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderGameLength(info) {
+  const items = [
+    ["Avg Game", `${info.avg_game || 0} moves`, "accent-good", ""],
+    ["Avg Win", `${info.avg_win || 0} moves`, "accent-good", "when they win"],
+    ["Avg Loss", `${info.avg_loss || 0} moves`, "accent-danger", "when they lose"],
+    ["Endgame WR", `${info.endgame_wr || 0}%`, "accent-good", `${info.endgame_games || 0} endgame games`],
+  ];
+  el.gameLengthStats.innerHTML = items.map(([label, value, accent, note]) => `
+    <div class="stat-card">
+      <div class="metric-label">${label}</div>
+      <strong class="${accent}">${value}</strong>
+      <div class="record-sub">${note}</div>
+    </div>
+  `).join("");
+}
+
+function renderResignation(info) {
+  const items = [
+    ["Avg Resignation Move", info.avg_move ? `Move ${info.avg_move}` : "—", "accent-danger", "Fights hard before resigning"],
+    ["Early Resign Rate", `${info.early_rate || 0}%`, "accent-danger", "resign before move 20"],
+    ["Fighting Spirit", info.fighting_spirit || "—", "accent-good", ""],
+  ];
+  el.resignationStats.innerHTML = items.map(([label, value, accent, note]) => `
+    <div class="stat-card">
+      <div class="metric-label">${label}</div>
+      <strong class="${accent}">${value}</strong>
+      <div class="record-sub">${note}</div>
+    </div>
+  `).join("");
+}
+
+function renderColorRecord(info) {
+  renderRecordBox(el.colorWhite, info.white, "As White");
+  renderRecordBox(el.colorBlack, info.black, "As Black");
+}
+
+function renderOpponentStrength(items) {
+  if (!items.length) {
+    el.opponentStrength.innerHTML = `<div class="record-box empty">No opponent-strength data yet.</div>`;
+    return;
+  }
+  el.opponentStrength.innerHTML = items.map((item) => `
+    <div class="stat-card">
+      <div class="metric-label">${item.bucket}</div>
+      <strong class="${item.bucket === "vs higher" ? "accent-danger" : item.bucket === "vs equal" ? "accent-blue" : "accent-gold"}">${item.win_rate}%</strong>
+      <div class="record-sub">${item.games} games</div>
+      <div class="bar-track"><div class="bar-fill ${item.bucket === "vs higher" ? "red" : item.bucket === "vs equal" ? "blue" : "gold"}" style="width:${item.win_rate}%"></div></div>
+    </div>
+  `).join("");
+}
+
+function renderRecordBox(node, record, title) {
+  if (!record) {
+    node.className = "record-box empty";
+    node.textContent = "No data yet.";
+    return;
+  }
+  node.className = "record-box";
+  node.innerHTML = `
+    <div class="record-label">${title}</div>
+    <strong>${record.win_rate}%</strong>
+    <div class="record-line">
+      <span class="record-win">${record.wins}W</span>
+      <span class="record-draw">${record.draws}D</span>
+      <span class="record-loss">${record.losses}L</span>
+    </div>
+    <div class="bar-track">
+      <div class="bar-fill" style="width:${record.win_rate}%"></div>
+    </div>
+  `;
+}
+
+function renderClock(clock) {
+  const linePoints = [
+    { label: "Start", value: parseClockText(clock.avg_remaining?.start) },
+    { label: "Mid", value: parseClockText(clock.avg_remaining?.middlegame) },
+    { label: "Endgame", value: parseClockText(clock.avg_remaining?.endgame) },
+    { label: "End", value: parseClockText(clock.avg_remaining?.end) },
+  ];
+  el.clockLine.className = "chart-wrap";
+  el.clockLine.innerHTML = renderLineChart(linePoints, "#3ef0a0", 600);
+
+  const items = [
+    ["Game Start", clock.avg_remaining?.start || "—", "accent-good"],
+    ["Middlegame", clock.avg_remaining?.middlegame || "—", "accent-blue"],
+    ["Endgame", clock.avg_remaining?.endgame || "—", "accent-gold"],
+    ["Game End", clock.avg_remaining?.end || "—", "accent-danger"],
+    ["Clock Burn Rate", `${clock.burn_rate_pct || 0}% burned`, "accent-good"],
+    ["Opening s/mv", `${clock.seconds_per_move?.opening || 0}s`, "accent-blue"],
+    ["Middlegame s/mv", `${clock.seconds_per_move?.middlegame || 0}s`, "accent-blue"],
+    ["Endgame s/mv", `${clock.seconds_per_move?.endgame || 0}s`, "accent-gold"],
+  ];
+  el.clockPhaseStats.innerHTML = items.map(([label, value, accent]) => `
+    <div class="mini-card">
+      <div class="metric-label">${label}</div>
+      <strong class="${accent}">${value}</strong>
+    </div>
+  `).join("");
+}
+
+function renderCastling(castling) {
+  el.castlingPie.innerHTML = renderDonut([
+    { label: "Kingside", value: castling.kingside || 0, color: "#3ef0a0" },
+    { label: "Queenside", value: castling.queenside || 0, color: "#f3c542" },
+    { label: "No Castle", value: castling.no_castle || 0, color: "#5ca0ff" },
+  ]);
+  const items = [
+    ["Avg Castle Move", castling.avg_move ? `Move ${castling.avg_move}` : "—", "accent-good"],
+    ["Castle Rate", `${castling.rate || 0}%`, "accent-good"],
+    ["Early (≤ 8)", `${castling.early_pct || 0}%`, "accent-good"],
+    ["Late (> 15)", `${castling.late_pct || 0}%`, "accent-danger"],
+    ["Kingside", `${castling.kingside || 0} games`, "accent-blue"],
+    ["Queenside", `${castling.queenside || 0} games`, "accent-gold"],
+  ];
+  el.castlingStats.innerHTML = items.map(([label, value, accent]) => `
+    <div class="mini-card">
+      <div class="metric-label">${label}</div>
+      <strong class="${accent}">${value}</strong>
+    </div>
+  `).join("");
+}
+
+function renderTimeControl(info) {
+  const classes = info.by_class || [];
+  if (!classes.length) {
+    el.timeControlChart.className = "stack empty";
+    el.timeControlChart.textContent = "No time control data yet.";
+  } else {
+    el.timeControlChart.className = "stack";
+    el.timeControlChart.innerHTML = classes.map((item) => `
+      <div class="item">
+        <div class="item-title">${item.label}</div>
+        <div class="record-line">
+          <span>${item.games} games</span>
+          <span class="record-win">${item.wins}W</span>
+          <span class="record-loss">${item.losses}L</span>
+          <span class="record-draw">${item.draws}D</span>
+          <span class="record-gold">${item.win_rate}% WR</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill blue" style="width:${item.win_rate}%"></div></div>
+      </div>
+    `).join("");
+  }
+  const hourly = (info.hourly || []).map((item) => ({ label: formatHour(item.hour), value: item.win_rate ?? 0 }));
+  el.hourlyChart.className = "chart-wrap";
+  el.hourlyChart.innerHTML = renderLineChart(hourly, "#f3c542", 100, 720);
+}
+
+function renderDossier(items) {
+  el.dossierGrid.innerHTML = items.map((item) => `
+    <article class="dossier-card">
+      <div class="dossier-label">${item.label}</div>
+      <div class="dossier-value ${accentClass(item.accent)}">${item.value}</div>
+      <div class="small-note">${item.detail}</div>
+      <div class="small-note ${item.tone === "critical" ? "accent-danger" : "accent-good"}">${item.tone}</div>
+    </article>
   `).join("");
 }
 
@@ -180,6 +458,103 @@ function renderAdvice(advice) {
   });
 }
 
+function renderRadar(radar) {
+  const entries = Object.entries(radar);
+  if (!entries.length) {
+    el.radarWrap.textContent = "No radar data yet.";
+    return;
+  }
+  const size = 420;
+  const cx = 210;
+  const cy = 210;
+  const radius = 140;
+  const levels = 5;
+  const points = entries.map(([label, value], index) => {
+    const angle = (-Math.PI / 2) + (Math.PI * 2 * index / entries.length);
+    const r = radius * (value / 100);
+    return {
+      label,
+      value,
+      x: cx + Math.cos(angle) * r,
+      y: cy + Math.sin(angle) * r,
+      lx: cx + Math.cos(angle) * (radius + 34),
+      ly: cy + Math.sin(angle) * (radius + 34),
+      ax: cx + Math.cos(angle) * radius,
+      ay: cy + Math.sin(angle) * radius,
+    };
+  });
+  const gridPolys = [];
+  for (let level = 1; level <= levels; level += 1) {
+    const r = radius * (level / levels);
+    gridPolys.push(points.map((_, index) => {
+      const angle = (-Math.PI / 2) + (Math.PI * 2 * index / entries.length);
+      return `${cx + Math.cos(angle) * r},${cy + Math.sin(angle) * r}`;
+    }).join(" "));
+  }
+  const polygon = points.map((point) => `${point.x},${point.y}`).join(" ");
+  el.radarWrap.innerHTML = `
+    <svg viewBox="0 0 ${size} ${size}" role="img" aria-label="Style radar">
+      ${gridPolys.map((poly) => `<polygon points="${poly}" fill="none" stroke="rgba(126, 168, 146, 0.25)" stroke-width="1.4"></polygon>`).join("")}
+      ${points.map((point) => `<line x1="${cx}" y1="${cy}" x2="${point.ax}" y2="${point.ay}" stroke="rgba(126, 168, 146, 0.25)" stroke-width="1.2"></line>`).join("")}
+      <polygon points="${polygon}" fill="rgba(62, 240, 160, 0.18)" stroke="#3ef0a0" stroke-width="3"></polygon>
+      ${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="5.5" fill="#10231c" stroke="#3ef0a0" stroke-width="2"></circle>`).join("")}
+      ${points.map((point) => `<text x="${point.lx}" y="${point.ly}" fill="#f2efe3" font-size="12" font-family="'JetBrains Mono', monospace" text-anchor="middle">${escapeHtml(point.label)}</text>`).join("")}
+    </svg>
+  `;
+}
+
+function renderDonut(items) {
+  const total = items.reduce((sum, item) => sum + (item.value || 0), 0) || 1;
+  const radius = 80;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  const rings = items.map((item) => {
+    const fraction = (item.value || 0) / total;
+    const length = fraction * circumference;
+    const ring = `<circle r="${radius}" cx="110" cy="110" fill="none" stroke="${item.color}" stroke-width="34" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 110 110)"></circle>`;
+    offset += length;
+    return ring;
+  }).join("");
+  return `
+    <svg viewBox="0 0 260 260">
+      <circle r="${radius}" cx="110" cy="110" fill="none" stroke="rgba(111, 152, 136, 0.14)" stroke-width="34"></circle>
+      ${rings}
+      <circle r="52" cx="110" cy="110" fill="#10231c"></circle>
+      <text x="110" y="114" fill="#f2efe3" font-family="'JetBrains Mono', monospace" font-size="24" text-anchor="middle">${items.reduce((sum, item) => sum + (item.value || 0), 0)}</text>
+      ${items.map((item, index) => `<text x="18" y="${228 + index * 18}" fill="${item.color}" font-family="'JetBrains Mono', monospace" font-size="11">${escapeHtml(item.label)}: ${item.value}</text>`).join("")}
+    </svg>
+  `;
+}
+
+function renderLineChart(points, color, maxValue, width = 520, height = 260) {
+  const svgWidth = width;
+  const svgHeight = height;
+  const pad = { top: 28, right: 16, bottom: 42, left: 38 };
+  const chartWidth = svgWidth - pad.left - pad.right;
+  const chartHeight = svgHeight - pad.top - pad.bottom;
+  const safeMax = maxValue || Math.max(...points.map((point) => point.value || 0), 1);
+  const coords = points.map((point, index) => {
+    const x = pad.left + (chartWidth * (points.length === 1 ? 0 : index / (points.length - 1)));
+    const y = pad.top + chartHeight - (((point.value || 0) / safeMax) * chartHeight);
+    return { ...point, x, y };
+  });
+  const path = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const area = `${path} L ${coords[coords.length - 1].x} ${pad.top + chartHeight} L ${coords[0].x} ${pad.top + chartHeight} Z`;
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((tick) => ({
+    value: safeMax * tick,
+    y: pad.top + chartHeight - (chartHeight * tick),
+  }));
+  return `
+    <svg viewBox="0 0 ${svgWidth} ${svgHeight}">
+      ${yTicks.map((tick) => `<line x1="${pad.left}" y1="${tick.y}" x2="${pad.left + chartWidth}" y2="${tick.y}" stroke="rgba(111, 152, 136, 0.14)" stroke-dasharray="4 4"></line>`).join("")}
+      <path d="${area}" fill="${color}20"></path>
+      <path d="${path}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round"></path>
+      ${coords.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="${color}"></circle>`).join("")}
+      ${coords.map((point) => `<text x="${point.x}" y="${svgHeight - 10}" fill="#6f9888" font-family="'JetBrains Mono', monospace" font-size="11" text-anchor="middle">${escapeHtml(point.label)}</text>`).join("")}
+    </svg>
+  `;
+}
+
 function renderCoords() {
   el.rankLabels.innerHTML = ranks.map((r) => `<span>${r}</span>`).join("");
   el.fileLabels.innerHTML = files.map((f) => `<span>${f}</span>`).join("");
@@ -220,6 +595,35 @@ function parseFenBoard(fen) {
     });
   });
   return out;
+}
+
+function parseClockText(text) {
+  if (!text) return 0;
+  const [mins, secs] = String(text).replace("m", "").replace("s", "").split(/\s+/).filter(Boolean);
+  if (String(text).includes("m")) {
+    const match = String(text).match(/(\d+)m\s+(\d+)s/);
+    if (match) return Number(match[1]) * 60 + Number(match[2]);
+  }
+  return Number(mins) || 0;
+}
+
+function accentClass(accent) {
+  if (accent === "danger") return "accent-danger";
+  if (accent === "blue") return "accent-blue";
+  if (accent === "gold") return "accent-gold";
+  return "accent-good";
+}
+
+function formatHour(hour) {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function setStatus(message) {
