@@ -6,3 +6,7 @@ __pycache__/
 venv/
 exports/
 config.json
+build/
+dist/
+release/
+*.spec

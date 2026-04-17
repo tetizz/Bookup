@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
-import webbrowser
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
 from flask import Flask, jsonify, render_template, request
+import webview
 
 from .analysis import analyse_games
 from .chesscom import fetch_games
@@ -16,12 +17,15 @@ from .engine import EngineSession, EngineSettings, default_engine_path
 
 
 APP_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = APP_DIR.parent / "config.json"
+ROOT_DIR = APP_DIR.parent
+RUNTIME_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else ROOT_DIR
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
+CONFIG_PATH = RUNTIME_DIR / "config.json"
 
 app = Flask(
     __name__,
-    template_folder=str(APP_DIR / "templates"),
-    static_folder=str(APP_DIR / "static"),
+    template_folder=str(RESOURCE_DIR / "bookup" / "templates"),
+    static_folder=str(RESOURCE_DIR / "bookup" / "static"),
 )
 
 
@@ -130,4 +134,12 @@ def run_app() -> None:
             pass
         threading.Event().wait(0.1)
 
-    webbrowser.open(url)
+    webview.create_window(
+        "Bookup",
+        url,
+        width=1500,
+        height=980,
+        min_size=(1120, 760),
+        text_select=True,
+    )
+    webview.start()

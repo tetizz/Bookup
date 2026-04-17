@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 import chess
 import chess.engine
 
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+RUNTIME_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else ROOT_DIR
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
+
 DEFAULT_ENGINE_HINTS = [
+    RESOURCE_DIR / "stockfish" / "stockfish-windows-x86-64-avx2.exe",
+    RESOURCE_DIR / "stockfish.exe",
+    RUNTIME_DIR / "stockfish.exe",
+    RUNTIME_DIR / "stockfish" / "stockfish-windows-x86-64-avx2.exe",
+    ROOT_DIR / "stockfish.exe",
+    ROOT_DIR / "stockfish" / "stockfish-windows-x86-64-avx2.exe",
     Path(r"C:\Users\adria\Downloads\Brilliant-move-finder\stockfish\stockfish-windows-x86-64-avx2.exe"),
     Path(r"C:\Users\adria\Downloads\Brilliant-move-finder\release\Brilliant Move Finder\stockfish\stockfish-windows-x86-64-avx2.exe"),
 ]

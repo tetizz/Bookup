@@ -1,4 +1,20 @@
 const defaults = window.APP_DEFAULTS || {};
+const PIECE_ASSETS = {
+  P: "/static/pieces/cburnett/wP.svg",
+  N: "/static/pieces/cburnett/wN.svg",
+  B: "/static/pieces/cburnett/wB.svg",
+  R: "/static/pieces/cburnett/wR.svg",
+  Q: "/static/pieces/cburnett/wQ.svg",
+  K: "/static/pieces/cburnett/wK.svg",
+  p: "/static/pieces/cburnett/bP.svg",
+  n: "/static/pieces/cburnett/bN.svg",
+  b: "/static/pieces/cburnett/bB.svg",
+  r: "/static/pieces/cburnett/bR.svg",
+  q: "/static/pieces/cburnett/bQ.svg",
+  k: "/static/pieces/cburnett/bK.svg",
+};
+const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
 const el = {
   username: document.getElementById("usernameInput"),
@@ -17,6 +33,12 @@ const el = {
   openingList: document.getElementById("openingList"),
   improvementList: document.getElementById("improvementList"),
   adviceList: document.getElementById("adviceList"),
+  board: document.getElementById("board"),
+  rankLabels: document.getElementById("rankLabels"),
+  fileLabels: document.getElementById("fileLabels"),
+  boardTitle: document.getElementById("boardTitle"),
+  boardSummary: document.getElementById("boardSummary"),
+  boardLine: document.getElementById("boardLine"),
 };
 
 function init() {
@@ -28,6 +50,8 @@ function init() {
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
   el.analyze.addEventListener("click", runAnalysis);
+  renderCoords();
+  renderBoard("startpos");
 }
 
 async function runAnalysis() {
@@ -106,13 +130,25 @@ function renderImprovements(improvements) {
     return;
   }
   el.improvementList.className = "stack";
-  el.improvementList.innerHTML = improvements.map((item) => `
-    <div class="item">
+  el.improvementList.innerHTML = improvements.map((item, index) => `
+    <div class="item clickable" data-improvement-index="${index}">
       <div class="item-title">${item.headline}</div>
       <div class="item-sub">${item.detail || ""}</div>
       ${item.example ? `<div class="item-note">Played ${item.example.played} | Engine wanted ${item.example.best}</div>` : ""}
     </div>
   `).join("");
+  el.improvementList.querySelectorAll("[data-improvement-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const item = improvements[Number(node.dataset.improvementIndex)];
+      if (item?.example?.position_fen) {
+        renderBoard(item.example.position_fen);
+        el.boardTitle.textContent = item.headline;
+        el.boardSummary.textContent = item.detail || "Engine improvement example.";
+        el.boardLine.textContent = item.example.line || `${item.example.played} -> ${item.example.best}`;
+        el.boardLine.classList.remove("empty");
+      }
+    });
+  });
 }
 
 function renderAdvice(advice) {
@@ -122,14 +158,68 @@ function renderAdvice(advice) {
     return;
   }
   el.adviceList.className = "stack";
-  el.adviceList.innerHTML = advice.map((item) => `
-    <div class="item">
+  el.adviceList.innerHTML = advice.map((item, index) => `
+    <div class="item clickable" data-advice-index="${index}">
       <div class="item-title">${item.opening}</div>
       <div class="item-sub">When opponents usually answer with ${item.opponent_reply}, the engine wants ${item.recommendation}.</div>
       <div class="item-sub">${item.explanation}</div>
       <div class="item-note">${item.example_line}</div>
     </div>
   `).join("");
+  el.adviceList.querySelectorAll("[data-advice-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const item = advice[Number(node.dataset.adviceIndex)];
+      if (item?.position_fen) {
+        renderBoard(item.position_fen);
+        el.boardTitle.textContent = item.opening;
+        el.boardSummary.textContent = item.explanation;
+        el.boardLine.textContent = item.example_line || item.recommendation;
+        el.boardLine.classList.remove("empty");
+      }
+    });
+  });
+}
+
+function renderCoords() {
+  el.rankLabels.innerHTML = ranks.map((r) => `<span>${r}</span>`).join("");
+  el.fileLabels.innerHTML = files.map((f) => `<span>${f}</span>`).join("");
+}
+
+function renderBoard(fen) {
+  const squares = parseFenBoard(fen);
+  el.board.innerHTML = "";
+  squares.forEach((piece, index) => {
+    const square = document.createElement("div");
+    const file = index % 8;
+    const rank = Math.floor(index / 8);
+    square.className = `square ${(file + rank) % 2 === 0 ? "light" : "dark"}`;
+    if (piece) {
+      const img = document.createElement("img");
+      img.className = "piece";
+      img.src = PIECE_ASSETS[piece];
+      img.alt = piece;
+      square.appendChild(img);
+    }
+    el.board.appendChild(square);
+  });
+}
+
+function parseFenBoard(fen) {
+  const boardPart = (fen || "").split(" ")[0];
+  if (!boardPart || boardPart === "startpos") {
+    return parseFenBoard("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  }
+  const out = [];
+  boardPart.split("/").forEach((rank) => {
+    rank.split("").forEach((char) => {
+      if (/\d/.test(char)) {
+        for (let i = 0; i < Number(char); i += 1) out.push("");
+      } else {
+        out.push(char);
+      }
+    });
+  });
+  return out;
 }
 
 function setStatus(message) {

@@ -18,6 +18,7 @@ class OpeningAdvice:
     recommendation: str
     explanation: str
     example_line: str
+    position_fen: str
 
 
 def _score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
@@ -141,6 +142,7 @@ def build_opening_advice(imported: ImportedGame, color: str, opening: str, reply
         recommendation=best_san,
         explanation=explanation,
         example_line=" ".join(line_moves),
+        position_fen=target_position.fen(),
     )
 
 
@@ -211,6 +213,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
                                     "loss_cp": loss,
                                     "line": " ".join(line_prefix[-10:]),
                                     "why": _why_note(phase, san, best_san, loss),
+                                    "position_fen": before_move.fen(),
                                 }
                             )
                 player_move_index += 1
