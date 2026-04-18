@@ -212,6 +212,32 @@ def legal_moves() -> tuple:
     return jsonify({"fen": board.fen(), "legal_moves": serialize_legal_moves(board)})
 
 
+@app.post("/api/apply-move")
+def apply_move() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    move_uci = str(payload.get("move_uci", "")).strip()
+    if not fen or not move_uci:
+        return jsonify({"error": "FEN and move are required."}), 400
+    try:
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        return jsonify({"error": "Invalid move."}), 400
+    if move not in board.legal_moves:
+        return jsonify({"error": "That move is not legal in this position."}), 400
+    san = board.san(move)
+    board.push(move)
+    return jsonify(
+        {
+            "fen": board.fen(),
+            "played_san": san,
+            "last_move": {"from": move_uci[:2], "to": move_uci[2:4]},
+            "legal_moves": serialize_legal_moves(board),
+        }
+    )
+
+
 @app.post("/api/trainer-attempt")
 def trainer_attempt() -> tuple:
     payload = request.get_json(force=True)

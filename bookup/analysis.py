@@ -268,6 +268,21 @@ def _pv_sans(board: chess.Board, pv: list[chess.Move], limit: int = PV_LENGTH) -
     return sans, ucis
 
 
+def _uci_line_sans_from_start(moves_uci: list[str]) -> list[str]:
+    board = chess.Board()
+    sans: list[str] = []
+    for uci in moves_uci:
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            break
+        if move not in board.legal_moves:
+            break
+        sans.append(board.san(move))
+        board.push(move)
+    return sans
+
+
 def _first_move_repertoire(games: list[ImportedGame], color_name: str) -> dict[str, Any]:
     counter: Counter[str] = Counter()
     target_color = chess.WHITE if color_name == "white" else chess.BLACK
@@ -405,6 +420,10 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
     importance = round(min(100.0, (frequency * 8) + max((common_replies[0]["popularity"] if common_replies else 0.0), 0.0) * 1.5), 1)
     confidence = round(min(100.0, 35 + (frequency * 4)), 1)
     priority = round((frequency * 10) + min(value_lost_cp / 10, 60) + (25 if line_status == "needs_work" else 0) - (40 if is_known else 0), 1)
+    training_line_uci = [*node.play_uci, *continuation_uci]
+    training_line_san = _uci_line_sans_from_start(training_line_uci)
+    intro_line_uci = list(node.play_uci)
+    intro_line_san = _uci_line_sans_from_start(intro_line_uci)
     explanation = (
         f"After {node.trigger_move}, Stockfish wants {best_reply} because it keeps the cleanest continuation."
         if top_played == best_reply
@@ -419,6 +438,12 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "opening_name": node.opening_name,
         "opening_code": node.opening_code,
         "color": node.color,
+        "line_start_fen": chess.STARTING_FEN,
+        "intro_line_uci": intro_line_uci,
+        "intro_line_san": " ".join(intro_line_san),
+        "training_line_uci": training_line_uci,
+        "training_line_san": " ".join(training_line_san),
+        "target_ply_index": len(node.play_uci),
         "trigger_move": node.trigger_move,
         "best_reply": best_reply,
         "best_reply_uci": best_move.uci(),

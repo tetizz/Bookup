@@ -67,7 +67,10 @@ const state = {
   lessons: [],
   queue: [],
   lessonIndex: -1,
+  activeLessonId: "",
   boardOrientation: "white",
+  trainingCursor: 0,
+  lessonMistakes: 0,
   boardFen: "startpos",
   startFen: "startpos",
   legalMoves: [],
@@ -489,8 +492,7 @@ function renderQueue() {
 }
 
 function currentLessonId() {
-  if (state.lessonIndex < 0 || !state.queue[state.lessonIndex]) return "";
-  return state.queue[state.lessonIndex].lesson_id;
+  return state.activeLessonId || "";
 }
 
 function launchLessonById(lessonId) {
@@ -498,36 +500,109 @@ function launchLessonById(lessonId) {
   if (index >= 0) loadLesson(index);
 }
 
+function lessonTrainingLine(lesson) {
+  return Array.isArray(lesson?.training_line_uci) ? lesson.training_line_uci.filter(Boolean) : [];
+}
+
+function currentLesson() {
+  return state.queue.find((item) => item.lesson_id === state.activeLessonId) || null;
+}
+
+function trainerUserTurn(lesson, cursor = state.trainingCursor) {
+  return (cursor % 2 === 0 && lesson?.color === "white") || (cursor % 2 === 1 && lesson?.color === "black");
+}
+
+function expectedMoveAtCursor(lesson, cursor = state.trainingCursor) {
+  return lessonTrainingLine(lesson)[cursor] || "";
+}
+
+function updateTrainerCopy() {
+  const lesson = currentLesson();
+  if (!lesson) return;
+  const line = lessonTrainingLine(lesson);
+  const expectedUci = expectedMoveAtCursor(lesson);
+  const expectedEntry = (state.legalMoves || []).find((move) => move.uci === expectedUci);
+  const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
+  const openingLabel = lesson.opening_code ? `${lesson.opening_name} · ${lesson.opening_code}` : lesson.opening_name;
+  el.boardTitle.textContent = openingLabel;
+  if (state.trainingCursor >= line.length) {
+    el.boardSummary.textContent = "Line complete. Reset it or move on to the next due line.";
+    el.boardLine.textContent = lesson.training_line_san || lesson.continuation_san || "No line loaded yet.";
+    el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+    return;
+  }
+  if (trainerUserTurn(lesson)) {
+    const targetText = expectedEntry?.san || lesson.best_reply;
+    el.boardSummary.textContent = `Play the repertoire move here: ${targetText}. Step ${progress}.`;
+  } else {
+    el.boardSummary.textContent = `Bookup is playing the line for the other side. Step ${progress}.`;
+  }
+  el.boardLine.textContent = lesson.training_line_san || lesson.continuation_san || "No line loaded yet.";
+  el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+}
+
+async function applyMoveToBoard(moveUci) {
+  const response = await fetch("/api/apply-move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fen: state.boardFen, move_uci: moveUci }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not apply move.");
+  state.boardFen = payload.fen || state.boardFen;
+  state.legalMoves = payload.legal_moves || [];
+  state.legalByFrom = {};
+  state.legalMoves.forEach((item) => {
+    if (!state.legalByFrom[item.from]) state.legalByFrom[item.from] = [];
+    state.legalByFrom[item.from].push(item);
+  });
+  state.lastMove = payload.last_move || null;
+  renderBoard(state.boardFen);
+  return payload;
+}
+
+async function advanceTrainerLine() {
+  const lesson = currentLesson();
+  if (!lesson) return;
+  const line = lessonTrainingLine(lesson);
+  while (state.trainingCursor < line.length && !trainerUserTurn(lesson)) {
+    const expectedUci = line[state.trainingCursor];
+    await applyMoveToBoard(expectedUci);
+    state.trainingCursor += 1;
+  }
+  updateTrainerCopy();
+}
+
 async function loadLesson(index) {
   const lesson = state.queue[index];
   if (!lesson) return;
   state.lessonIndex = index;
+  state.activeLessonId = lesson.lesson_id;
   state.boardOrientation = lesson.color === "black" ? "black" : "white";
-  state.startFen = lesson.position_fen;
-  state.boardFen = lesson.position_fen;
+  state.startFen = lesson.line_start_fen || "startpos";
+  state.boardFen = lesson.line_start_fen || "startpos";
+  state.trainingCursor = 0;
+  state.lessonMistakes = 0;
   state.selectedSquare = "";
   state.dragFrom = "";
   state.lastMove = null;
-
-  el.boardTitle.textContent = `${lesson.opening_name}${lesson.opening_code ? ` · ${lesson.opening_code}` : ""}`;
-  el.boardSummary.textContent = `After ${lesson.trigger_move}, your move is ${lesson.best_reply}. ${lesson.explanation}`;
-  el.boardLine.textContent = lesson.continuation_san || "No continuation line stored yet.";
-  el.boardLine.classList.toggle("empty", !lesson.continuation_san);
   el.trainerFeedback.textContent = lesson.line_status === "known"
-    ? "You already know this line. Use it as a maintenance review."
-    : "Find the best continuation on the board. Bookup will explain any miss and then play the line out.";
+    ? "You already know this line. Bookup will still run it from the beginning as maintenance."
+    : "Bookup is starting from the beginning of the line. Play your side's move whenever it is your turn.";
   el.trainerFeedback.classList.remove("empty");
 
-  await refreshLegalMoves(lesson.position_fen);
+  await refreshLegalMoves(state.boardFen);
   renderCoords();
-  renderBoard(lesson.position_fen);
+  renderBoard(state.boardFen);
+  await advanceTrainerLine();
   renderQueue();
   setActiveTab("trainer");
 }
 
 function nextLesson() {
   if (!state.queue.length) return;
-  const next = state.lessonIndex < 0 ? 0 : (state.lessonIndex + 1) % state.queue.length;
+  const currentIndex = state.queue.findIndex((item) => item.lesson_id === state.activeLessonId);
+  const next = currentIndex < 0 ? 0 : (currentIndex + 1) % state.queue.length;
   loadLesson(next);
 }
 
@@ -544,8 +619,11 @@ function clearTrainer() {
   el.trainerFeedback.textContent = "Choose a due line from the queue or launch one from a repertoire card.";
   el.trainerFeedback.classList.remove("empty");
   state.boardFen = "startpos";
+  state.activeLessonId = "";
   state.boardOrientation = "white";
   state.startFen = "startpos";
+  state.trainingCursor = 0;
+  state.lessonMistakes = 0;
   state.legalMoves = [];
   state.legalByFrom = {};
   state.selectedSquare = "";
@@ -668,29 +746,23 @@ async function submitTrainerMove(from, to) {
   renderBoard(state.boardFen);
   if (!move) return;
 
-  const lesson = state.queue[state.lessonIndex];
+  const lesson = currentLesson();
   if (!lesson) return;
-  const response = await fetch("/api/trainer-attempt", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      fen: state.boardFen,
-      move_uci: move.uci,
-      lesson,
-    }),
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    el.trainerFeedback.textContent = payload.error || "Bookup could not validate that move.";
-    el.trainerFeedback.classList.remove("empty");
-    return;
-  }
+  const expectedUci = expectedMoveAtCursor(lesson);
+  const expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+  if (!expectedUci) return;
 
-  if (!payload.ok) {
+  if (move.uci !== expectedUci) {
+    state.lessonMistakes += 1;
     recordReview(lesson.lesson_id, false);
-    el.trainerFeedback.textContent = `${payload.played_san} misses the line here. ${payload.explanation} Best move: ${payload.best_san}.`;
+    const expectedSan = expectedEntry?.san || lesson.best_reply;
+    const explanation =
+      state.trainingCursor === (lesson.target_ply_index || 0)
+        ? lesson.explanation
+        : `To stay inside this repertoire line, Bookup wants ${expectedSan} here before moving on.`;
+    el.trainerFeedback.textContent = `${move.san} misses the line here. ${explanation} Best move: ${expectedSan}.`;
     el.trainerFeedback.classList.remove("empty");
-    el.boardLine.textContent = payload.continuation || lesson.continuation_san || "";
+    el.boardLine.textContent = lesson.training_line_san || lesson.continuation_san || "";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
     state.lastMove = null;
     rebuildQueue();
@@ -698,22 +770,29 @@ async function submitTrainerMove(from, to) {
     return;
   }
 
-  recordReview(lesson.lesson_id, true);
-  state.boardFen = payload.fen || state.boardFen;
-  state.legalMoves = payload.legal_moves || [];
-  state.legalByFrom = {};
-  state.legalMoves.forEach((item) => {
-    if (!state.legalByFrom[item.from]) state.legalByFrom[item.from] = [];
-    state.legalByFrom[item.from].push(item);
-  });
-  state.lastMove = payload.last_move || null;
-  renderBoard(state.boardFen);
-  el.trainerFeedback.textContent = `Correct. ${payload.explanation || "Bookup played out the stored continuation."}`;
+  await applyMoveToBoard(move.uci);
+  state.trainingCursor += 1;
+  await advanceTrainerLine();
+
+  const lineFinished = state.trainingCursor >= lessonTrainingLine(lesson).length;
+  if (lineFinished) {
+    if (state.lessonMistakes === 0) {
+      recordReview(lesson.lesson_id, true);
+    }
+    rebuildQueue();
+    renderQueue();
+  }
+
+  const successExplanation =
+    state.trainingCursor - 1 === (lesson.target_ply_index || 0)
+      ? lesson.explanation
+      : `That keeps the line on track inside ${lesson.opening_name}.`;
+  el.trainerFeedback.textContent = lineFinished
+    ? `Line complete. ${successExplanation}`
+    : `Correct. ${successExplanation}`;
   el.trainerFeedback.classList.remove("empty");
-  el.boardLine.textContent = payload.line || lesson.continuation_san || "";
+  el.boardLine.textContent = lesson.training_line_san || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
-  rebuildQueue();
-  renderQueue();
 }
 
 function defaultReviewState() {
