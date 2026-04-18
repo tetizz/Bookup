@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 from .chesscom import ImportedGame
 from .engine import EngineSession
+from .opening_names import lookup_by_board, lookup_by_eco
 
 
 OPENING_LIBRARY: ChessOpeningsLibrary | None = None
@@ -65,6 +66,23 @@ def configure_lichess(token: str = "") -> None:
 
 def _analysis_url_for_fen(fen: str) -> str:
     return f"https://lichess.org/analysis/standard/{quote(fen.replace(' ', '_'), safe='/_-')}"
+
+
+def _clean_header_name(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned or cleaned.lower() in {"unknown", "?", "n/a"}:
+        return ""
+    return cleaned
+
+
+def _compose_opening_name(opening: str, variation: str) -> str:
+    opening_clean = _clean_header_name(opening)
+    variation_clean = _clean_header_name(variation)
+    if opening_clean and variation_clean:
+        if variation_clean.lower().startswith(opening_clean.lower()):
+            return variation_clean
+        return f"{opening_clean}: {variation_clean}"
+    return opening_clean or variation_clean
 
 
 def _score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
@@ -152,8 +170,23 @@ def _opening_lookup_payload(imported: ImportedGame, max_plies: int = 12) -> tupl
     return ",".join(play), board, play, san_moves
 
 
+def _find_named_dataset_position(imported: ImportedGame, max_plies: int = 12) -> dict[str, str]:
+    board = imported.game.board()
+    best_match: dict[str, str] = {}
+    for index, move in enumerate(imported.game.mainline_moves()):
+        if index >= max_plies:
+            break
+        board.push(move)
+        match = lookup_by_board(board)
+        if match.get("name"):
+            best_match = match
+    return best_match
+
+
 def identify_opening(imported: ImportedGame) -> dict[str, str]:
-    header_name = (imported.game.headers.get("Opening") or "").strip()
+    header_opening = str(imported.game.headers.get("Opening", "") or "")
+    header_variation = str(imported.game.headers.get("Variation", "") or "")
+    header_name = _compose_opening_name(header_opening, header_variation)
     eco = (imported.game.headers.get("ECO") or "").strip().upper()
     play_key, board, play, san_moves = _opening_lookup_payload(imported)
     cache_key = f"{play_key}|{board.epd()}|{header_name}|{eco}"
@@ -161,11 +194,19 @@ def identify_opening(imported: ImportedGame) -> dict[str, str]:
         return dict(ONLINE_OPENING_CACHE[cache_key])
 
     result = {
-        "name": header_name if header_name and header_name != "Unknown" else "",
+        "name": header_name,
         "code": eco,
         "position_identifier": _analysis_url_for_fen(board.fen()),
         "position_identifier_label": "Lichess analysis",
     }
+
+    lichess_dataset_match = _find_named_dataset_position(imported)
+    dataset_name = _clean_header_name(lichess_dataset_match.get("name", ""))
+    dataset_eco = _clean_header_name(lichess_dataset_match.get("eco", "")).upper()
+    if dataset_name and (not result["name"] or result["name"] == result["code"]):
+        result["name"] = dataset_name
+    if dataset_eco and not result["code"]:
+        result["code"] = dataset_eco
 
     library = _opening_library()
     if library and san_moves:
@@ -185,23 +226,28 @@ def identify_opening(imported: ImportedGame) -> dict[str, str]:
 
     explorer = _explorer_lookup(board, play_key)
     opening = explorer.get("opening") or {}
-    if opening.get("name") and not result["name"]:
-        result["name"] = str(opening["name"])
+    explorer_name = _clean_header_name(str(opening.get("name", "") or ""))
+    if explorer_name and (
+        not result["name"]
+        or result["name"] == result["code"]
+        or len(explorer_name) > len(result["name"])
+    ):
+        result["name"] = explorer_name
     if opening.get("eco") and not result["code"]:
         result["code"] = str(opening["eco"]).upper()
 
+    if not result["name"] and result["code"]:
+        result["name"] = lookup_by_eco(result["code"])
+
     if not result["name"]:
-        if result["code"]:
-            result["name"] = result["code"]
-        else:
-            preview_board = imported.game.board()
-            preview: list[str] = []
-            for move in imported.game.mainline_moves():
-                if len(preview) >= 6:
-                    break
-                preview.append(preview_board.san(move))
-                preview_board.push(move)
-            result["name"] = " ".join(preview) if preview else "Unknown Opening"
+        preview_board = imported.game.board()
+        preview: list[str] = []
+        for move in imported.game.mainline_moves():
+            if len(preview) >= 6:
+                break
+            preview.append(preview_board.san(move))
+            preview_board.push(move)
+        result["name"] = " ".join(preview) if preview else (result["code"] or "Unknown Opening")
 
     ONLINE_OPENING_CACHE[cache_key] = dict(result)
     return result

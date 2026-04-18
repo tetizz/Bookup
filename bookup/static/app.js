@@ -75,9 +75,10 @@ const state = {
   dragFrom: "",
   lastMove: null,
   reviewStats: {},
+  games: [],
 };
 
-function init() {
+async function init() {
   el.username.value = defaults.username || "trixize1234";
   el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games ?? 0;
@@ -109,6 +110,7 @@ function init() {
   renderCoords();
   renderBoard("startpos");
   setActiveTab("setup");
+  await bootstrapLocalState();
 }
 
 function syncImportScope() {
@@ -141,7 +143,8 @@ async function runAnalysis() {
   try {
     const payload = await fetchProfilePayload(el.username.value.trim());
     state.payload = payload;
-    state.reviewStats = loadReviewStats(payload.username);
+    state.reviewStats = payload.training_progress || loadReviewStats(payload.username);
+    state.games = payload.games || [];
     renderProfile(payload);
     setStatus(
       payload.explorer_enabled
@@ -173,6 +176,35 @@ async function fetchProfilePayload(username) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Bookup could not build your repertoire.");
   return payload;
+}
+
+async function bootstrapLocalState() {
+  try {
+    const username = el.username.value.trim() || "trixize1234";
+    const response = await fetch(`/api/local-state?username=${encodeURIComponent(username)}`);
+    const payload = await response.json();
+    if (!response.ok) return;
+    if (payload.profile) {
+      state.payload = {
+        username: payload.username,
+        profile: payload.profile,
+        games_imported: payload.games_imported || 0,
+        archives_found: payload.archives_found || 0,
+      };
+      state.reviewStats = payload.training_progress || {};
+      state.games = payload.games || [];
+      renderProfile(state.payload);
+      setStatus(
+        payload.saved_at
+          ? `Loaded your saved Bookup workspace for ${payload.username}.`
+          : `Loaded local Bookup data for ${payload.username}.`
+      );
+    } else {
+      state.reviewStats = loadReviewStats(username);
+    }
+  } catch {
+    state.reviewStats = loadReviewStats(el.username.value.trim() || "trixize1234");
+  }
 }
 
 function renderProfile(payload) {
@@ -656,6 +688,10 @@ function defaultReviewState() {
     streak: 0,
     due_at: 0,
     seen: 0,
+    correct_count: 0,
+    wrong_count: 0,
+    worked_on_count: 0,
+    last_seen_at: 0,
     last_result: "",
   };
 }
@@ -688,12 +724,47 @@ function recordReview(lessonId, correct) {
   state.reviewStats[lessonId] = {
     seen,
     streak,
+    correct_count: Number(current.correct_count || 0) + (correct ? 1 : 0),
+    wrong_count: Number(current.wrong_count || 0) + (correct ? 0 : 1),
+    worked_on_count: Number(current.worked_on_count || 0) + 1,
+    last_seen_at: Date.now(),
     due_at: dueAt,
     last_result: correct ? "right" : "wrong",
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
+    void persistReviewStats(state.payload.username);
   }
+}
+
+async function persistReviewStats(username) {
+  try {
+    await fetch("/api/review-progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username,
+        lessons: state.reviewStats,
+        summary: buildReviewSummary(),
+      }),
+    });
+  } catch {
+    // ignore sync failures
+  }
+}
+
+function buildReviewSummary() {
+  const lessons = Object.values(state.reviewStats || {});
+  const seen = lessons.reduce((sum, item) => sum + Number(item.seen || 0), 0);
+  const correct = lessons.reduce((sum, item) => sum + Number(item.correct_count || 0), 0);
+  const wrong = lessons.reduce((sum, item) => sum + Number(item.wrong_count || 0), 0);
+  return {
+    lessons_tracked: lessons.length,
+    attempts_seen: seen,
+    correct_attempts: correct,
+    wrong_attempts: wrong,
+    last_saved_at: new Date().toISOString(),
+  };
 }
 
 function parseFenBoard(fen) {

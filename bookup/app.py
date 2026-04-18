@@ -15,6 +15,7 @@ import webview
 from .analysis import analyse_games, configure_lichess
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .engine import EngineSession, EngineSettings, default_engine_path
+from .storage import LocalStore, serialize_games
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -22,6 +23,8 @@ ROOT_DIR = APP_DIR.parent
 RUNTIME_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else ROOT_DIR
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
 CONFIG_PATH = RUNTIME_DIR / "config.json"
+DATA_DIR = RUNTIME_DIR / "bookup_data"
+STORE = LocalStore(DATA_DIR)
 
 app = Flask(
     __name__,
@@ -93,6 +96,25 @@ def index() -> str:
     return render_template("index.html", defaults=defaults)
 
 
+@app.get("/api/local-state")
+def local_state() -> tuple:
+    username = str(request.args.get("username", "")).strip() or "trixize1234"
+    snapshot = STORE.load_snapshot(username)
+    progress = STORE.load_progress(username)
+    return jsonify(
+        {
+            "username": username,
+            "profile": snapshot.get("profile"),
+            "games_imported": snapshot.get("games_imported", 0),
+            "archives_found": snapshot.get("archives_found", 0),
+            "games": snapshot.get("games", []),
+            "saved_at": snapshot.get("saved_at"),
+            "training_progress": progress.get("lessons", {}),
+            "training_summary": progress.get("summary", {}),
+        }
+    )
+
+
 @app.post("/api/profile")
 def profile() -> tuple:
     payload = request.get_json(force=True)
@@ -147,6 +169,17 @@ def profile() -> tuple:
     except Exception as exc:
         return jsonify({"error": f"Engine analysis failed: {exc}"}), 500
 
+    progress = STORE.load_progress(username)
+    STORE.save_snapshot(
+        username,
+        {
+            "archives_found": len(archives),
+            "games_imported": len(games),
+            "games": serialize_games(games),
+            "profile": profile_data,
+        },
+    )
+
     return jsonify(
         {
             "username": username,
@@ -160,6 +193,8 @@ def profile() -> tuple:
                 else "Add a Lichess token to use the live Lichess opening database for richer repertoire branching."
             ),
             "profile": profile_data,
+            "training_progress": progress.get("lessons", {}),
+            "training_summary": progress.get("summary", {}),
         }
     )
 
@@ -245,6 +280,20 @@ def trainer_attempt() -> tuple:
             "legal_moves": serialize_legal_moves(board),
         }
     )
+
+
+@app.post("/api/review-progress")
+def review_progress() -> tuple:
+    payload = request.get_json(force=True)
+    username = str(payload.get("username", "")).strip() or "trixize1234"
+    lessons = payload.get("lessons", {})
+    summary = payload.get("summary", {})
+    if not isinstance(lessons, dict):
+        return jsonify({"error": "Lesson progress payload must be an object."}), 400
+    if not isinstance(summary, dict):
+        summary = {}
+    STORE.save_progress(username, {"lessons": lessons, "summary": summary})
+    return jsonify({"ok": True})
 
 
 def run_app() -> None:
