@@ -12,7 +12,7 @@ import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import analyse_games
+from .analysis import analyse_games, configure_lichess
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .engine import EngineSession, EngineSettings, default_engine_path
 
@@ -78,6 +78,7 @@ def index() -> str:
         "username": config.get("username", "trixize1234"),
         "time_classes": config.get("time_classes", "all"),
         "max_games": int(config.get("max_games", 0)),
+        "lichess_token": config.get("lichess_token", ""),
         "engine_path": config.get("engine_path", default_engine_path()),
         "depth": int(config.get("depth", 13)),
         "threads": int(config.get("threads", max(1, os.cpu_count() or 8))),
@@ -102,17 +103,20 @@ def profile() -> tuple:
     except (TypeError, ValueError):
         parsed_max_games = 0
     max_games = None if parsed_max_games <= 0 else max(1, min(20000, parsed_max_games))
+    lichess_token = str(payload.get("lichess_token", "")).strip()
     engine_path = str(payload.get("engine_path", "")).strip()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
 
     settings = build_engine_settings(payload)
+    configure_lichess(lichess_token)
 
     save_config(
         {
             "username": username,
             "time_classes": raw_time_classes or "all",
             "max_games": 0 if max_games is None else max_games,
+            "lichess_token": lichess_token,
             "engine_path": engine_path,
             "depth": settings.depth,
             "threads": settings.threads,
@@ -143,6 +147,12 @@ def profile() -> tuple:
             "time_classes": sorted(normalized_time_classes) if normalized_time_classes else ["all public games"],
             "archives_found": len(archives),
             "games_imported": len(games),
+            "explorer_enabled": bool(lichess_token),
+            "explorer_notice": (
+                "Lichess explorer is authenticated and can be used for richer repertoire move popularity."
+                if lichess_token
+                else "Add a Lichess token to use the live Lichess opening database for richer repertoire branching."
+            ),
             "profile": profile_data,
         }
     )

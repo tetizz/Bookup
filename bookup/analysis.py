@@ -29,6 +29,9 @@ ONLINE_OPENING_CACHE: dict[str, dict[str, str]] = {}
 EXPLORER_CACHE: dict[str, dict[str, Any]] = {}
 OPENING_LIBRARY: ChessOpeningsLibrary | None = None
 EXPLORER_AVAILABLE = True
+EXPLORER_HEADERS = {
+    "User-Agent": "Bookup/1.0 (local repertoire trainer)",
+}
 
 
 @dataclass(slots=True)
@@ -108,6 +111,22 @@ def _analysis_url_for_fen(fen: str) -> str:
     return f"https://lichess.org/analysis/standard/{quote(fen.replace(' ', '_'), safe='/_-')}"
 
 
+def configure_lichess(token: str = "") -> None:
+    global EXPLORER_AVAILABLE
+    normalized = token.strip()
+    EXPLORER_HEADERS.clear()
+    EXPLORER_HEADERS.update(
+        {
+            "User-Agent": "Bookup/1.0 (local repertoire trainer)",
+        }
+    )
+    if normalized:
+        EXPLORER_HEADERS["Authorization"] = f"Bearer {normalized}"
+        EXPLORER_AVAILABLE = True
+    EXPLORER_CACHE.clear()
+    ONLINE_OPENING_CACHE.clear()
+
+
 def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
     global EXPLORER_AVAILABLE
     cache_key = f"{board.board_fen()}|{board.turn}|{play_key}"
@@ -125,6 +144,7 @@ def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
                 "moves": 12,
                 "speeds": "bullet,blitz,rapid,classical",
             },
+            headers=EXPLORER_HEADERS,
             timeout=4,
         )
         response.raise_for_status()
@@ -971,13 +991,12 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     late_castle_pct = round((sum(1 for move in castling_moves if move > 15) / len(castling_moves)) * 100, 1) if castling_moves else 0
 
     verdict = (
-        f"{games[0].opponent if False else 'This player'} performs better as {better_as} "
+        f"This player performs better as {better_as} "
         f"({color_summary['white']['win_rate']:.0f}% as White vs {color_summary['black']['win_rate']:.0f}% as Black)."
     )
-    scout_brief = (
-        f"{games[0].player_color if False else 'This player'} is most dangerous in {better_as.lower()} games, "
-        f"wins {round(_win_rate(outcome_counter), 1) if isinstance(outcome_counter, dict) else round(_win_rate(outcome_counter), 1)}% overall, "
-        f"and leans {'sharp' if style_metrics['chaos_index'] >= 60 else 'structured'} based on captures, forcing moves, and game length."
+    prep_brief = (
+        f"Bookup found {len(prep_repertoire)} named opening branches worth preparing. "
+        f"The training focus is on the lines they actually repeat, not on one-off games."
     )
 
     return {
@@ -989,7 +1008,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "chaos_index": round(style_metrics["chaos_index"]),
             "better_as": better_as,
         },
-        "scout_brief": scout_brief,
+        "prep_brief": prep_brief,
         "verdict": verdict,
         "style_summary": _style_summary(castle_rate, queen_rate, capture_rate, checks_per_game, avg_game_moves, color_gap),
         "style_metrics": {

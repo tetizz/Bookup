@@ -21,6 +21,7 @@ const el = {
   timeClasses: document.getElementById("timeClassesInput"),
   maxGames: document.getElementById("maxGamesInput"),
   importAllGames: document.getElementById("importAllGamesInput"),
+  lichessToken: document.getElementById("lichessTokenInput"),
   enginePath: document.getElementById("enginePathInput"),
   depth: document.getElementById("depthInput"),
   threads: document.getElementById("threadsInput"),
@@ -69,6 +70,7 @@ function init() {
   el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games ?? 0;
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
+  el.lichessToken.value = defaults.lichess_token || "";
   el.enginePath.value = defaults.engine_path || "";
   el.depth.value = defaults.depth || 13;
   el.threads.value = defaults.threads || 8;
@@ -116,7 +118,7 @@ async function runAnalysis() {
     state.payload = payload;
     renderProfile(payload);
     setStatus(
-      `Imported ${payload.games_imported} games from ${payload.archives_found} archive months. Repertoire tree is ready.`
+      `Imported ${payload.games_imported} games from ${payload.archives_found} archive months. ${payload.explorer_notice || "Repertoire tree is ready."}`
     );
   } catch (error) {
     setStatus(error.message || "Prep build failed.");
@@ -141,6 +143,7 @@ function buildProfileRequest(username) {
     username,
     time_classes: el.timeClasses.value.trim(),
     max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
+    lichess_token: el.lichessToken.value.trim(),
     engine_path: el.enginePath.value.trim(),
     depth: Number(el.depth.value),
     threads: Number(el.threads.value),
@@ -159,7 +162,9 @@ function renderProfile(payload) {
 
   el.heroTitle.textContent = `${payload.username} repertoire prep`;
   el.heroSummary.textContent =
-    "Bookup turns the openings this player actually repeats into a trainable prep tree: named variations, practical counters, and board drills for the positions that matter.";
+    payload.explorer_enabled
+      ? "Bookup is using your authenticated Lichess opening database access to rank the branches this player repeats most, then turns those lines into board drills."
+      : "Bookup turns the openings this player actually repeats into a trainable prep tree: named variations, practical counters, and board drills for the positions that matter.";
   el.badgeWinRate.textContent = `${payload.games_imported || 0}`;
   el.badgeChaos.textContent = topWhite?.opening || "--";
   el.badgeColor.textContent = topBlack?.opening || `${lessons.length} lessons`;
