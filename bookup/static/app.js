@@ -918,7 +918,9 @@ async function submitCoachMove(from, to) {
       state.lastMove = null;
       el.coachFeedback.textContent = payload.message;
       el.coachFeedback.classList.remove("empty");
-      el.boardLine.textContent = `Best move: ${payload.best_move_san}`;
+      el.boardLine.textContent = payload.best_line?.length
+        ? `Best move: ${payload.best_move_san} | ${payload.best_line.join(" ")}`
+        : `Best move: ${payload.best_move_san}`;
       el.boardLine.classList.remove("empty");
       setStatus("That wasn't the engine continuation.");
       renderBoard(state.boardFen);

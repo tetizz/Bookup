@@ -85,6 +85,48 @@ def normalize_move_uci(board: chess.Board, move_uci: str) -> chess.Move | None:
     return move if move in board.legal_moves else None
 
 
+def score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
+    pov = score.pov(turn)
+    if pov.is_mate():
+        mate = pov.mate()
+        if mate is None:
+            return 0
+        return 100000 - abs(mate) if mate > 0 else -100000 + abs(mate)
+    return int(pov.score(mate_score=100000) or 0)
+
+
+def san_line(board: chess.Board, pv: list[chess.Move], plies: int = 4) -> list[str]:
+    probe = board.copy(stack=False)
+    out: list[str] = []
+    for move in pv[:plies]:
+        if move not in probe.legal_moves:
+            break
+        out.append(probe.san(move))
+        probe.push(move)
+    return out
+
+
+def explain_best_move(board: chess.Board, best_move: chess.Move, best_line: list[str], eval_gain_cp: int) -> str:
+    best_san = board.san(best_move)
+    move_piece = board.piece_at(best_move.from_square)
+    piece_name = chess.piece_name(move_piece.piece_type).title() if move_piece else "Move"
+    reasons: list[str] = []
+    if "+" in best_san or "#" in best_san:
+        reasons.append("it creates an immediate forcing threat against the king")
+    if "x" in best_san:
+        reasons.append("it wins material or forces a material concession")
+    if best_move.to_square in chess.SquareSet(chess.BB_CENTER):
+        reasons.append("it improves central control and piece activity")
+    if not reasons:
+        reasons.append("it keeps the initiative and preserves the healthiest evaluation")
+    line_text = " ".join(best_line) if best_line else best_san
+    return (
+        f"{best_san} is best because {piece_name.lower()} {reasons[0]}. "
+        f"The engine continuation is {line_text}. "
+        f"This keeps roughly {round(eval_gain_cp / 100, 2)} pawns more value than the move you chose."
+    )
+
+
 @app.get("/")
 def index() -> str:
     config = load_config()
@@ -205,14 +247,25 @@ def coach_move() -> tuple:
                 return jsonify({"error": "Engine did not return a principal variation."}), 500
             best_move = pv[0]
             best_move_san = board.san(best_move)
+            root_eval = score_cp(root_info["score"], board.turn)
             if selected_move != best_move:
+                wrong_probe = board.copy(stack=False)
+                wrong_san = wrong_probe.san(selected_move)
+                wrong_probe.push(selected_move)
+                wrong_info = engine.analyse(wrong_probe, multipv=1)[0]
+                wrong_eval = score_cp(wrong_info["score"], board.turn)
+                best_line = san_line(board, pv, 5)
+                explanation = explain_best_move(board, best_move, best_line, max(0, root_eval - wrong_eval))
                 return jsonify(
                     {
                         "correct": False,
                         "fen": board.fen(),
+                        "played_move_san": wrong_san,
                         "best_move_uci": best_move.uci(),
                         "best_move_san": best_move_san,
-                        "message": f"Best move was {best_move_san}. Try to understand why it keeps more value in the position.",
+                        "best_line": best_line,
+                        "explanation": explanation,
+                        "message": f"Best move was {best_move_san}. {explanation}",
                         "legal_moves": serialize_legal_moves(board),
                     }
                 )
