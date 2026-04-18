@@ -429,6 +429,11 @@ input {
   gap: 24px;
   flex-wrap: wrap;
 }
+.board-column {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 
 .board-head {
   display: flex;
@@ -588,6 +593,17 @@ input {
 }
 
 .coach-item.active {
+  border-color: rgba(62, 240, 160, 0.5);
+  background: rgba(22, 48, 38, 1);
+}
+.lesson-item {
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  background: rgba(19, 40, 32, 0.95);
+}
+.lesson-item.active {
   border-color: rgba(62, 240, 160, 0.5);
   background: rgba(22, 48, 38, 1);
 }

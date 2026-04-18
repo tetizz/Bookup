@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
@@ -50,6 +51,23 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         threads=max(1, min(max(1, os.cpu_count() or 8), int(payload.get("threads", max(1, os.cpu_count() or 8))))),
         hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
     )
+
+
+def serialize_legal_moves(board: chess.Board) -> list[dict]:
+    moves: list[dict] = []
+    for move in board.legal_moves:
+        san = board.san(move)
+        capture = board.is_capture(move)
+        moves.append(
+            {
+                "uci": move.uci(),
+                "from": chess.square_name(move.from_square),
+                "to": chess.square_name(move.to_square),
+                "san": san,
+                "capture": capture,
+            }
+        )
+    return moves
 
 
 
@@ -126,6 +144,89 @@ def profile() -> tuple:
             "archives_found": len(archives),
             "games_imported": len(games),
             "profile": profile_data,
+        }
+    )
+
+
+@app.post("/api/legal-moves")
+def legal_moves() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    if not fen:
+        return jsonify({"error": "FEN is required."}), 400
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return jsonify({"error": "Invalid FEN."}), 400
+    return jsonify({"fen": board.fen(), "legal_moves": serialize_legal_moves(board)})
+
+
+@app.post("/api/trainer-attempt")
+def trainer_attempt() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    move_uci = str(payload.get("move_uci", "")).strip()
+    lesson = payload.get("lesson") or {}
+    if not fen or not move_uci:
+        return jsonify({"error": "FEN and move are required."}), 400
+    try:
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        return jsonify({"error": "Invalid trainer move."}), 400
+    if move not in board.legal_moves:
+        return jsonify({"error": "That move is not legal in this position."}), 400
+
+    attempted_san = board.san(move)
+    best_uci = str(lesson.get("best_reply_uci", "")).strip()
+    if not best_uci:
+        return jsonify({"error": "Lesson is missing the best move."}), 400
+    try:
+        best_move = chess.Move.from_uci(best_uci)
+    except ValueError:
+        return jsonify({"error": "Lesson best move is invalid."}), 400
+    if best_move not in board.legal_moves:
+        return jsonify({"error": "Lesson best move is not legal in this position."}), 400
+    best_san = board.san(best_move)
+
+    if move.uci() != best_uci:
+        return jsonify(
+            {
+                "ok": False,
+                "played_san": attempted_san,
+                "best_san": best_san,
+                "explanation": str(lesson.get("explanation", "")),
+                "continuation": str(lesson.get("continuation", "")),
+                "fen": fen,
+            }
+        )
+
+    line_sans = [attempted_san]
+    board.push(move)
+    last_move = {"from": move_uci[:2], "to": move_uci[2:4]}
+    continuation_ucis = [str(item) for item in lesson.get("continuation_moves_uci", []) if str(item)]
+    for continuation in continuation_ucis[1:]:
+        try:
+            follow = chess.Move.from_uci(continuation)
+        except ValueError:
+            break
+        if follow not in board.legal_moves:
+            break
+        follow_san = board.san(follow)
+        line_sans.append(follow_san)
+        board.push(follow)
+        last_move = {"from": continuation[:2], "to": continuation[2:4]}
+
+    return jsonify(
+        {
+            "ok": True,
+            "played_san": attempted_san,
+            "best_san": best_san,
+            "line": " ".join(line_sans),
+            "fen": board.fen(),
+            "last_move": last_move,
+            "explanation": str(lesson.get("explanation", "")),
+            "legal_moves": serialize_legal_moves(board),
         }
     )
 

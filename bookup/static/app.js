@@ -1,4 +1,20 @@
 const defaults = window.APP_DEFAULTS || {};
+const PIECE_ASSETS = {
+  P: "/static/pieces/cburnett/wP.svg",
+  N: "/static/pieces/cburnett/wN.svg",
+  B: "/static/pieces/cburnett/wB.svg",
+  R: "/static/pieces/cburnett/wR.svg",
+  Q: "/static/pieces/cburnett/wQ.svg",
+  K: "/static/pieces/cburnett/wK.svg",
+  p: "/static/pieces/cburnett/bP.svg",
+  n: "/static/pieces/cburnett/bN.svg",
+  b: "/static/pieces/cburnett/bB.svg",
+  r: "/static/pieces/cburnett/bR.svg",
+  q: "/static/pieces/cburnett/bQ.svg",
+  k: "/static/pieces/cburnett/bK.svg",
+};
+const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
 const el = {
   username: document.getElementById("usernameInput"),
@@ -23,6 +39,29 @@ const el = {
   prepList: document.getElementById("prepList"),
   tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
   tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
+  lessonList: document.getElementById("lessonList"),
+  board: document.getElementById("board"),
+  rankLabels: document.getElementById("rankLabels"),
+  fileLabels: document.getElementById("fileLabels"),
+  boardTitle: document.getElementById("boardTitle"),
+  boardSummary: document.getElementById("boardSummary"),
+  boardLine: document.getElementById("boardLine"),
+  trainerFeedback: document.getElementById("trainerFeedback"),
+  trainerReset: document.getElementById("trainerResetBtn"),
+  trainerNext: document.getElementById("trainerNextBtn"),
+};
+
+const state = {
+  payload: null,
+  lessons: [],
+  lessonIndex: -1,
+  boardFen: "startpos",
+  startFen: "startpos",
+  legalMoves: [],
+  legalByFrom: {},
+  selectedSquare: "",
+  dragFrom: "",
+  lastMove: null,
 };
 
 function init() {
@@ -37,10 +76,14 @@ function init() {
   el.analyze.addEventListener("click", runAnalysis);
   el.importAllGames?.addEventListener("change", syncImportScope);
   el.tabButtons.forEach((button) => {
-    button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "report"));
+    button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "overview"));
   });
+  el.trainerReset?.addEventListener("click", resetTrainerLesson);
+  el.trainerNext?.addEventListener("click", nextLesson);
   syncImportScope();
-  setActiveTab("report");
+  setActiveTab("overview");
+  renderCoords();
+  renderBoard("startpos");
 }
 
 function syncImportScope() {
@@ -66,13 +109,14 @@ function setActiveTab(name) {
 }
 
 async function runAnalysis() {
-  setStatus("Importing games and building your prep robot report...");
+  setStatus("Importing games and building your repertoire tree...");
   el.analyze.disabled = true;
   try {
     const payload = await fetchProfilePayload(el.username.value.trim());
+    state.payload = payload;
     renderProfile(payload);
     setStatus(
-      `Imported ${payload.games_imported} games from ${payload.archives_found} archive months. Prep report is ready.`
+      `Imported ${payload.games_imported} games from ${payload.archives_found} archive months. Repertoire tree is ready.`
     );
   } catch (error) {
     setStatus(error.message || "Prep build failed.");
@@ -108,21 +152,41 @@ function renderProfile(payload) {
   const profile = payload.profile || {};
   const topWhite = profile.top_openings_by_color?.white?.[0];
   const topBlack = profile.top_openings_by_color?.black?.[0];
-  const lessons = (profile.prep_repertoire || []).reduce(
-    (count, item) => count + Number(item.lesson_count || 0),
-    0
-  );
+  const lessons = flattenLessons(profile.prep_repertoire || []);
 
-  el.heroTitle.textContent = `${payload.username} prep robot report`;
+  state.lessons = lessons;
+  state.lessonIndex = lessons.length ? 0 : -1;
+
+  el.heroTitle.textContent = `${payload.username} repertoire prep`;
   el.heroSummary.textContent =
-    "This report is built from the openings they actually repeat on Chess.com. Use the prep tab to see what they play, which branches matter, and the engine continuation you should know before the game starts.";
+    "Bookup turns the openings this player actually repeats into a trainable prep tree: named variations, practical counters, and board drills for the positions that matter.";
   el.badgeWinRate.textContent = `${payload.games_imported || 0}`;
   el.badgeChaos.textContent = topWhite?.opening || "--";
-  el.badgeColor.textContent = topBlack?.opening || `${lessons} lessons`;
+  el.badgeColor.textContent = topBlack?.opening || `${lessons.length} lessons`;
 
   renderFirstMove(profile.first_move_repertoire || {});
   renderOpenings(profile.top_openings_by_color || {});
-  renderPrepLines(profile.prep_repertoire || []);
+  renderPrepCards(profile.prep_repertoire || []);
+  renderLessonList();
+
+  if (state.lessonIndex >= 0) {
+    loadLesson(state.lessonIndex);
+  } else {
+    clearTrainer();
+  }
+}
+
+function flattenLessons(items) {
+  return items.flatMap((item) =>
+    (item.lessons || []).map((lesson, index) => ({
+      ...lesson,
+      opening: item.opening,
+      opening_code: item.opening_code,
+      color: item.color,
+      parent_index: index,
+      sample_line: item.sample_line,
+    }))
+  );
 }
 
 function renderFirstMove(data) {
@@ -189,7 +253,7 @@ function renderOpeningColumn(node, items, side) {
     .join("");
 }
 
-function renderPrepLines(items) {
+function renderPrepCards(items) {
   if (!items.length) {
     el.prepList.className = "stack empty";
     el.prepList.textContent = "No prep lines yet.";
@@ -200,74 +264,302 @@ function renderPrepLines(items) {
   el.prepList.innerHTML = items
     .map((item) => {
       const lessons = item.lessons || [];
-      const linePreview = buildLinePreview(item.steps || []);
-      const lessonHtml = lessons.length
-        ? lessons
-            .map(
-              (lesson) => `
-                <div class="prep-lesson ${lesson.lesson_type === "repeat" ? "repeat" : "fix"}">
-                  <div class="prep-lesson-head">
-                    <span class="prep-ply">${lesson.ply}${lesson.ply % 2 === 0 ? "..." : "."}</span>
-                    <span class="prep-trigger">After ${escapeHtml(lesson.trigger_move)}</span>
-                  </div>
-                  <div class="prep-best">
-                    ${lesson.lesson_type === "repeat" ? "You already know:" : "Best continuation:"}
-                    <strong>${escapeHtml(lesson.best_reply)}</strong>
-                  </div>
-                  <div class="prep-meta">${escapeHtml(lesson.explanation)}</div>
-                  ${
-                    lesson.your_played
-                      ? `<div class="prep-meta">Your sample game move: <strong>${escapeHtml(lesson.your_played)}</strong>${lesson.repeated_count ? ` · repeated ${lesson.repeated_count}x` : ""}</div>`
-                      : ""
-                  }
-                  <div class="item-note">Engine line: ${escapeHtml(lesson.continuation)}</div>
-                  ${
-                    lesson.position_identifier
-                      ? `<div class="item-note"><a href="${lesson.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(lesson.position_identifier_label || "Lichess analysis")}</a></div>`
-                      : ""
-                  }
-                  ${
-                    lesson.options?.length
-                      ? `<div class="prep-options">${lesson.options
-                          .map(
-                            (option) =>
-                              `<span class="prep-option">${escapeHtml(option.san)} · ${option.popularity || 0}% · ${option.games || 0} games</span>`
-                          )
-                          .join("")}</div>`
-                      : ""
-                  }
-                </div>
-              `
-            )
-            .join("")
-        : `<div class="item-note">You already match the engine on the main sample line for this opening, so there are no extra correction notes right now.</div>`;
-
+      const linePreview = item.sample_line || buildLinePreview(item.steps || []);
       return `
         <article class="item prep-item">
           <div class="item-title">${escapeHtml(item.opening)}${item.opening_code ? ` <span class="prep-code">${escapeHtml(item.opening_code)}</span>` : ""}</div>
-          <div class="item-sub">They play this as ${escapeHtml(item.color)}. Learn the branches they repeat and the cleanest continuation against each one.</div>
+          <div class="item-sub">They play this as ${escapeHtml(item.color)}. Use these lesson branches to prepare the best continuation against what they actually repeat.</div>
           ${
             item.position_identifier
               ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>`
               : ""
           }
-          ${linePreview ? `<div class="prep-line-preview">${linePreview}</div>` : ""}
-          <div class="prep-lesson-stack">${lessonHtml}</div>
+          ${linePreview ? `<div class="prep-line-preview">${escapeHtml(linePreview)}</div>` : ""}
+          <div class="prep-lesson-stack">
+            ${lessons
+              .map(
+                (lesson) => `
+                  <div class="prep-lesson ${lesson.lesson_type === "repeat" ? "repeat" : "fix"}">
+                    <div class="prep-lesson-head">
+                      <span class="prep-ply">${lesson.ply}${lesson.ply % 2 === 0 ? "..." : "."}</span>
+                      <span class="prep-trigger">After ${escapeHtml(lesson.trigger_move)}</span>
+                    </div>
+                    <div class="prep-best">${lesson.lesson_type === "repeat" ? "You already know" : "Best continuation"} <strong>${escapeHtml(lesson.best_reply)}</strong></div>
+                    <div class="prep-meta">${escapeHtml(lesson.explanation)}</div>
+                    ${
+                      lesson.your_played
+                        ? `<div class="prep-meta">Your sample move: <strong>${escapeHtml(lesson.your_played)}</strong>${lesson.repeated_count ? ` · repeated ${lesson.repeated_count}x` : ""}</div>`
+                        : ""
+                    }
+                    <div class="item-note">Engine line: ${escapeHtml(lesson.continuation)}</div>
+                  </div>
+                `
+              )
+              .join("")}
+          </div>
         </article>
       `;
     })
     .join("");
 }
 
+function renderLessonList() {
+  if (!state.lessons.length) {
+    el.lessonList.className = "stack empty";
+    el.lessonList.textContent = "No training lessons yet.";
+    return;
+  }
+
+  el.lessonList.className = "stack";
+  el.lessonList.innerHTML = state.lessons
+    .map(
+      (lesson, index) => `
+        <button class="item clickable lesson-item ${index === state.lessonIndex ? "active" : ""}" type="button" data-lesson-index="${index}">
+          <div class="item-title">${escapeHtml(lesson.opening)}</div>
+          <div class="item-sub">After ${escapeHtml(lesson.trigger_move)}, play ${escapeHtml(lesson.best_reply)}</div>
+          <div class="coach-item-meta">${lesson.lesson_type === "repeat" ? "Known line" : "Needs prep"} · ${escapeHtml(lesson.color)} repertoire</div>
+        </button>
+      `
+    )
+    .join("");
+
+  el.lessonList.querySelectorAll("[data-lesson-index]").forEach((node) => {
+    node.addEventListener("click", () => loadLesson(Number(node.dataset.lessonIndex)));
+  });
+}
+
+async function loadLesson(index) {
+  const lesson = state.lessons[index];
+  if (!lesson) return;
+
+  state.lessonIndex = index;
+  state.startFen = lesson.position_fen;
+  state.boardFen = lesson.position_fen;
+  state.selectedSquare = "";
+  state.lastMove = null;
+
+  el.boardTitle.textContent = `${lesson.opening}${lesson.opening_code ? ` · ${lesson.opening_code}` : ""}`;
+  el.boardSummary.textContent = `They reach this branch as ${lesson.color}. After ${lesson.trigger_move}, the move you need is ${lesson.best_reply}.`;
+  el.boardLine.textContent = lesson.continuation || "No engine line yet.";
+  el.boardLine.classList.remove("empty");
+  el.trainerFeedback.textContent =
+    lesson.lesson_type === "repeat"
+      ? "You already play the engine move here. Use this drill to keep the line sharp."
+      : `Your target in this position is ${lesson.best_reply}.`;
+  el.trainerFeedback.classList.remove("empty");
+
+  await refreshLegalMoves(lesson.position_fen);
+  renderBoard(lesson.position_fen);
+  renderLessonList();
+  setActiveTab("trainer");
+}
+
+function clearTrainer() {
+  el.boardTitle.textContent = "No lesson loaded";
+  el.boardSummary.textContent = "Build a prep report, then choose a lesson to train.";
+  el.boardLine.textContent = "No line loaded yet.";
+  el.boardLine.classList.add("empty");
+  el.trainerFeedback.textContent = "Choose a lesson from the list to start training.";
+  el.trainerFeedback.classList.remove("empty");
+  state.boardFen = "startpos";
+  state.startFen = "startpos";
+  state.legalMoves = [];
+  state.legalByFrom = {};
+  state.selectedSquare = "";
+  state.lastMove = null;
+  renderBoard("startpos");
+}
+
+function nextLesson() {
+  if (!state.lessons.length) return;
+  const next = (state.lessonIndex + 1) % state.lessons.length;
+  loadLesson(next);
+}
+
+function resetTrainerLesson() {
+  if (state.lessonIndex < 0) return;
+  loadLesson(state.lessonIndex);
+}
+
+function renderCoords() {
+  if (!el.rankLabels || !el.fileLabels) return;
+  el.rankLabels.innerHTML = ranks.map((rank) => `<span>${rank}</span>`).join("");
+  el.fileLabels.innerHTML = files.map((file) => `<span>${file}</span>`).join("");
+}
+
+async function refreshLegalMoves(fen = state.boardFen) {
+  const response = await fetch("/api/legal-moves", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fen }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not load legal moves.");
+  state.boardFen = payload.fen;
+  state.legalMoves = payload.legal_moves || [];
+  state.legalByFrom = {};
+  state.legalMoves.forEach((move) => {
+    if (!state.legalByFrom[move.from]) state.legalByFrom[move.from] = [];
+    state.legalByFrom[move.from].push(move);
+  });
+}
+
+function renderBoard(fen) {
+  if (!el.board) return;
+  state.boardFen = fen || state.boardFen;
+  const squares = parseFenBoard(state.boardFen);
+  el.board.innerHTML = "";
+  squares.forEach((piece, index) => {
+    const square = document.createElement("div");
+    const file = index % 8;
+    const rank = Math.floor(index / 8);
+    const squareName = `${files[file]}${8 - rank}`;
+    square.className = `square ${(file + rank) % 2 === 0 ? "light" : "dark"} selectable`;
+    square.dataset.square = squareName;
+    if (state.selectedSquare === squareName) square.classList.add("selected");
+    if (state.lastMove?.from === squareName) square.classList.add("last-from");
+    if (state.lastMove?.to === squareName) square.classList.add("last-to");
+
+    const legalTargets = state.selectedSquare ? state.legalByFrom[state.selectedSquare] || [] : [];
+    const targetMove = legalTargets.find((item) => item.to === squareName);
+    if (targetMove) {
+      square.classList.add(targetMove.capture ? "legal-capture" : "legal-target");
+      const dot = document.createElement("div");
+      dot.className = "move-dot";
+      square.appendChild(dot);
+    }
+
+    square.addEventListener("click", () => handleSquareClick(squareName));
+    square.addEventListener("pointerup", async () => {
+      if (!state.dragFrom) return;
+      const from = state.dragFrom;
+      state.dragFrom = "";
+      await submitTrainerMove(from, squareName);
+    });
+
+    if (piece) {
+      const img = document.createElement("img");
+      img.className = "piece";
+      img.src = PIECE_ASSETS[piece];
+      img.alt = piece;
+      img.addEventListener("pointerdown", () => {
+        if (pieceSide(piece) !== sideToMove(state.boardFen)) return;
+        state.dragFrom = squareName;
+        state.selectedSquare = squareName;
+        renderBoard(state.boardFen);
+      });
+      square.appendChild(img);
+    }
+
+    el.board.appendChild(square);
+  });
+}
+
+function handleSquareClick(squareName) {
+  if (state.lessonIndex < 0) return;
+  if (!state.selectedSquare) {
+    if ((state.legalByFrom[squareName] || []).length) {
+      state.selectedSquare = squareName;
+      renderBoard(state.boardFen);
+    }
+    return;
+  }
+
+  if (state.selectedSquare === squareName) {
+    state.selectedSquare = "";
+    renderBoard(state.boardFen);
+    return;
+  }
+
+  submitTrainerMove(state.selectedSquare, squareName);
+}
+
+async function submitTrainerMove(from, to) {
+  const move = (state.legalByFrom[from] || []).find((item) => item.to === to);
+  state.selectedSquare = "";
+  renderBoard(state.boardFen);
+  if (!move) return;
+
+  const lesson = state.lessons[state.lessonIndex];
+  if (!lesson) return;
+
+  const response = await fetch("/api/trainer-attempt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fen: state.boardFen,
+      move_uci: move.uci,
+      lesson,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    el.trainerFeedback.textContent = payload.error || "Could not validate move.";
+    el.trainerFeedback.classList.remove("empty");
+    return;
+  }
+
+  if (!payload.ok) {
+    el.trainerFeedback.textContent = `${payload.played_san} is not the prep move here. ${payload.explanation} Best move: ${payload.best_san}.`;
+    el.trainerFeedback.classList.remove("empty");
+    el.boardLine.textContent = payload.continuation || lesson.continuation || "";
+    el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+    state.lastMove = null;
+    return;
+  }
+
+  state.boardFen = payload.fen;
+  state.lastMove = payload.last_move || null;
+  el.trainerFeedback.textContent = `Correct. ${payload.explanation}`;
+  el.trainerFeedback.classList.remove("empty");
+  el.boardLine.textContent = payload.line || lesson.continuation || "";
+  el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+  state.selectedSquare = "";
+  state.legalMoves = payload.legal_moves || [];
+  state.legalByFrom = {};
+  state.legalMoves.forEach((legalMove) => {
+    if (!state.legalByFrom[legalMove.from]) state.legalByFrom[legalMove.from] = [];
+    state.legalByFrom[legalMove.from].push(legalMove);
+  });
+  renderBoard(state.boardFen);
+}
+
+function parseFenBoard(fen) {
+  const boardPart = (fen || "").split(" ")[0];
+  if (!boardPart || boardPart === "startpos") {
+    return parseFenBoard("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  }
+  const out = [];
+  boardPart.split("/").forEach((rank) => {
+    rank.split("").forEach((char) => {
+      if (/\d/.test(char)) {
+        for (let i = 0; i < Number(char); i += 1) out.push("");
+      } else {
+        out.push(char);
+      }
+    });
+  });
+  return out;
+}
+
 function buildLinePreview(steps) {
-  const moves = steps
+  return steps
     .map((step) => {
       if (step.kind === "user") return step.san || "";
       if (step.kind === "opponent") return step.played || "";
       return "";
     })
-    .filter(Boolean);
-  return moves.join(" ");
+    .filter(Boolean)
+    .join(" ");
+}
+
+function pieceSide(piece) {
+  return piece === piece.toUpperCase() ? "w" : "b";
+}
+
+function sideToMove(fen) {
+  const parts = String(fen || "").split(" ");
+  return parts[1] === "b" ? "b" : "w";
 }
 
 function escapeHtml(value) {
