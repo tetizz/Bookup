@@ -38,7 +38,9 @@ const el = {
   openingListWhite: document.getElementById("openingListWhite"),
   openingListBlack: document.getElementById("openingListBlack"),
   mistakeList: document.getElementById("mistakeList"),
-  prepList: document.getElementById("prepList"),
+  urgentList: document.getElementById("urgentList"),
+  sidelineList: document.getElementById("sidelineList"),
+  suggestionList: document.getElementById("suggestionList"),
   tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
   tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
   lessonList: document.getElementById("lessonList"),
@@ -173,7 +175,7 @@ function renderProfile(payload) {
   renderFirstMove(profile.first_move_repertoire || {});
   renderOpenings(profile.top_openings_by_color || {});
   renderMistakes(profile.improvements || []);
-  renderPrepCards(profile.prep_repertoire || []);
+  renderImproveRepertoire(profile.prep_repertoire || []);
   renderLessonList();
 
   if (state.lessonIndex >= 0) {
@@ -260,15 +262,23 @@ function renderOpeningColumn(node, items, side) {
     .join("");
 }
 
-function renderPrepCards(items) {
+function renderImproveRepertoire(items) {
+  const buckets = buildImproveBuckets(items);
+  renderPrepCards(el.urgentList, buckets.urgent, "No urgent lines yet.");
+  renderPrepCards(el.sidelineList, buckets.sidelines, "No rare sidelines yet.");
+  renderSuggestionCards(buckets.suggestions);
+}
+
+function renderPrepCards(node, items, emptyText) {
+  if (!node) return;
   if (!items.length) {
-    el.prepList.className = "stack empty";
-    el.prepList.textContent = "No prep lines yet.";
+    node.className = "stack empty";
+    node.textContent = emptyText;
     return;
   }
 
-  el.prepList.className = "stack";
-  el.prepList.innerHTML = items
+  node.className = "stack";
+  node.innerHTML = items
     .map((item) => {
       const lessons = item.lessons || [];
       const linePreview = item.sample_line || buildLinePreview(item.steps || []);
@@ -308,6 +318,108 @@ function renderPrepCards(items) {
       `;
     })
     .join("");
+}
+
+function renderSuggestionCards(items) {
+  if (!el.suggestionList) return;
+  if (!items.length) {
+    el.suggestionList.className = "stack empty";
+    el.suggestionList.textContent = "No repertoire update suggestions yet.";
+    return;
+  }
+
+  el.suggestionList.className = "stack";
+  el.suggestionList.innerHTML = items
+    .map(
+      (item, index) => `
+        <article class="item prep-item">
+          <div class="item-title">${index + 1}. ${escapeHtml(item.title)}</div>
+          <div class="item-sub">${escapeHtml(item.detail)}</div>
+          ${item.line ? `<div class="prep-line-preview">${escapeHtml(item.line)}</div>` : ""}
+          ${
+            item.position_identifier
+              ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>`
+              : ""
+          }
+        </article>
+      `
+    )
+    .join("");
+}
+
+function buildImproveBuckets(items) {
+  const urgent = [];
+  const sidelines = [];
+  const suggestions = [];
+
+  items.forEach((item) => {
+    const lessons = item.lessons || [];
+    const steps = item.steps || [];
+    const fixLessons = lessons.filter((lesson) => lesson.lesson_type !== "repeat");
+    const knownLessons = lessons.filter((lesson) => lesson.lesson_type === "repeat");
+    const priorityScore = fixLessons.reduce((sum, lesson) => sum + (lesson.repeated_count || 1), 0);
+
+    if (fixLessons.length) {
+      urgent.push({
+        ...item,
+        lessons: fixLessons,
+        priorityScore,
+      });
+      suggestions.push({
+        title: `Add ${fixLessons[0].best_reply} in ${item.opening}`,
+        detail: `Bookup keeps seeing this branch as ${item.color}. The engine wants ${fixLessons[0].best_reply} after ${fixLessons[0].trigger_move}, so this is a clean repertoire upgrade to memorize next.`,
+        line: fixLessons[0].continuation || item.sample_line,
+        position_identifier: fixLessons[0].position_identifier || item.position_identifier,
+        position_identifier_label: fixLessons[0].position_identifier_label || item.position_identifier_label,
+      });
+    }
+
+    const lowFrequencyOptions = steps
+      .filter((step) => step.kind === "opponent")
+      .flatMap((step) =>
+        (step.options || [])
+          .filter((option) => (option.popularity || 0) > 0 && (option.popularity || 0) <= 12)
+          .map((option) => ({
+            opening: item.opening,
+            opening_code: item.opening_code,
+            color: item.color,
+            sample_line: `${item.sample_line || ""} ${option.san}`.trim(),
+            position_identifier: step.position_identifier || item.position_identifier,
+            position_identifier_label: step.position_identifier_label || item.position_identifier_label,
+            lessons: [
+              {
+                trigger_move: step.played,
+                best_reply: option.san,
+                explanation: `${option.san} only shows up in about ${option.popularity}% of the database here, so treat it as a sideline worth covering once your main branches are stable.`,
+                continuation: item.sample_line || "",
+                lesson_type: "sideline",
+              },
+            ],
+            priorityScore: option.popularity || 0,
+          }))
+      );
+
+    sidelines.push(...lowFrequencyOptions);
+
+    if (!fixLessons.length && knownLessons.length) {
+      suggestions.push({
+        title: `Keep ${item.opening} stable`,
+        detail: `You already play the engine move in the main recurring branch here. Leave this line in maintenance mode and spend your study time elsewhere.`,
+        line: knownLessons[0].continuation || item.sample_line,
+        position_identifier: item.position_identifier,
+        position_identifier_label: item.position_identifier_label,
+      });
+    }
+  });
+
+  urgent.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+  sidelines.sort((a, b) => (a.priorityScore || 0) - (b.priorityScore || 0));
+
+  return {
+    urgent: urgent.slice(0, 8),
+    sidelines: sidelines.slice(0, 8),
+    suggestions: suggestions.slice(0, 8),
+  };
 }
 
 function renderMistakes(items) {
