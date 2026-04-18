@@ -58,6 +58,11 @@ const el = {
   timeControlChart: document.getElementById("timeControlChart"),
   hourlyChart: document.getElementById("hourlyChart"),
   dossierGrid: document.getElementById("dossierGrid"),
+  compareUsername: document.getElementById("compareUsernameInput"),
+  compareBtn: document.getElementById("compareBtn"),
+  compareSummary: document.getElementById("compareSummary"),
+  comparePrimary: document.getElementById("comparePrimary"),
+  compareSecondary: document.getElementById("compareSecondary"),
   improvementList: document.getElementById("improvementList"),
   adviceList: document.getElementById("adviceList"),
   board: document.getElementById("board"),
@@ -68,6 +73,9 @@ const el = {
   boardLine: document.getElementById("boardLine"),
 };
 
+let currentPrimaryPayload = null;
+let currentSecondaryPayload = null;
+
 function init() {
   el.username.value = defaults.username || "trixize1234";
   el.timeClasses.value = defaults.time_classes || "all";
@@ -77,6 +85,7 @@ function init() {
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
   el.analyze.addEventListener("click", runAnalysis);
+  el.compareBtn?.addEventListener("click", runCompare);
   renderCoords();
   renderBoard("startpos");
 }
@@ -85,21 +94,7 @@ async function runAnalysis() {
   setStatus("Importing games and building scout report...");
   el.analyze.disabled = true;
   try {
-    const response = await fetch("/api/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: el.username.value.trim(),
-        time_classes: el.timeClasses.value.trim(),
-        max_games: Number(el.maxGames.value),
-        engine_path: el.enginePath.value.trim(),
-        depth: Number(el.depth.value),
-        threads: Number(el.threads.value),
-        hash_mb: Number(el.hash.value),
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Profile build failed.");
+    const payload = await fetchProfilePayload(el.username.value.trim());
     renderProfile(payload);
     setStatus(`Analyzed ${payload.profile.games_analyzed} games for ${payload.username}.`);
   } catch (error) {
@@ -109,7 +104,55 @@ async function runAnalysis() {
   }
 }
 
+async function runCompare() {
+  if (!currentPrimaryPayload) {
+    setStatus("Build a scout report first so there is a player to compare against.");
+    return;
+  }
+  const username = (el.compareUsername?.value || "").trim();
+  if (!username) {
+    setStatus("Enter a second Chess.com username to compare.");
+    return;
+  }
+  setStatus(`Comparing ${currentPrimaryPayload.username} with ${username}...`);
+  el.compareBtn.disabled = true;
+  try {
+    const payload = await fetchProfilePayload(username);
+    currentSecondaryPayload = payload;
+    renderCompare(currentPrimaryPayload, currentSecondaryPayload);
+    setStatus(`Compared ${currentPrimaryPayload.username} with ${payload.username}.`);
+  } catch (error) {
+    setStatus(error.message || "Compare build failed.");
+  } finally {
+    el.compareBtn.disabled = false;
+  }
+}
+
+async function fetchProfilePayload(username) {
+  const response = await fetch("/api/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildProfileRequest(username)),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Profile build failed.");
+  return payload;
+}
+
+function buildProfileRequest(username) {
+  return {
+    username,
+    time_classes: el.timeClasses.value.trim(),
+    max_games: Number(el.maxGames.value),
+    engine_path: el.enginePath.value.trim(),
+    depth: Number(el.depth.value),
+    threads: Number(el.threads.value),
+    hash_mb: Number(el.hash.value),
+  };
+}
+
 function renderProfile(payload) {
+  currentPrimaryPayload = payload;
   const profile = payload.profile;
   el.heroTitle.textContent = `${payload.username} scout report`;
   el.heroSummary.textContent = profile.scout_brief;
@@ -133,14 +176,16 @@ function renderProfile(payload) {
   renderCastling(profile.castling || {});
   renderTimeControl(profile.time_control || {});
   renderDossier(profile.dossier || []);
+  renderComparePrimary(payload);
+  renderCompare(currentPrimaryPayload, currentSecondaryPayload);
   renderImprovements(profile.improvements || []);
   renderAdvice(profile.opening_advice || []);
 }
 
 function renderStyleMetrics(metrics) {
   const items = [
-    ["Chaos Index", `${Math.round(metrics.chaos_index || 0)}/100`, "accent-danger", "Thrives in chaos — keep it structured."],
-    ["Aggression Index", `${Math.round(metrics.aggression_index || 0)}/100`, "accent-danger", "Highly aggressive — lots of captures and checks."],
+    ["Chaos Index", `${Math.round(metrics.chaos_index || 0)}/100`, "accent-danger", "Thrives in chaos - keep it structured."],
+    ["Aggression Index", `${Math.round(metrics.aggression_index || 0)}/100`, "accent-danger", "Highly aggressive - lots of captures and checks."],
     ["Capture Rate", `${metrics.capture_rate || 0}%`, "accent-danger", "captures / moves"],
     ["Forcing Rate", `${metrics.forcing_rate || 0}%`, "accent-gold", "forcing / moves"],
     ["Avg Captures/Game", `${metrics.avg_captures_per_game || 0}`, "accent-good", "captures each game"],
@@ -166,7 +211,11 @@ function renderFirstMove(data) {
   el.firstMoveLead.innerHTML = `
     First move repertoire as White
     <strong>${top.move}</strong>
-    ${top.pct}% · ${top.count}x
+    <div class="first-move-meta">${top.pct}% · ${top.count}x</div>
+    <div class="first-move-scale">
+      <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+    </div>
+    <div class="bar-track"><div class="bar-fill" style="width:${top.pct}%"></div></div>
   `;
   el.firstMoveList.className = "stack";
   el.firstMoveList.innerHTML = (data.items || []).map((item, index) => `
@@ -260,9 +309,9 @@ function renderGameLength(info) {
 
 function renderResignation(info) {
   const items = [
-    ["Avg Resignation Move", info.avg_move ? `Move ${info.avg_move}` : "—", "accent-danger", "Fights hard before resigning"],
+    ["Avg Resignation Move", info.avg_move ? `Move ${info.avg_move}` : "-", "accent-danger", "Fights hard before resigning"],
     ["Early Resign Rate", `${info.early_rate || 0}%`, "accent-danger", "resign before move 20"],
-    ["Fighting Spirit", info.fighting_spirit || "—", "accent-good", ""],
+    ["Fighting Spirit", info.fighting_spirit || "-", "accent-good", ""],
   ];
   el.resignationStats.innerHTML = items.map(([label, value, accent, note]) => `
     <div class="stat-card">
@@ -325,10 +374,10 @@ function renderClock(clock) {
   el.clockLine.innerHTML = renderLineChart(linePoints, "#3ef0a0", 600);
 
   const items = [
-    ["Game Start", clock.avg_remaining?.start || "—", "accent-good"],
-    ["Middlegame", clock.avg_remaining?.middlegame || "—", "accent-blue"],
-    ["Endgame", clock.avg_remaining?.endgame || "—", "accent-gold"],
-    ["Game End", clock.avg_remaining?.end || "—", "accent-danger"],
+    ["Game Start", clock.avg_remaining?.start || "-", "accent-good"],
+    ["Middlegame", clock.avg_remaining?.middlegame || "-", "accent-blue"],
+    ["Endgame", clock.avg_remaining?.endgame || "-", "accent-gold"],
+    ["Game End", clock.avg_remaining?.end || "-", "accent-danger"],
     ["Clock Burn Rate", `${clock.burn_rate_pct || 0}% burned`, "accent-good"],
     ["Opening s/mv", `${clock.seconds_per_move?.opening || 0}s`, "accent-blue"],
     ["Middlegame s/mv", `${clock.seconds_per_move?.middlegame || 0}s`, "accent-blue"],
@@ -349,9 +398,9 @@ function renderCastling(castling) {
     { label: "No Castle", value: castling.no_castle || 0, color: "#5ca0ff" },
   ]);
   const items = [
-    ["Avg Castle Move", castling.avg_move ? `Move ${castling.avg_move}` : "—", "accent-good"],
+    ["Avg Castle Move", castling.avg_move ? `Move ${castling.avg_move}` : "-", "accent-good"],
     ["Castle Rate", `${castling.rate || 0}%`, "accent-good"],
-    ["Early (≤ 8)", `${castling.early_pct || 0}%`, "accent-good"],
+    ["Early (<= 8)", `${castling.early_pct || 0}%`, "accent-good"],
     ["Late (> 15)", `${castling.late_pct || 0}%`, "accent-danger"],
     ["Kingside", `${castling.kingside || 0} games`, "accent-blue"],
     ["Queenside", `${castling.queenside || 0} games`, "accent-gold"],
@@ -399,6 +448,107 @@ function renderDossier(items) {
       <div class="small-note ${item.tone === "critical" ? "accent-danger" : "accent-good"}">${item.tone}</div>
     </article>
   `).join("");
+}
+
+function renderComparePrimary(payload) {
+  if (!payload) {
+    el.comparePrimary.className = "compare-player-body empty";
+    el.comparePrimary.textContent = "No primary player loaded yet.";
+    return;
+  }
+  el.comparePrimary.className = "compare-player-body";
+  el.comparePrimary.innerHTML = renderComparePlayerCard(payload);
+}
+
+function renderCompare(primaryPayload, secondaryPayload) {
+  renderComparePrimary(primaryPayload);
+  if (!secondaryPayload) {
+    el.compareSummary.className = "compare-summary empty";
+    el.compareSummary.textContent = primaryPayload
+      ? `Scout report ready for ${primaryPayload.username}. Search a second player to compare style, results, and preparation risk side by side.`
+      : "Build a scout report first, then search a second Chess.com username here to compare both profiles side by side.";
+    el.compareSecondary.className = "compare-player-body empty";
+    el.compareSecondary.textContent = "No comparison player loaded yet.";
+    return;
+  }
+
+  el.compareSecondary.className = "compare-player-body";
+  el.compareSecondary.innerHTML = renderComparePlayerCard(secondaryPayload);
+  el.compareSummary.className = "compare-summary";
+  el.compareSummary.textContent = buildCompareSummary(primaryPayload, secondaryPayload);
+}
+
+function renderComparePlayerCard(payload) {
+  const profile = payload.profile || {};
+  const hero = profile.hero_stats || {};
+  const styleTag = classifyStyleTag(profile);
+  const topOpening = pickTopOpening(profile);
+  return `
+    <div class="compare-player-name">${escapeHtml(payload.username)}</div>
+    <div class="compare-player-tag">${escapeHtml(styleTag)}</div>
+    <div class="compare-metrics">
+      <div class="mini-card">
+        <div class="metric-label">Win Rate</div>
+        <strong class="accent-good">${hero.win_rate || 0}%</strong>
+      </div>
+      <div class="mini-card">
+        <div class="metric-label">Chaos</div>
+        <strong class="accent-danger">${hero.chaos_index || 0}/100</strong>
+      </div>
+      <div class="mini-card">
+        <div class="metric-label">Better As</div>
+        <strong class="accent-blue">${escapeHtml(hero.better_as || "-")}</strong>
+      </div>
+    </div>
+    <div class="compare-notes">
+      <div><span class="metric-label">Top opening</span><strong>${escapeHtml(topOpening.name)}</strong></div>
+      <div><span class="metric-label">Opening WR</span><strong>${topOpening.winRate}%</strong></div>
+      <div><span class="metric-label">Games</span><strong>${profile.games_analyzed || 0}</strong></div>
+    </div>
+  `;
+}
+
+function buildCompareSummary(primaryPayload, secondaryPayload) {
+  const primary = primaryPayload.profile || {};
+  const secondary = secondaryPayload.profile || {};
+  const pHero = primary.hero_stats || {};
+  const sHero = secondary.hero_stats || {};
+  const primaryScore = Number(pHero.win_rate || 0) + (Number(pHero.chaos_index || 0) * 0.15);
+  const secondaryScore = Number(sHero.win_rate || 0) + (Number(sHero.chaos_index || 0) * 0.15);
+  const edge = primaryScore === secondaryScore
+    ? "looks even"
+    : primaryScore > secondaryScore
+      ? `${primaryPayload.username} has the edge`
+      : `${secondaryPayload.username} has the edge`;
+
+  const whiteGap = Number(primary.color_record?.white?.win_rate || 0) - Number(secondary.color_record?.white?.win_rate || 0);
+  const sharper = Number(primary.style_metrics?.chaos_index || 0) >= Number(secondary.style_metrics?.chaos_index || 0)
+    ? primaryPayload.username
+    : secondaryPayload.username;
+  const steadier = sharper === primaryPayload.username ? secondaryPayload.username : primaryPayload.username;
+
+  return `${edge}: ${sharper} is sharper and more chaotic, while ${steadier} is steadier. ${Math.abs(whiteGap).toFixed(1)}% separates their White win rates, so color assignment and opening choice should matter in this matchup.`;
+}
+
+function classifyStyleTag(profile) {
+  const style = profile.style_metrics || {};
+  if ((style.aggression_index || 0) >= 70 && (style.chaos_index || 0) >= 65) return "The Attacker";
+  if ((style.endgame_grit || 0) >= 70) return "The Grinder";
+  if ((style.opening_loyalty || 0) >= 35) return "The Specialist";
+  return "The Explorer";
+}
+
+function pickTopOpening(profile) {
+  const white = profile.top_openings_by_color?.white || [];
+  const black = profile.top_openings_by_color?.black || [];
+  const combined = [...white, ...black].sort((a, b) => (b.count || 0) - (a.count || 0));
+  if (!combined.length) {
+    return { name: "No opening data", winRate: 0 };
+  }
+  return {
+    name: combined[0].opening || "Unknown",
+    winRate: combined[0].win_rate || 0,
+  };
 }
 
 function renderImprovements(improvements) {

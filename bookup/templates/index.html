@@ -127,7 +127,7 @@
 
       <section class="section-block">
         <div class="section-cap">Most Played Openings</div>
-        <div class="section-sub">Now — how well does each opening actually work for them?</div>
+        <div class="section-sub">Now - how well does each opening actually work for them?</div>
         <div class="two-up">
           <article class="card">
             <h2>As White</h2>
@@ -215,7 +215,7 @@
 
       <section class="section-block">
         <div class="section-cap">Castling Behaviour</div>
-        <div class="section-sub">Castling — king safety and preparation in one move.</div>
+        <div class="section-sub">Castling - king safety and preparation in one move.</div>
         <div class="two-up">
           <article class="card">
             <h2>Castling Preference</h2>
@@ -230,7 +230,7 @@
 
       <section class="section-block">
         <div class="section-cap">Time Control &amp; Time Of Day</div>
-        <div class="section-sub">When do they play best — and at what time of day?</div>
+        <div class="section-sub">When do they play best - and at what time of day?</div>
         <div class="two-up">
           <article class="card">
             <h2>By Time Control</h2>
@@ -247,6 +247,34 @@
         <div class="section-cap">Scout Dossier</div>
         <div class="section-sub">A compact summary of the biggest preparation tells.</div>
         <div id="dossierGrid" class="three-up"></div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-cap">Head-To-Head Compare</div>
+        <div class="section-sub">Search a second player to get a full matchup breakdown - who has the edge, where the battle is won, and what the stats say.</div>
+        <div class="compare-hero">
+          <div id="compareSummary" class="compare-summary empty">Build a scout report first, then search a second Chess.com username here to compare both profiles side by side.</div>
+        </div>
+        <div class="compare-grid">
+          <article class="card compare-player compare-player-primary">
+            <h2>Player 1</h2>
+            <div id="comparePrimary" class="compare-player-body empty">No primary player loaded yet.</div>
+          </article>
+          <article class="card compare-vs-card">
+            <div class="compare-vs">VS</div>
+          </article>
+          <article class="card compare-player compare-player-secondary">
+            <h2>Player 2</h2>
+            <div class="compare-form">
+              <label class="field">
+                <span>Chess.com Username</span>
+                <input id="compareUsernameInput" type="text" placeholder="Enter username...">
+              </label>
+              <button id="compareBtn" class="primary-btn secondary-btn">Scout This Player</button>
+            </div>
+            <div id="compareSecondary" class="compare-player-body empty">No comparison player loaded yet.</div>
+          </article>
+        </div>
       </section>
 
       <section class="section-block">
