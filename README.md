@@ -15,10 +15,10 @@ Bookup studies your public Chess.com games and builds a profile of how you actua
 
 ## Desktop EXE
 
-After packaging, the Windows desktop build is here:
+After packaging, the Windows desktop build is:
 
 ```powershell
-C:\Users\adria\Downloads\Bookup\dist\Bookup\Bookup.exe
+dist\Bookup\Bookup.exe
 ```
 
 That packaged app includes:
@@ -30,7 +30,7 @@ That packaged app includes:
 ## Run
 
 ```powershell
-cd C:\Users\adria\Downloads\Bookup
+cd Bookup
 python -m pip install -r requirements.txt
 python main.py
 ```
