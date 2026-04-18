@@ -536,54 +536,6 @@ def _build_radar(style_metrics: dict[str, float], castle_rate_pct: float, early_
     }
 
 
-def _build_dossier(style_metrics: dict[str, float], white_wr: float, black_wr: float, avg_game_moves: float, resigned_move_avg: float, resigned_early_pct: float) -> list[dict[str, Any]]:
-    color_gap = round(abs(white_wr - black_wr), 1)
-    return [
-        {
-            "label": "Chaos Index",
-            "value": round(style_metrics["chaos_index"]),
-            "detail": "Higher capture volume, forcing moves, and tactical bursts suggest a sharper game tree.",
-            "tone": "critical" if style_metrics["chaos_index"] >= 65 else "low",
-            "accent": "danger",
-        },
-        {
-            "label": "Aggression Index",
-            "value": round(style_metrics["aggression_index"]),
-            "detail": "Attacks relentlessly when checks and captures keep appearing above baseline.",
-            "tone": "critical" if style_metrics["aggression_index"] >= 65 else "low",
-            "accent": "danger",
-        },
-        {
-            "label": "Colour Comfort Gap",
-            "value": f"{color_gap:.1f}%",
-            "detail": f"White win rate {white_wr:.1f}% vs Black {black_wr:.1f}%.",
-            "tone": "critical" if color_gap >= 12 else "low",
-            "accent": "good",
-        },
-        {
-            "label": "Opening Loyalty",
-            "value": f"{style_metrics['opening_loyalty']:.0f}%",
-            "detail": "How concentrated their openings are around a small recurring set.",
-            "tone": "critical" if style_metrics["opening_loyalty"] >= 35 else "low",
-            "accent": "blue",
-        },
-        {
-            "label": "Endgame Grit",
-            "value": round(style_metrics["endgame_grit"]),
-            "detail": f"Average resignation move {round(resigned_move_avg) if resigned_move_avg else 0}, early resign rate {resigned_early_pct:.0f}%.",
-            "tone": "critical" if style_metrics["endgame_grit"] >= 70 else "low",
-            "accent": "good",
-        },
-        {
-            "label": "Volatility Index",
-            "value": round(style_metrics["volatility_index"]),
-            "detail": f"Average game length {round(avg_game_moves)} moves with result swings tied to tactical games.",
-            "tone": "critical" if style_metrics["volatility_index"] >= 65 else "low",
-            "accent": "danger",
-        },
-    ]
-
-
 def build_opening_advice(imported: ImportedGame, color: str, opening_info: dict[str, str], reply_san: str, reply_count: int, engine: EngineSession) -> OpeningAdvice | None:
     board = imported.game.board()
     player_turn = chess.WHITE if color == "white" else chess.BLACK
@@ -892,8 +844,6 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "volatility_index": round(_clamp_pct(capture_rate * 180 + avg_burst * 10 + abs(white_wr - black_wr)), 1),
     }
     radar = _build_radar(style_metrics, round(castle_rate * 100, 1), round(queen_rate * 100, 1), avg_game_moves, endgame_wr, burn_rate_pct, (total_mistakes / total_games) if total_games else 0)
-    dossier = _build_dossier(style_metrics, white_wr, black_wr, avg_game_moves, avg_resignation_move, early_resign_rate)
-
     top_openings_by_color = {
         side: [
             {
@@ -1021,7 +971,6 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "tactical_bursts": style_metrics["tactical_bursts"],
         },
         "radar": radar,
-        "dossier": dossier,
         "first_move_repertoire": {
             "top_move": first_move_items[0] if first_move_items else None,
             "items": first_move_items,
