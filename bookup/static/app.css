@@ -90,10 +90,33 @@ h1 { margin: 0; color: var(--text2); font-size: clamp(36px, 6vw, 62px); letter-s
 }
 
 .shell {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 18px 32px 36px;
+}
+
+.workspace-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 14px 0 8px;
+  background: linear-gradient(180deg, rgba(12, 16, 21, 0.97), rgba(12, 16, 21, 0.82), transparent);
+}
+
+.setup-grid {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   gap: 24px;
-  padding: 18px 32px 36px;
+}
+
+.setup-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
 .control-panel, .card, .hero-card, .board-card {
@@ -107,7 +130,7 @@ h1 { margin: 0; color: var(--text2); font-size: clamp(36px, 6vw, 62px); letter-s
   padding: 18px;
   align-self: start;
   position: sticky;
-  top: 18px;
+  top: 88px;
 }
 
 .section-title, .section-cap {
@@ -872,7 +895,7 @@ input {
 }
 
 @media (max-width: 1280px) {
-  .shell { grid-template-columns: 1fr; }
+  .setup-grid { grid-template-columns: 1fr; }
   .control-panel { position: static; }
   .two-up, .three-up, .four-up, .first-move-wrap, .topbar-row, .compare-grid, .compare-metrics, .compare-notes { grid-template-columns: 1fr; display: grid; }
   .hero-badges { margin-top: 16px; }
@@ -880,6 +903,10 @@ input {
 }
 
 @media (max-width: 900px) {
+  .workspace-tabs {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
   .board-coords {
     grid-template-columns: 18px 320px;
     grid-template-rows: 320px 18px;

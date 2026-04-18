@@ -86,7 +86,7 @@ function init() {
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
   syncImportScope();
-  setActiveTab("my-repertoire");
+  setActiveTab("setup");
   renderCoords();
   renderBoard("startpos");
 }
@@ -177,6 +177,7 @@ function renderProfile(payload) {
   renderMistakes(profile.improvements || []);
   renderImproveRepertoire(profile.prep_repertoire || []);
   renderLessonList();
+  setActiveTab("my-repertoire");
 
   if (state.lessonIndex >= 0) {
     loadLesson(state.lessonIndex);

@@ -31,71 +31,78 @@
   </header>
 
   <main class="shell">
-    <aside class="control-panel">
-      <div class="section-title">Import</div>
-      <label class="field">
-        <span>Chess.com username</span>
-        <input id="usernameInput" type="text" placeholder="trixize1234">
-      </label>
-      <label class="field">
-        <span>Time classes</span>
-        <input id="timeClassesInput" type="text" placeholder="all or rapid,blitz,bullet,daily">
-      </label>
-      <label class="field">
-        <span>Max games</span>
-        <input id="maxGamesInput" type="number" min="0" max="20000" placeholder="0 = all games">
-      </label>
-      <div class="field checkbox-field">
-        <span>Import scope</span>
-        <label class="checkbox-row">
-          <input id="importAllGamesInput" type="checkbox">
-          <span>Import all public games</span>
-        </label>
-      </div>
-      <label class="field">
-        <span>Lichess token (optional)</span>
-        <input id="lichessTokenInput" type="password" placeholder="Lets Bookup use the Lichess opening database">
-      </label>
-
-      <div class="section-title">Engine</div>
-      <label class="field">
-        <span>Stockfish path</span>
-        <input id="enginePathInput" type="text" placeholder="C:\path\to\stockfish.exe">
-      </label>
-      <div class="grid">
-        <label class="field compact">
-          <span>Depth</span>
-          <input id="depthInput" type="number" min="8" max="24">
-        </label>
-        <label class="field compact">
-          <span>Threads</span>
-          <input id="threadsInput" type="number" min="1">
-        </label>
-        <label class="field compact">
-          <span>Hash MB</span>
-          <input id="hashInput" type="number" min="256">
-        </label>
-      </div>
-
-      <button id="analyzeBtn" class="primary-btn">Build Prep Report</button>
-      <div id="status" class="status">Ready.</div>
-    </aside>
+    <section class="workspace-tabs">
+      <button class="tab-btn active" data-tab-target="setup">Setup</button>
+      <button class="tab-btn" data-tab-target="my-repertoire">My Repertoire</button>
+      <button class="tab-btn" data-tab-target="review-mistakes">Review Mistakes</button>
+      <button class="tab-btn" data-tab-target="trainer">Trainer</button>
+      <button class="tab-btn" data-tab-target="improve-repertoire">Improve Repertoire</button>
+    </section>
 
     <section class="results-panel">
-      <section class="hero-card">
-        <div class="hero-kicker">Prep Report</div>
-        <div id="heroTitle" class="hero-title">No prep report yet</div>
-        <div id="heroSummary" class="hero-summary">Run an import to get a prep report: first move repertoire, most played named openings, and the best continuations against the lines they keep reaching.</div>
+      <section class="tab-panel active" data-tab-panel="setup">
+        <div class="setup-grid">
+          <aside class="control-panel">
+            <div class="section-title">Import</div>
+            <label class="field">
+              <span>Chess.com username</span>
+              <input id="usernameInput" type="text" placeholder="trixize1234">
+            </label>
+            <label class="field">
+              <span>Time classes</span>
+              <input id="timeClassesInput" type="text" placeholder="all or rapid,blitz,bullet,daily">
+            </label>
+            <label class="field">
+              <span>Max games</span>
+              <input id="maxGamesInput" type="number" min="0" max="20000" placeholder="0 = all games">
+            </label>
+            <div class="field checkbox-field">
+              <span>Import scope</span>
+              <label class="checkbox-row">
+                <input id="importAllGamesInput" type="checkbox">
+                <span>Import all public games</span>
+              </label>
+            </div>
+            <label class="field">
+              <span>Lichess token (optional)</span>
+              <input id="lichessTokenInput" type="password" placeholder="Lets Bookup use the Lichess opening database">
+            </label>
+
+            <div class="section-title">Engine</div>
+            <label class="field">
+              <span>Stockfish path</span>
+              <input id="enginePathInput" type="text" placeholder="C:\path\to\stockfish.exe">
+            </label>
+            <div class="grid">
+              <label class="field compact">
+                <span>Depth</span>
+                <input id="depthInput" type="number" min="8" max="24">
+              </label>
+              <label class="field compact">
+                <span>Threads</span>
+                <input id="threadsInput" type="number" min="1">
+              </label>
+              <label class="field compact">
+                <span>Hash MB</span>
+                <input id="hashInput" type="number" min="256">
+              </label>
+            </div>
+
+            <button id="analyzeBtn" class="primary-btn">Build Prep Report</button>
+            <div id="status" class="status">Ready.</div>
+          </aside>
+
+          <div class="setup-main">
+            <section class="hero-card">
+              <div class="hero-kicker">Prep Report</div>
+              <div id="heroTitle" class="hero-title">No prep report yet</div>
+              <div id="heroSummary" class="hero-summary">Run an import to get a prep report: first move repertoire, most played named openings, and the best continuations against the lines they keep reaching.</div>
+            </section>
+          </div>
+        </div>
       </section>
 
-      <section class="tab-strip">
-        <button class="tab-btn active" data-tab-target="my-repertoire">My Repertoire</button>
-        <button class="tab-btn" data-tab-target="review-mistakes">Review Mistakes</button>
-        <button class="tab-btn" data-tab-target="trainer">Trainer</button>
-        <button class="tab-btn" data-tab-target="improve-repertoire">Improve Repertoire</button>
-      </section>
-
-      <section class="tab-panel active" data-tab-panel="my-repertoire">
+      <section class="tab-panel" data-tab-panel="my-repertoire">
         <section class="section-block">
           <div class="section-cap">First Move Repertoire As White</div>
           <div class="section-sub">The very first move tells you a lot about how someone thinks.</div>
