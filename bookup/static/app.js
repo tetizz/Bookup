@@ -67,6 +67,7 @@ const state = {
   lessons: [],
   queue: [],
   lessonIndex: -1,
+  boardOrientation: "white",
   boardFen: "startpos",
   startFen: "startpos",
   legalMoves: [],
@@ -494,9 +495,11 @@ async function loadLesson(index) {
   const lesson = state.queue[index];
   if (!lesson) return;
   state.lessonIndex = index;
+  state.boardOrientation = lesson.color === "black" ? "black" : "white";
   state.startFen = lesson.position_fen;
   state.boardFen = lesson.position_fen;
   state.selectedSquare = "";
+  state.dragFrom = "";
   state.lastMove = null;
 
   el.boardTitle.textContent = `${lesson.opening_name}${lesson.opening_code ? ` · ${lesson.opening_code}` : ""}`;
@@ -509,6 +512,7 @@ async function loadLesson(index) {
   el.trainerFeedback.classList.remove("empty");
 
   await refreshLegalMoves(lesson.position_fen);
+  renderCoords();
   renderBoard(lesson.position_fen);
   renderQueue();
   setActiveTab("trainer");
@@ -533,11 +537,14 @@ function clearTrainer() {
   el.trainerFeedback.textContent = "Choose a due line from the queue or launch one from a repertoire card.";
   el.trainerFeedback.classList.remove("empty");
   state.boardFen = "startpos";
+  state.boardOrientation = "white";
   state.startFen = "startpos";
   state.legalMoves = [];
   state.legalByFrom = {};
   state.selectedSquare = "";
+  state.dragFrom = "";
   state.lastMove = null;
+  renderCoords();
   renderBoard("startpos");
 }
 
@@ -559,20 +566,26 @@ async function refreshLegalMoves(fen = state.boardFen) {
 }
 
 function renderCoords() {
-  el.rankLabels.innerHTML = ranks.map((rank) => `<span>${rank}</span>`).join("");
-  el.fileLabels.innerHTML = files.map((file) => `<span>${file}</span>`).join("");
+  const rankOrder = state.boardOrientation === "black" ? [...ranks].reverse() : ranks;
+  const fileOrder = state.boardOrientation === "black" ? [...files].reverse() : files;
+  el.rankLabels.innerHTML = rankOrder.map((rank) => `<span>${rank}</span>`).join("");
+  el.fileLabels.innerHTML = fileOrder.map((file) => `<span>${file}</span>`).join("");
 }
 
 function renderBoard(fen) {
   state.boardFen = fen || state.boardFen;
   const squares = parseFenBoard(state.boardFen);
+  const displayFiles = state.boardOrientation === "black" ? [...files].reverse() : files;
+  const displayRanks = state.boardOrientation === "black" ? [...ranks].reverse() : ranks;
   el.board.innerHTML = "";
-  squares.forEach((piece, index) => {
-    const file = index % 8;
-    const rank = Math.floor(index / 8);
-    const squareName = `${files[file]}${8 - rank}`;
+  displayRanks.forEach((rankLabel, rowIndex) => {
+    displayFiles.forEach((fileLabel, colIndex) => {
+    const file = files.indexOf(fileLabel);
+    const rank = 8 - Number(rankLabel);
+    const squareName = `${fileLabel}${rankLabel}`;
+    const piece = squares[(rank * 8) + file];
     const square = document.createElement("div");
-    square.className = `square ${(file + rank) % 2 === 0 ? "light" : "dark"} selectable`;
+    square.className = `square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"} selectable`;
     square.dataset.square = squareName;
     if (state.selectedSquare === squareName) square.classList.add("selected");
     if (state.lastMove?.from === squareName) square.classList.add("last-from");
@@ -609,6 +622,7 @@ function renderBoard(fen) {
       square.appendChild(img);
     }
     el.board.appendChild(square);
+    });
   });
 }
 

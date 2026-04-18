@@ -30,6 +30,7 @@ EXPLORER_HEADERS = {
 KNOWN_LINE_THRESHOLD = 100
 OPENING_PLIES = 16
 PV_LENGTH = 8
+REPERTOIRE_LOCK_PLIES = 8
 
 
 @dataclass(slots=True)
@@ -41,6 +42,7 @@ class PositionNode:
     position_fen: str
     play_uci: list[str]
     trigger_move: str
+    ply_index: int
     occurrences: int = 0
     player_moves: Counter[str] | None = None
     player_san: dict[str, str] | None = None
@@ -321,6 +323,7 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
                         position_fen=board.fen(),
                         play_uci=list(play_uci),
                         trigger_move=last_san,
+                        ply_index=ply_index,
                     )
                     nodes[key] = node
                     opening_by_position[key] = opening_info
@@ -373,6 +376,18 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
     top_played_uci, top_played_count = node.player_moves.most_common(1)[0]
     top_played = node.player_san[top_played_uci]
     best_repeat_count = node.player_moves.get(best_move.uci(), 0)
+    # Keep repertoire work inside the opening family the user already plays.
+    # If this is still a defining early fork and their main branch is at least as common
+    # as the engine alternative,
+    # do not turn "switch openings" into a trainer lesson.
+    repertoire_locked = (
+        node.ply_index <= REPERTOIRE_LOCK_PLIES
+        and top_played_uci != best_move.uci()
+        and top_played_count >= 2
+    )
+    if repertoire_locked:
+        return {}
+
     is_known = best_repeat_count >= KNOWN_LINE_THRESHOLD
     line_status = "known" if is_known else ("new" if top_played == best_reply else "needs_work")
 
@@ -393,7 +408,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
     explanation = (
         f"After {node.trigger_move}, Stockfish wants {best_reply} because it keeps the cleanest continuation."
         if top_played == best_reply
-        else f"After {node.trigger_move}, {best_reply} is stronger than your usual {top_played} and saves about {round(value_lost_cp / 100, 2)} pawns."
+        else f"After {node.trigger_move}, {best_reply} is stronger than your usual {top_played} and saves about {round(value_lost_cp / 100, 2)} pawns inside your current opening."
     )
 
     return {
