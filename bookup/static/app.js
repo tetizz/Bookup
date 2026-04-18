@@ -71,10 +71,27 @@ const el = {
   boardTitle: document.getElementById("boardTitle"),
   boardSummary: document.getElementById("boardSummary"),
   boardLine: document.getElementById("boardLine"),
+  coachPrompt: document.getElementById("coachPrompt"),
+  coachFeedback: document.getElementById("coachFeedback"),
+  coachList: document.getElementById("coachList"),
+  coachReset: document.getElementById("coachResetBtn"),
+  coachReveal: document.getElementById("coachRevealBtn"),
+  coachNext: document.getElementById("coachNextBtn"),
 };
 
 let currentPrimaryPayload = null;
 let currentSecondaryPayload = null;
+const state = {
+  boardFen: "startpos",
+  legalMoves: [],
+  legalByFrom: {},
+  selectedSquare: "",
+  dragFrom: "",
+  lastMove: null,
+  coachItems: [],
+  coachIndex: -1,
+  coachStartFen: "",
+};
 
 function init() {
   el.username.value = defaults.username || "trixize1234";
@@ -86,6 +103,9 @@ function init() {
   el.hash.value = defaults.hash_mb || 2048;
   el.analyze.addEventListener("click", runAnalysis);
   el.compareBtn?.addEventListener("click", runCompare);
+  el.coachReset?.addEventListener("click", resetCoachDrill);
+  el.coachReveal?.addEventListener("click", revealCoachDrill);
+  el.coachNext?.addEventListener("click", nextCoachDrill);
   renderCoords();
   renderBoard("startpos");
 }
@@ -180,6 +200,11 @@ function renderProfile(payload) {
   renderCompare(currentPrimaryPayload, currentSecondaryPayload);
   renderImprovements(profile.improvements || []);
   renderAdvice(profile.opening_advice || []);
+  state.coachItems = profile.coach_positions || [];
+  renderCoachList();
+  if (state.coachItems.length) {
+    loadCoachDrill(0).catch((error) => setStatus(error.message || "Could not load coach drill."));
+  }
 }
 
 function renderStyleMetrics(metrics) {
@@ -211,7 +236,7 @@ function renderFirstMove(data) {
   el.firstMoveLead.innerHTML = `
     First move repertoire as White
     <strong>${top.move}</strong>
-    <div class="first-move-meta">${top.pct}% · ${top.count}x</div>
+    <div class="first-move-meta">${top.pct}% - ${top.count}x</div>
     <div class="first-move-scale">
       <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
     </div>
@@ -221,7 +246,7 @@ function renderFirstMove(data) {
   el.firstMoveList.innerHTML = (data.items || []).map((item, index) => `
     <div class="item">
       <div class="item-title">${index + 1}. ${item.move}</div>
-      <div class="item-sub">${item.pct}% · ${item.count} games</div>
+      <div class="item-sub">${item.pct}% - ${item.count} games</div>
       <div class="bar-track"><div class="bar-fill" style="width:${item.pct}%"></div></div>
     </div>
   `).join("");
@@ -242,7 +267,7 @@ function renderOpeningColumn(node, items, side) {
   node.innerHTML = items.map((item, index) => `
     <div class="item">
       <div class="item-title">${index + 1}. ${item.opening}</div>
-      <div class="item-sub">${item.count}x · ${item.win_rate}% win rate</div>
+      <div class="item-sub">${item.count}x - ${item.win_rate}% win rate</div>
       <div class="record-line">
         <span class="record-win">${item.record.wins}W</span>
         <span class="record-draw">${item.record.draws}D</span>
@@ -569,11 +594,15 @@ function renderImprovements(improvements) {
     node.addEventListener("click", () => {
       const item = improvements[Number(node.dataset.improvementIndex)];
       if (item?.example?.position_fen) {
-        renderBoard(item.example.position_fen);
-        el.boardTitle.textContent = item.headline;
-        el.boardSummary.textContent = item.detail || "Engine improvement example.";
-        el.boardLine.textContent = item.example.line || `${item.example.played} -> ${item.example.best}`;
-        el.boardLine.classList.remove("empty");
+        loadBoardPreview(
+          item.example.position_fen,
+          item.headline,
+          item.detail || "Engine improvement example.",
+          item.example.line || `${item.example.played} -> ${item.example.best}`
+        );
+        el.coachPrompt.textContent = "Previewing an engine mistake example.";
+        el.coachFeedback.textContent = `You played ${item.example.played}; the engine preferred ${item.example.best}.`;
+        el.coachFeedback.classList.remove("empty");
       }
     });
   });
@@ -598,11 +627,15 @@ function renderAdvice(advice) {
     node.addEventListener("click", () => {
       const item = advice[Number(node.dataset.adviceIndex)];
       if (item?.position_fen) {
-        renderBoard(item.position_fen);
-        el.boardTitle.textContent = item.opening;
-        el.boardSummary.textContent = item.explanation;
-        el.boardLine.textContent = item.example_line || item.recommendation;
-        el.boardLine.classList.remove("empty");
+        loadBoardPreview(
+          item.position_fen,
+          item.opening,
+          item.explanation,
+          item.example_line || item.recommendation
+        );
+        el.coachPrompt.textContent = "Previewing an opening recommendation position.";
+        el.coachFeedback.textContent = `Engine recommendation: ${item.recommendation}.`;
+        el.coachFeedback.classList.remove("empty");
       }
     });
   });
@@ -711,22 +744,228 @@ function renderCoords() {
 }
 
 function renderBoard(fen) {
+  state.boardFen = fen || state.boardFen;
   const squares = parseFenBoard(fen);
   el.board.innerHTML = "";
   squares.forEach((piece, index) => {
     const square = document.createElement("div");
     const file = index % 8;
     const rank = Math.floor(index / 8);
-    square.className = `square ${(file + rank) % 2 === 0 ? "light" : "dark"}`;
+    const squareName = `${files[file]}${8 - rank}`;
+    square.className = `square ${(file + rank) % 2 === 0 ? "light" : "dark"} selectable`;
+    square.dataset.square = squareName;
+    if (state.selectedSquare === squareName) square.classList.add("selected");
+    if (state.lastMove?.from === squareName) square.classList.add("last-from");
+    if (state.lastMove?.to === squareName) square.classList.add("last-to");
+    const legalTargets = state.selectedSquare ? (state.legalByFrom[state.selectedSquare] || []) : [];
+    const targetMove = legalTargets.find((item) => item.to === squareName);
+    if (targetMove) {
+      square.classList.add(targetMove.capture ? "legal-capture" : "legal-target");
+      const dot = document.createElement("div");
+      dot.className = "move-dot";
+      square.appendChild(dot);
+    }
+    square.addEventListener("click", () => handleSquareClick(squareName));
+    square.addEventListener("dragover", (event) => {
+      if (!state.dragFrom) return;
+      const moves = state.legalByFrom[state.dragFrom] || [];
+      if (moves.some((move) => move.to === squareName)) event.preventDefault();
+    });
+    square.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      if (!state.dragFrom) return;
+      await submitCoachMove(state.dragFrom, squareName);
+      state.dragFrom = "";
+    });
     if (piece) {
       const img = document.createElement("img");
       img.className = "piece";
       img.src = PIECE_ASSETS[piece];
       img.alt = piece;
+      img.draggable = isDraggablePiece(piece, squareName);
+      img.addEventListener("dragstart", () => {
+        state.dragFrom = squareName;
+      });
       square.appendChild(img);
     }
     el.board.appendChild(square);
   });
+}
+
+function loadBoardPreview(fen, title, summary, lineText) {
+  state.selectedSquare = "";
+  state.lastMove = null;
+  renderBoard(fen);
+  refreshLegalMoves(fen);
+  el.boardTitle.textContent = title;
+  el.boardSummary.textContent = summary;
+  el.boardLine.textContent = lineText;
+  el.boardLine.classList.remove("empty");
+}
+
+function renderCoachList() {
+  if (!state.coachItems.length) {
+    el.coachList.className = "stack empty";
+    el.coachList.textContent = "No coach drills yet.";
+    return;
+  }
+  el.coachList.className = "stack";
+  el.coachList.innerHTML = state.coachItems.map((item, index) => `
+    <div class="item clickable coach-item ${index === state.coachIndex ? "active" : ""}" data-coach-index="${index}">
+      <div class="item-title">${item.headline}</div>
+      <div class="item-sub">${item.prompt}</div>
+      <div class="coach-item-meta">${item.phase} - missed ${item.best_move} - ${((item.loss_cp || 0) / 100).toFixed(2)} pawns lost</div>
+    </div>
+  `).join("");
+  el.coachList.querySelectorAll("[data-coach-index]").forEach((node) => {
+    node.addEventListener("click", () => loadCoachDrill(Number(node.dataset.coachIndex)));
+  });
+}
+
+async function loadCoachDrill(index) {
+  const item = state.coachItems[index];
+  if (!item) return;
+  state.coachIndex = index;
+  state.coachStartFen = item.position_fen;
+  state.selectedSquare = "";
+  state.lastMove = null;
+  el.boardTitle.textContent = item.headline;
+  el.boardSummary.textContent = item.why;
+  el.coachPrompt.textContent = item.prompt;
+  el.coachFeedback.textContent = `You originally played ${item.played_move}. Find the engine move instead.`;
+  el.coachFeedback.classList.remove("empty");
+  el.boardLine.textContent = item.line || "No reference line yet.";
+  el.boardLine.classList.remove("empty");
+  await refreshLegalMoves(item.position_fen);
+  renderBoard(item.position_fen);
+  renderCoachList();
+}
+
+async function refreshLegalMoves(fen = state.boardFen) {
+  const response = await fetch("/api/legal-moves", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fen }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not load legal moves.");
+  state.boardFen = payload.fen;
+  state.legalMoves = payload.legal_moves || [];
+  state.legalByFrom = groupLegalMoves(state.legalMoves);
+  return payload;
+}
+
+function groupLegalMoves(moves) {
+  return moves.reduce((acc, move) => {
+    const entry = { ...move, capture: move.san.includes("x") };
+    if (!acc[move.from]) acc[move.from] = [];
+    acc[move.from].push(entry);
+    return acc;
+  }, {});
+}
+
+function isDraggablePiece(piece, square) {
+  const turn = turnFromFen(state.boardFen);
+  if ((turn === "white" && piece !== piece.toUpperCase()) || (turn === "black" && piece !== piece.toLowerCase())) {
+    return false;
+  }
+  return !!(state.legalByFrom[square] || []).length;
+}
+
+function turnFromFen(fen) {
+  const side = String(fen || "").split(" ")[1];
+  return side === "b" ? "black" : "white";
+}
+
+function handleSquareClick(square) {
+  const movesFromSquare = state.legalByFrom[square] || [];
+  const selectedMoves = state.selectedSquare ? (state.legalByFrom[state.selectedSquare] || []) : [];
+  if (state.selectedSquare && selectedMoves.some((move) => move.to === square)) {
+    submitCoachMove(state.selectedSquare, square);
+    return;
+  }
+  if (movesFromSquare.length) {
+    state.selectedSquare = state.selectedSquare === square ? "" : square;
+    renderBoard(state.boardFen);
+    return;
+  }
+  state.selectedSquare = "";
+  renderBoard(state.boardFen);
+}
+
+async function submitCoachMove(from, to) {
+  const legal = (state.legalByFrom[from] || []).find((move) => move.to === to);
+  if (!legal) return;
+  setStatus(`Checking ${legal.san}...`);
+  try {
+    const response = await fetch("/api/coach-move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fen: state.boardFen,
+        move_uci: legal.uci,
+        engine_path: el.enginePath.value.trim(),
+        depth: Number(el.depth.value),
+        threads: Number(el.threads.value),
+        hash_mb: Number(el.hash.value),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Coach move check failed.");
+
+    if (!payload.correct) {
+      state.selectedSquare = "";
+      state.lastMove = null;
+      el.coachFeedback.textContent = payload.message;
+      el.coachFeedback.classList.remove("empty");
+      el.boardLine.textContent = `Best move: ${payload.best_move_san}`;
+      el.boardLine.classList.remove("empty");
+      setStatus("That wasn't the engine continuation.");
+      renderBoard(state.boardFen);
+      return;
+    }
+
+    state.selectedSquare = "";
+    state.boardFen = payload.final_fen;
+    state.lastMove = parseUciMove(payload.last_move_uci || legal.uci);
+    state.legalMoves = payload.legal_moves || [];
+    state.legalByFrom = groupLegalMoves(state.legalMoves);
+    el.coachFeedback.textContent = payload.message;
+    el.coachFeedback.classList.remove("empty");
+    el.boardLine.textContent = payload.continuation?.length
+      ? `${payload.played_move_san} ${payload.continuation.join(" ")}`
+      : payload.played_move_san;
+    el.boardLine.classList.remove("empty");
+    renderBoard(state.boardFen);
+    setStatus(payload.line_over ? "Correct. The line is complete." : "Correct. Bookup played the continuation.");
+  } catch (error) {
+    setStatus(error.message || "Coach move check failed.");
+  }
+}
+
+function resetCoachDrill() {
+  if (state.coachIndex < 0) return;
+  loadCoachDrill(state.coachIndex);
+}
+
+function revealCoachDrill() {
+  const item = state.coachItems[state.coachIndex];
+  if (!item) return;
+  el.coachFeedback.textContent = `Best move: ${item.best_move}. ${item.why}`;
+  el.coachFeedback.classList.remove("empty");
+  el.boardLine.textContent = item.line || item.best_move;
+  el.boardLine.classList.remove("empty");
+}
+
+function nextCoachDrill() {
+  if (!state.coachItems.length) return;
+  const nextIndex = state.coachIndex < 0 ? 0 : (state.coachIndex + 1) % state.coachItems.length;
+  loadCoachDrill(nextIndex);
+}
+
+function parseUciMove(uci) {
+  const move = String(uci || "");
+  return move.length >= 4 ? { from: move.slice(0, 2), to: move.slice(2, 4) } : null;
 }
 
 function parseFenBoard(fen) {

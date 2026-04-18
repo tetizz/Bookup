@@ -80,8 +80,13 @@
       <section class="board-card">
         <div class="board-head">
           <div>
-            <div class="hero-kicker">Study Board</div>
-            <div id="boardTitle" class="board-title">Selected position</div>
+            <div class="hero-kicker">Coach Lab</div>
+            <div id="boardTitle" class="board-title">Missed-move trainer</div>
+          </div>
+          <div class="board-actions">
+            <button id="coachResetBtn" class="ghost-btn" type="button">Reset</button>
+            <button id="coachRevealBtn" class="ghost-btn" type="button">Reveal Best Move</button>
+            <button id="coachNextBtn" class="ghost-btn" type="button">Next Drill</button>
           </div>
         </div>
         <div class="board-layout">
@@ -93,8 +98,16 @@
             </div>
           </div>
           <div class="board-side">
-            <div id="boardSummary" class="board-summary">Select an opening recommendation or engine note to load its position here.</div>
+            <div id="boardSummary" class="board-summary">Bookup will load your missed positions here and ask for the best continuation.</div>
+            <div id="coachPrompt" class="coach-prompt">Run an import to build your coach drills.</div>
+            <div id="coachFeedback" class="coach-feedback empty">No drill active yet.</div>
             <div id="boardLine" class="board-line empty">No line selected.</div>
+          </div>
+        </div>
+        <div class="coach-grid">
+          <div class="coach-list-wrap">
+            <div class="metric-label">Missed Positions</div>
+            <div id="coachList" class="stack empty">No coach drills yet.</div>
           </div>
         </div>
       </section>

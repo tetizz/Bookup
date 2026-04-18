@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
@@ -42,6 +43,48 @@ def save_config(payload: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def build_engine_settings(payload: dict) -> EngineSettings:
+    engine_path = str(payload.get("engine_path", "")).strip()
+    return EngineSettings(
+        path=engine_path,
+        depth=max(8, min(24, int(payload.get("depth", 13)))),
+        threads=max(1, min(max(1, os.cpu_count() or 8), int(payload.get("threads", max(1, os.cpu_count() or 8))))),
+        hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
+    )
+
+
+def serialize_legal_moves(board: chess.Board) -> list[dict]:
+    items = []
+    for move in board.legal_moves:
+        items.append(
+            {
+                "uci": move.uci(),
+                "from": chess.square_name(move.from_square),
+                "to": chess.square_name(move.to_square),
+                "san": board.san(move),
+                "promotion": chess.piece_symbol(move.promotion) if move.promotion else "",
+            }
+        )
+    return items
+
+
+def normalize_move_uci(board: chess.Board, move_uci: str) -> chess.Move | None:
+    cleaned = str(move_uci or "").strip().lower()
+    if len(cleaned) < 4:
+        return None
+    if len(cleaned) == 4:
+        base = chess.Move.from_uci(cleaned)
+        if base in board.legal_moves:
+            return base
+        for suffix in ("q", "r", "b", "n"):
+            promoted = chess.Move.from_uci(cleaned + suffix)
+            if promoted in board.legal_moves:
+                return promoted
+        return None
+    move = chess.Move.from_uci(cleaned)
+    return move if move in board.legal_moves else None
+
+
 @app.get("/")
 def index() -> str:
     config = load_config()
@@ -72,12 +115,7 @@ def profile() -> tuple:
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
 
-    settings = EngineSettings(
-        path=engine_path,
-        depth=max(8, min(24, int(payload.get("depth", 13)))),
-        threads=max(1, min(max(1, os.cpu_count() or 8), int(payload.get("threads", max(1, os.cpu_count() or 8))))),
-        hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
-    )
+    settings = build_engine_settings(payload)
 
     save_config(
         {
@@ -117,6 +155,99 @@ def profile() -> tuple:
             "profile": profile_data,
         }
     )
+
+
+@app.post("/api/legal-moves")
+def legal_moves() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    if not fen:
+        return jsonify({"error": "FEN is required."}), 400
+    try:
+        board = chess.Board(fen)
+    except ValueError as exc:
+        return jsonify({"error": f"Invalid FEN: {exc}"}), 400
+    return jsonify(
+        {
+            "fen": board.fen(),
+            "turn": "white" if board.turn == chess.WHITE else "black",
+            "legal_moves": serialize_legal_moves(board),
+        }
+    )
+
+
+@app.post("/api/coach-move")
+def coach_move() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    move_uci = str(payload.get("move_uci", "")).strip()
+    if not fen or not move_uci:
+        return jsonify({"error": "FEN and move_uci are required."}), 400
+
+    try:
+        board = chess.Board(fen)
+    except ValueError as exc:
+        return jsonify({"error": f"Invalid FEN: {exc}"}), 400
+
+    selected_move = normalize_move_uci(board, move_uci)
+    if selected_move is None:
+        return jsonify({"error": "That move is not legal from this position.", "legal_moves": serialize_legal_moves(board)}), 400
+
+    settings = build_engine_settings(payload)
+    if not settings.path:
+        return jsonify({"error": "Stockfish path is required."}), 400
+
+    try:
+        with EngineSession(settings) as engine:
+            root_info = engine.analyse(board, multipv=1)[0]
+            pv = root_info.get("pv") or []
+            if not pv:
+                return jsonify({"error": "Engine did not return a principal variation."}), 500
+            best_move = pv[0]
+            best_move_san = board.san(best_move)
+            if selected_move != best_move:
+                return jsonify(
+                    {
+                        "correct": False,
+                        "fen": board.fen(),
+                        "best_move_uci": best_move.uci(),
+                        "best_move_san": best_move_san,
+                        "message": f"Best move was {best_move_san}. Try to understand why it keeps more value in the position.",
+                        "legal_moves": serialize_legal_moves(board),
+                    }
+                )
+
+            played_san = board.san(selected_move)
+            board.push(selected_move)
+            continuation = []
+            final_reply_uci = selected_move.uci()
+            reply_info = engine.analyse(board, multipv=1)[0]
+            reply_pv = reply_info.get("pv") or []
+            for follow_move in reply_pv[:4]:
+                if follow_move not in board.legal_moves:
+                    break
+                continuation.append(board.san(follow_move))
+                final_reply_uci = follow_move.uci()
+                board.push(follow_move)
+
+            return jsonify(
+                {
+                    "correct": True,
+                    "played_move_san": played_san,
+                    "best_move_uci": best_move.uci(),
+                    "best_move_san": best_move_san,
+                    "continuation": continuation,
+                    "final_fen": board.fen(),
+                    "last_move_uci": final_reply_uci,
+                    "line_over": len(continuation) < 4,
+                    "message": "Correct. Bookup played out the engine continuation from there.",
+                    "legal_moves": serialize_legal_moves(board),
+                }
+            )
+    except FileNotFoundError:
+        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Coach analysis failed: {exc}"}), 500
 
 
 def run_app() -> None:

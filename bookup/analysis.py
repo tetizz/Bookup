@@ -459,6 +459,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
                                 {
                                     "played": san,
                                     "best": best_san,
+                                    "best_uci": best_move.uci(),
                                     "loss_cp": loss,
                                     "line": " ".join(line_prefix[-10:]),
                                     "why": _why_note(phase, san, best_san, loss),
@@ -515,9 +516,11 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             advice.append(advice_item)
 
     improvements = []
+    coach_positions = []
     total_mistakes = sum(mistake_counter.values())
     for phase, count in mistake_counter.most_common():
-        example = mistake_examples[phase][0] if mistake_examples[phase] else None
+        examples = mistake_examples[phase]
+        example = examples[0] if examples else None
         improvements.append(
             {
                 "phase": phase,
@@ -527,6 +530,22 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
                 "example": example,
             }
         )
+        for index, mistake in enumerate(examples):
+            coach_positions.append(
+                {
+                    "id": f"{phase}-{index}",
+                    "phase": phase,
+                    "headline": _phase_headline(phase),
+                    "prompt": f"Find the best continuation in this {phase} position.",
+                    "position_fen": mistake["position_fen"],
+                    "played_move": mistake["played"],
+                    "best_move": mistake["best"],
+                    "best_move_uci": mistake["best_uci"],
+                    "loss_cp": mistake["loss_cp"],
+                    "line": mistake["line"],
+                    "why": mistake["why"],
+                }
+            )
 
     capture_rate = (total_captures / total_player_moves) if total_player_moves else 0.0
     checks_per_game = (total_checks / total_games) if total_games else 0.0
@@ -696,6 +715,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         },
         "top_openings_by_color": top_openings_by_color,
         "improvements": improvements,
+        "coach_positions": coach_positions,
         "opening_advice": [asdict(entry) for entry in advice],
         "phase_breakdown": phase_breakdown,
         "game_length": {
