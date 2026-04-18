@@ -116,7 +116,8 @@ async function runAnalysis() {
   try {
     const payload = await fetchProfilePayload(el.username.value.trim());
     renderProfile(payload);
-    setStatus(`Analyzed ${payload.profile.games_analyzed} games for ${payload.username}.`);
+    const sampled = payload.profile.engine_games_sampled || payload.profile.games_analyzed || 0;
+    setStatus(`Imported ${payload.games_imported} games for ${payload.username}. Engine-sampled ${sampled} for coaching.`);
   } catch (error) {
     setStatus(error.message || "Profile build failed.");
   } finally {

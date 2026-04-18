@@ -329,6 +329,12 @@ def build_opening_advice(imported: ImportedGame, color: str, opening: str, reply
 
 
 def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str, Any]:
+    engine_game_cap = len(games)
+    if len(games) > 300:
+        engine_game_cap = 120
+    elif len(games) > 150:
+        engine_game_cap = 180
+
     color_openings: Counter[tuple[str, str]] = Counter()
     opening_records: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
     opening_responses: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
@@ -362,7 +368,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     resigned_loss_moves: list[int] = []
     rating_buckets: dict[str, Counter[str]] = defaultdict(Counter)
 
-    for imported in games:
+    for game_index, imported in enumerate(games):
         game = imported.game
         board = game.board()
         opening = opening_name(imported)
@@ -441,10 +447,13 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
                 if piece and piece.piece_type == chess.QUEEN and player_move_index < 6:
                     player_seen_queen = True
 
-                info = engine.analyse(board, multipv=1)[0]
-                pv = info.get("pv") or []
-                best_move = pv[0] if pv else None
-                score_before = _score_cp(info["score"], mover)
+                best_move = None
+                score_before = 0
+                if game_index < engine_game_cap:
+                    info = engine.analyse(board, multipv=1)[0]
+                    pv = info.get("pv") or []
+                    best_move = pv[0] if pv else None
+                    score_before = _score_cp(info["score"], mover)
                 board.push(move)
                 if best_move:
                     next_info = engine.analyse(board, multipv=1)[0]
@@ -688,6 +697,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
 
     return {
         "games_analyzed": total_games,
+        "engine_games_sampled": min(total_games, engine_game_cap),
         "outcomes": dict(outcome_counter),
         "hero_stats": {
             "win_rate": round(_win_rate(outcome_counter), 1),
