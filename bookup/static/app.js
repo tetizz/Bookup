@@ -37,6 +37,7 @@ const el = {
   firstMoveList: document.getElementById("firstMoveList"),
   openingListWhite: document.getElementById("openingListWhite"),
   openingListBlack: document.getElementById("openingListBlack"),
+  mistakeList: document.getElementById("mistakeList"),
   prepList: document.getElementById("prepList"),
   tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
   tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
@@ -83,7 +84,7 @@ function init() {
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
   syncImportScope();
-  setActiveTab("overview");
+  setActiveTab("my-repertoire");
   renderCoords();
   renderBoard("startpos");
 }
@@ -171,6 +172,7 @@ function renderProfile(payload) {
 
   renderFirstMove(profile.first_move_repertoire || {});
   renderOpenings(profile.top_openings_by_color || {});
+  renderMistakes(profile.improvements || []);
   renderPrepCards(profile.prep_repertoire || []);
   renderLessonList();
 
@@ -308,6 +310,50 @@ function renderPrepCards(items) {
     .join("");
 }
 
+function renderMistakes(items) {
+  if (!items.length) {
+    el.mistakeList.className = "stack empty";
+    el.mistakeList.textContent = "No engine review items yet.";
+    return;
+  }
+
+  el.mistakeList.className = "stack";
+  el.mistakeList.innerHTML = items
+    .map((item, index) => {
+      const example = item.example || {};
+      const positionLink = example.position_fen
+        ? `https://lichess.org/analysis/standard/${encodeFenForLichess(example.position_fen)}`
+        : "";
+      return `
+        <article class="item prep-item">
+          <div class="item-title">${index + 1}. ${escapeHtml(item.headline || item.phase || "Review")}</div>
+          <div class="item-sub">${escapeHtml(item.detail || "The engine found a stronger continuation in this phase.")}</div>
+          ${
+            example.played || example.best
+              ? `<div class="prep-meta">Played <strong>${escapeHtml(example.played || "-")}</strong> instead of <strong>${escapeHtml(example.best || "-")}</strong></div>`
+              : ""
+          }
+          ${
+            typeof example.loss_cp === "number"
+              ? `<div class="prep-meta">Approximate loss: <strong>${formatCp(example.loss_cp)}</strong></div>`
+              : ""
+          }
+          ${
+            example.why
+              ? `<div class="prep-line-preview">${escapeHtml(example.why)}</div>`
+              : ""
+          }
+          ${
+            positionLink
+              ? `<div class="item-note"><a href="${positionLink}" target="_blank" rel="noopener noreferrer">Lichess analysis</a></div>`
+              : ""
+          }
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function renderLessonList() {
   if (!state.lessons.length) {
     el.lessonList.className = "stack empty";
@@ -357,6 +403,16 @@ async function loadLesson(index) {
   renderBoard(lesson.position_fen);
   renderLessonList();
   setActiveTab("trainer");
+}
+
+function encodeFenForLichess(fen) {
+  return encodeURIComponent(String(fen || "").replace(/ /g, "_"));
+}
+
+function formatCp(cp) {
+  const pawns = Number(cp || 0) / 100;
+  const sign = pawns > 0 ? "+" : "";
+  return `${sign}${pawns.toFixed(2)} pawns`;
 }
 
 function clearTrainer() {

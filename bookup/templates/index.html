@@ -89,12 +89,13 @@
       </section>
 
       <section class="tab-strip">
-        <button class="tab-btn active" data-tab-target="overview">Overview</button>
-        <button class="tab-btn" data-tab-target="repertoire">Repertoire</button>
+        <button class="tab-btn active" data-tab-target="my-repertoire">My Repertoire</button>
+        <button class="tab-btn" data-tab-target="review-mistakes">Review Mistakes</button>
         <button class="tab-btn" data-tab-target="trainer">Trainer</button>
+        <button class="tab-btn" data-tab-target="improve-repertoire">Improve Repertoire</button>
       </section>
 
-      <section class="tab-panel active" data-tab-panel="overview">
+      <section class="tab-panel active" data-tab-panel="my-repertoire">
         <section class="section-block">
           <div class="section-cap">First Move Repertoire As White</div>
           <div class="section-sub">The very first move tells you a lot about how someone thinks.</div>
@@ -122,9 +123,17 @@
         </section>
       </section>
 
-      <section class="tab-panel" data-tab-panel="repertoire">
+      <section class="tab-panel" data-tab-panel="review-mistakes">
         <section class="section-block">
-          <div class="section-cap">How To Beat Their Variations</div>
+          <div class="section-cap">Review Mistakes</div>
+          <div class="section-sub">These are the positions where the engine thought you had a cleaner continuation and Bookup can turn them into study targets.</div>
+          <div id="mistakeList" class="stack empty">Mistake review items will show up here.</div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="improve-repertoire">
+        <section class="section-block">
+          <div class="section-cap">Improve Repertoire</div>
           <div class="section-sub">Built from their recurring lines so you can see the variation branches they reach and the strongest continuation against each one.</div>
           <div id="prepList" class="stack empty">Repertoire prep lines will show up here.</div>
         </section>
