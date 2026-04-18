@@ -106,12 +106,19 @@ async function init() {
       launchLessonById(lessonId);
     }
   });
+  document.addEventListener("pointerup", handleGlobalPointerUp);
+  document.addEventListener("pointercancel", clearDragState);
 
   syncImportScope();
   renderCoords();
   renderBoard("startpos");
   setActiveTab("setup");
   await bootstrapLocalState();
+}
+
+function clearDragState() {
+  if (!state.dragFrom) return;
+  state.dragFrom = "";
 }
 
 function syncImportScope() {
@@ -601,20 +608,14 @@ function renderBoard(fen) {
     }
 
     square.addEventListener("click", () => handleSquareClick(squareName));
-    square.addEventListener("pointerup", async () => {
-      if (!state.dragFrom) return;
-      const from = state.dragFrom;
-      state.dragFrom = "";
-      await submitTrainerMove(from, squareName);
-    });
-
     if (piece) {
       const img = document.createElement("img");
       img.className = "piece";
       img.src = PIECE_ASSETS[piece];
       img.alt = piece;
-      img.addEventListener("pointerdown", () => {
+      img.addEventListener("pointerdown", (event) => {
         if (pieceSide(piece) !== sideToMove(state.boardFen)) return;
+        event.preventDefault();
         state.dragFrom = squareName;
         state.selectedSquare = squareName;
         renderBoard(state.boardFen);
@@ -624,6 +625,24 @@ function renderBoard(fen) {
     el.board.appendChild(square);
     });
   });
+}
+
+async function handleGlobalPointerUp(event) {
+  if (!state.dragFrom) return;
+  const target = document.elementFromPoint(event.clientX, event.clientY);
+  const square = target instanceof Element ? target.closest(".square") : null;
+  const from = state.dragFrom;
+  state.dragFrom = "";
+  if (!(square instanceof HTMLElement)) {
+    renderBoard(state.boardFen);
+    return;
+  }
+  const to = square.dataset.square || "";
+  if (!to) {
+    renderBoard(state.boardFen);
+    return;
+  }
+  await submitTrainerMove(from, to);
 }
 
 function handleSquareClick(squareName) {
