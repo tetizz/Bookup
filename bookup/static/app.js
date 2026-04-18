@@ -607,8 +607,9 @@ function nextLesson() {
 }
 
 function resetTrainerLesson() {
-  if (state.lessonIndex < 0) return;
-  loadLesson(state.lessonIndex);
+  const index = state.queue.findIndex((item) => item.lesson_id === state.activeLessonId);
+  if (index < 0) return;
+  loadLesson(index);
 }
 
 function clearTrainer() {
@@ -686,6 +687,12 @@ function renderBoard(fen) {
     }
 
     square.addEventListener("click", () => handleSquareClick(squareName));
+    square.addEventListener("pointerdown", (event) => {
+      if (!piece || pieceSide(piece) !== sideToMove(state.boardFen)) return;
+      event.preventDefault();
+      state.dragFrom = squareName;
+      state.selectedSquare = squareName;
+    });
     if (piece) {
       const img = document.createElement("img");
       img.className = "piece";
@@ -696,7 +703,6 @@ function renderBoard(fen) {
         event.preventDefault();
         state.dragFrom = squareName;
         state.selectedSquare = squareName;
-        renderBoard(state.boardFen);
       });
       square.appendChild(img);
     }
