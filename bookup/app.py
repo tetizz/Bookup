@@ -206,7 +206,7 @@ def trainer_attempt() -> tuple:
                 "played_san": attempted_san,
                 "best_san": best_san,
                 "explanation": str(lesson.get("explanation", "")),
-                "continuation": str(lesson.get("continuation", "")),
+                "continuation": str(lesson.get("continuation_san", "")),
                 "fen": fen,
             }
         )

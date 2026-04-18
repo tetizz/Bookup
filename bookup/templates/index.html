@@ -19,31 +19,41 @@
     <div class="topbar-row">
       <div>
         <div class="eyebrow">Opening Repertoire Trainer</div>
-        <h1>Bookup</h1>
-        <p class="subhead">Import the openings they actually repeat, turn those habits into a clean prep report, and learn the best continuations before you sit down to play them.</p>
+        <h1>Build your lines. Drill your moves.</h1>
+        <p class="subhead">Bookup turns your real games into a repertoire tree, shows the branches that matter most, and drills the continuations until they stick.</p>
       </div>
-      <div class="hero-badges">
-        <div class="hero-badge"><span>Games</span><strong id="badgeWinRate">--</strong></div>
-        <div class="hero-badge"><span>Top White</span><strong id="badgeChaos">--</strong></div>
-        <div class="hero-badge"><span>Top Black</span><strong id="badgeColor">--</strong></div>
+      <div class="hero-stats">
+        <div class="hero-stat">
+          <span>Families</span>
+          <strong id="summaryFamilies">--</strong>
+        </div>
+        <div class="hero-stat">
+          <span>Urgent</span>
+          <strong id="summaryUrgent">--</strong>
+        </div>
+        <div class="hero-stat">
+          <span>Queue</span>
+          <strong id="summaryQueue">--</strong>
+        </div>
       </div>
     </div>
   </header>
 
-  <main class="shell">
-    <section class="workspace-tabs">
-      <button class="tab-btn active" data-tab-target="setup">Setup</button>
-      <button class="tab-btn" data-tab-target="my-repertoire">My Repertoire</button>
-      <button class="tab-btn" data-tab-target="review-mistakes">Review Mistakes</button>
-      <button class="tab-btn" data-tab-target="trainer">Trainer</button>
-      <button class="tab-btn" data-tab-target="improve-repertoire">Improve Repertoire</button>
-    </section>
+  <main class="app-shell">
+    <nav class="workspace-tabs">
+      <button class="workspace-tab active" data-tab-target="setup">Setup</button>
+      <button class="workspace-tab" data-tab-target="my-repertoire">My Repertoire</button>
+      <button class="workspace-tab" data-tab-target="improve-repertoire">Improve Repertoire</button>
+      <button class="workspace-tab" data-tab-target="review-mistakes">Review Mistakes</button>
+      <button class="workspace-tab" data-tab-target="trainer">Trainer</button>
+    </nav>
 
-    <section class="results-panel">
-      <section class="tab-panel active" data-tab-panel="setup">
-        <div class="setup-grid">
-          <aside class="control-panel">
-            <div class="section-title">Import</div>
+    <section class="workspace-panel active" data-tab-panel="setup">
+      <div class="setup-layout">
+        <section class="card setup-card">
+          <div class="section-label">Import</div>
+          <h2 class="section-title">Import your games, build your repertoire tree, and start training.</h2>
+          <div class="form-grid">
             <label class="field">
               <span>Chess.com username</span>
               <input id="usernameInput" type="text" placeholder="trixize1234">
@@ -56,142 +66,159 @@
               <span>Max games</span>
               <input id="maxGamesInput" type="number" min="0" max="20000" placeholder="0 = all games">
             </label>
-            <div class="field checkbox-field">
+            <label class="field field-check">
               <span>Import scope</span>
               <label class="checkbox-row">
                 <input id="importAllGamesInput" type="checkbox">
                 <span>Import all public games</span>
               </label>
-            </div>
+            </label>
             <label class="field">
               <span>Lichess token (optional)</span>
-              <input id="lichessTokenInput" type="password" placeholder="Lets Bookup use the Lichess opening database">
+              <input id="lichessTokenInput" type="password" placeholder="Use the Lichess opening database">
             </label>
-
-            <div class="section-title">Engine</div>
             <label class="field">
               <span>Stockfish path</span>
               <input id="enginePathInput" type="text" placeholder="C:\path\to\stockfish.exe">
             </label>
-            <div class="grid">
-              <label class="field compact">
-                <span>Depth</span>
-                <input id="depthInput" type="number" min="8" max="24">
-              </label>
-              <label class="field compact">
-                <span>Threads</span>
-                <input id="threadsInput" type="number" min="1">
-              </label>
-              <label class="field compact">
-                <span>Hash MB</span>
-                <input id="hashInput" type="number" min="256">
-              </label>
-            </div>
-
-            <button id="analyzeBtn" class="primary-btn">Build Prep Report</button>
-            <div id="status" class="status">Ready.</div>
-          </aside>
-
-          <div class="setup-main">
-            <section class="hero-card">
-              <div class="hero-kicker">Prep Report</div>
-              <div id="heroTitle" class="hero-title">No prep report yet</div>
-              <div id="heroSummary" class="hero-summary">Run an import to get a prep report: first move repertoire, most played named openings, and the best continuations against the lines they keep reaching.</div>
-            </section>
           </div>
+          <div class="engine-grid">
+            <label class="field compact">
+              <span>Depth</span>
+              <input id="depthInput" type="number" min="8" max="24">
+            </label>
+            <label class="field compact">
+              <span>Threads</span>
+              <input id="threadsInput" type="number" min="1">
+            </label>
+            <label class="field compact">
+              <span>Hash MB</span>
+              <input id="hashInput" type="number" min="256">
+            </label>
+          </div>
+          <div class="setup-actions">
+            <button id="analyzeBtn" class="primary-btn" type="button">Build Repertoire</button>
+            <div id="status" class="status">Ready.</div>
+          </div>
+        </section>
+
+        <section class="card summary-card">
+          <div class="section-label">Summary</div>
+          <h2 id="heroTitle" class="section-title">No repertoire loaded yet</h2>
+          <p id="heroSummary" class="summary-copy">Run an import to build your opening families, trainer queue, and repertoire upgrades from the games you actually play.</p>
+          <div class="summary-grid">
+            <div class="summary-metric">
+              <span>Games</span>
+              <strong id="badgeGames">--</strong>
+            </div>
+            <div class="summary-metric">
+              <span>Known</span>
+              <strong id="badgeKnown">--</strong>
+            </div>
+            <div class="summary-metric">
+              <span>Win rate</span>
+              <strong id="badgeWinRate">--</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="my-repertoire">
+      <section class="section-block">
+        <div class="section-label">First Moves</div>
+        <h2 class="section-title">How your repertoire starts</h2>
+        <div class="split-grid">
+          <article class="card">
+            <h3>As White</h3>
+            <div id="firstMoveWhite" class="stack empty">No white first-move data yet.</div>
+          </article>
+          <article class="card">
+            <h3>As Black</h3>
+            <div id="firstMoveBlack" class="stack empty">No black first-move data yet.</div>
+          </article>
         </div>
       </section>
 
-      <section class="tab-panel" data-tab-panel="my-repertoire">
-        <section class="section-block">
-          <div class="section-cap">First Move Repertoire As White</div>
-          <div class="section-sub">The very first move tells you a lot about how someone thinks.</div>
-          <div class="card">
-            <div class="first-move-wrap">
-              <div id="firstMoveLead" class="first-move-lead">No white games yet.</div>
-              <div id="firstMoveList" class="stack empty">No first-move data yet.</div>
+      <section class="section-block">
+        <div class="section-label">Opening Families</div>
+        <h2 class="section-title">Named openings first, ECO second</h2>
+        <div class="split-grid">
+          <article class="card">
+            <h3>White repertoire</h3>
+            <div id="openingListWhite" class="stack empty">No white opening families yet.</div>
+          </article>
+          <article class="card">
+            <h3>Black repertoire</h3>
+            <div id="openingListBlack" class="stack empty">No black opening families yet.</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Repertoire Tree</div>
+        <h2 class="section-title">The positions you actually reach</h2>
+        <div id="repertoireTree" class="stack empty">Your repertoire tree will show up here.</div>
+      </section>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="improve-repertoire">
+      <section class="section-block">
+        <div class="section-label">Most Urgent Lines To Learn</div>
+        <div id="urgentList" class="stack empty">Urgent lines will show up here.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Rare Sidelines</div>
+        <div id="sidelineList" class="stack empty">Rare sidelines will show up here.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Engine-Approved Repertoire Updates</div>
+        <div id="suggestionList" class="stack empty">Engine-approved repertoire updates will show up here.</div>
+      </section>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="review-mistakes">
+      <section class="section-block">
+        <div class="section-label">Opening Mistakes</div>
+        <h2 class="section-title">Only the positions that are still costing you points</h2>
+        <div id="mistakeList" class="stack empty">Opening mistakes will show up here.</div>
+      </section>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="trainer">
+      <div class="trainer-layout">
+        <section class="card trainer-board-card">
+          <div class="trainer-head">
+            <div>
+              <div class="section-label">Trainer</div>
+              <h2 id="boardTitle" class="section-title">No lesson loaded</h2>
+              <p id="boardSummary" class="summary-copy">Build your repertoire, then train the next due line from your queue.</p>
+            </div>
+            <div class="trainer-actions">
+              <button id="trainerResetBtn" class="ghost-btn" type="button">Reset</button>
+              <button id="trainerNextBtn" class="ghost-btn" type="button">Next Due Line</button>
             </div>
           </div>
-        </section>
 
-        <section class="section-block">
-          <div class="section-cap">Most Played Openings</div>
-          <div class="section-sub">These are the named openings and variations they keep coming back to.</div>
-          <div class="two-up">
-            <article class="card">
-              <h2>As White</h2>
-              <div id="openingListWhite" class="stack empty">No white opening profile yet.</div>
-            </article>
-            <article class="card">
-              <h2>As Black</h2>
-              <div id="openingListBlack" class="stack empty">No black opening profile yet.</div>
-            </article>
+          <div class="board-wrap">
+            <div id="rankLabels" class="rank-labels"></div>
+            <div id="board" class="board-grid"></div>
+            <div id="fileLabels" class="file-labels"></div>
           </div>
-        </section>
-      </section>
 
-      <section class="tab-panel" data-tab-panel="review-mistakes">
-        <section class="section-block">
-          <div class="section-cap">Review Mistakes</div>
-          <div class="section-sub">These are the positions where the engine thought you had a cleaner continuation and Bookup can turn them into study targets.</div>
-          <div id="mistakeList" class="stack empty">Mistake review items will show up here.</div>
-        </section>
-      </section>
-
-      <section class="tab-panel" data-tab-panel="improve-repertoire">
-        <section class="section-block">
-          <div class="section-cap">Most Urgent Lines To Learn</div>
-          <div class="section-sub">These are the branches where Bookup thinks the learning payoff is highest right now.</div>
-          <div id="urgentList" class="stack empty">Urgent repertoire lines will show up here.</div>
+          <div id="boardLine" class="board-line empty">No line loaded yet.</div>
+          <div id="trainerFeedback" class="trainer-feedback empty">Choose a due line from the queue or launch one from a repertoire card.</div>
         </section>
 
-        <section class="section-block">
-          <div class="section-cap">Rare Sidelines</div>
-          <div class="section-sub">These branches come up less often, but they are still worth knowing so you are not surprised over the board.</div>
-          <div id="sidelineList" class="stack empty">Rare sidelines will show up here.</div>
+        <section class="card trainer-queue-card">
+          <div class="section-label">Due Queue</div>
+          <h2 class="section-title">Your next lines to review</h2>
+          <div id="lessonQueueMeta" class="queue-meta">No review queue yet.</div>
+          <div id="lessonList" class="stack empty">No lessons yet.</div>
         </section>
-
-        <section class="section-block">
-          <div class="section-cap">Engine-Approved Repertoire Update Suggestions</div>
-          <div class="section-sub">Practical updates Bookup wants you to add to your prep based on the recurring positions in your games.</div>
-          <div id="suggestionList" class="stack empty">Engine-approved repertoire suggestions will show up here.</div>
-        </section>
-      </section>
-
-      <section class="tab-panel" data-tab-panel="trainer">
-        <section class="section-block">
-          <div class="section-cap">Repertoire Trainer</div>
-          <div class="section-sub">Click or drag the move you want to train. Bookup checks the best continuation, explains misses, and then plays out the line for you.</div>
-          <div class="board-card">
-            <div class="board-layout">
-              <div class="board-column">
-                <div class="board-head">
-                  <div>
-                    <div class="metric-label">Training Board</div>
-                    <div id="boardTitle" class="board-title">No lesson loaded</div>
-                    <div id="boardSummary" class="board-summary">Build a prep report, then choose a lesson to train.</div>
-                  </div>
-                  <div class="board-actions">
-                    <button id="trainerResetBtn" class="ghost-btn" type="button">Reset Lesson</button>
-                    <button id="trainerNextBtn" class="ghost-btn" type="button">Next Lesson</button>
-                  </div>
-                </div>
-                <div class="board-coords">
-                  <div id="rankLabels" class="rank-labels"></div>
-                  <div id="board" class="board-grid"></div>
-                  <div id="fileLabels" class="file-labels"></div>
-                </div>
-              </div>
-
-              <div class="board-side">
-                <div id="boardLine" class="board-line empty">No line loaded yet.</div>
-                <div id="trainerFeedback" class="coach-feedback empty">Choose a lesson from the right to start training.</div>
-                <div id="lessonList" class="stack empty">No lessons yet.</div>
-              </div>
-            </div>
-          </div>
-        </section>
-      </section>
+      </div>
     </section>
   </main>
 

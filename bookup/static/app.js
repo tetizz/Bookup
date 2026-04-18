@@ -1,4 +1,5 @@
 const defaults = window.APP_DEFAULTS || {};
+const REVIEW_KEY = "bookup-review-stats-v1";
 const PIECE_ASSETS = {
   P: "/static/pieces/cburnett/wP.svg",
   N: "/static/pieces/cburnett/wN.svg",
@@ -15,6 +16,7 @@ const PIECE_ASSETS = {
 };
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
+const REVIEW_INTERVALS = [0, 1, 3, 7, 14];
 
 const el = {
   username: document.getElementById("usernameInput"),
@@ -30,20 +32,23 @@ const el = {
   status: document.getElementById("status"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
+  summaryFamilies: document.getElementById("summaryFamilies"),
+  summaryUrgent: document.getElementById("summaryUrgent"),
+  summaryQueue: document.getElementById("summaryQueue"),
+  badgeGames: document.getElementById("badgeGames"),
+  badgeKnown: document.getElementById("badgeKnown"),
   badgeWinRate: document.getElementById("badgeWinRate"),
-  badgeChaos: document.getElementById("badgeChaos"),
-  badgeColor: document.getElementById("badgeColor"),
-  firstMoveLead: document.getElementById("firstMoveLead"),
-  firstMoveList: document.getElementById("firstMoveList"),
+  firstMoveWhite: document.getElementById("firstMoveWhite"),
+  firstMoveBlack: document.getElementById("firstMoveBlack"),
   openingListWhite: document.getElementById("openingListWhite"),
   openingListBlack: document.getElementById("openingListBlack"),
-  mistakeList: document.getElementById("mistakeList"),
+  repertoireTree: document.getElementById("repertoireTree"),
   urgentList: document.getElementById("urgentList"),
   sidelineList: document.getElementById("sidelineList"),
   suggestionList: document.getElementById("suggestionList"),
-  tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
-  tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
+  mistakeList: document.getElementById("mistakeList"),
   lessonList: document.getElementById("lessonList"),
+  lessonQueueMeta: document.getElementById("lessonQueueMeta"),
   board: document.getElementById("board"),
   rankLabels: document.getElementById("rankLabels"),
   fileLabels: document.getElementById("fileLabels"),
@@ -53,11 +58,14 @@ const el = {
   trainerFeedback: document.getElementById("trainerFeedback"),
   trainerReset: document.getElementById("trainerResetBtn"),
   trainerNext: document.getElementById("trainerNextBtn"),
+  tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
+  tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
 };
 
 const state = {
   payload: null,
   lessons: [],
+  queue: [],
   lessonIndex: -1,
   boardFen: "startpos",
   startFen: "startpos",
@@ -66,6 +74,7 @@ const state = {
   selectedSquare: "",
   dragFrom: "",
   lastMove: null,
+  reviewStats: {},
 };
 
 function init() {
@@ -78,17 +87,28 @@ function init() {
   el.depth.value = defaults.depth || 13;
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
+
   el.analyze.addEventListener("click", runAnalysis);
   el.importAllGames?.addEventListener("change", syncImportScope);
-  el.tabButtons.forEach((button) => {
-    button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "overview"));
-  });
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
+  el.tabButtons.forEach((button) => {
+    button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "setup"));
+  });
+
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const lessonId = target.dataset.lessonLaunch;
+    if (lessonId) {
+      launchLessonById(lessonId);
+    }
+  });
+
   syncImportScope();
-  setActiveTab("setup");
   renderCoords();
   renderBoard("startpos");
+  setActiveTab("setup");
 }
 
 function syncImportScope() {
@@ -98,10 +118,12 @@ function syncImportScope() {
     el.maxGames.setAttribute("disabled", "disabled");
   } else {
     el.maxGames.removeAttribute("disabled");
-    if (Number(el.maxGames.value) === 0) {
-      el.maxGames.value = 200;
-    }
+    if (Number(el.maxGames.value) === 0) el.maxGames.value = 200;
   }
+}
+
+function setStatus(message) {
+  el.status.textContent = message;
 }
 
 function setActiveTab(name) {
@@ -119,12 +141,15 @@ async function runAnalysis() {
   try {
     const payload = await fetchProfilePayload(el.username.value.trim());
     state.payload = payload;
+    state.reviewStats = loadReviewStats(payload.username);
     renderProfile(payload);
     setStatus(
-      `Imported ${payload.games_imported} games from ${payload.archives_found} archive months. ${payload.explorer_notice || "Repertoire tree is ready."}`
+      payload.explorer_enabled
+        ? `Imported ${payload.games_imported} games. Lichess database is active.`
+        : `Imported ${payload.games_imported} games. Add a Lichess token for richer database branching.`
     );
   } catch (error) {
-    setStatus(error.message || "Prep build failed.");
+    setStatus(error.message || "Bookup could not build your repertoire.");
   } finally {
     el.analyze.disabled = false;
   }
@@ -134,419 +159,332 @@ async function fetchProfilePayload(username) {
   const response = await fetch("/api/profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildProfileRequest(username)),
+    body: JSON.stringify({
+      username,
+      time_classes: el.timeClasses.value.trim(),
+      max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
+      lichess_token: el.lichessToken.value.trim(),
+      engine_path: el.enginePath.value.trim(),
+      depth: Number(el.depth.value),
+      threads: Number(el.threads.value),
+      hash_mb: Number(el.hash.value),
+    }),
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "Prep build failed.");
+  if (!response.ok) throw new Error(payload.error || "Bookup could not build your repertoire.");
   return payload;
-}
-
-function buildProfileRequest(username) {
-  return {
-    username,
-    time_classes: el.timeClasses.value.trim(),
-    max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
-    lichess_token: el.lichessToken.value.trim(),
-    engine_path: el.enginePath.value.trim(),
-    depth: Number(el.depth.value),
-    threads: Number(el.threads.value),
-    hash_mb: Number(el.hash.value),
-  };
 }
 
 function renderProfile(payload) {
   const profile = payload.profile || {};
-  const topWhite = profile.top_openings_by_color?.white?.[0];
-  const topBlack = profile.top_openings_by_color?.black?.[0];
-  const lessons = flattenLessons(profile.prep_repertoire || []);
+  const summary = profile.summary || {};
+  state.lessons = profile.trainer_queue || [];
+  rebuildQueue();
 
-  state.lessons = lessons;
-  state.lessonIndex = lessons.length ? 0 : -1;
+  el.heroTitle.textContent = `${payload.username} repertoire ready`;
+  el.heroSummary.textContent = summary.prep_summary || "Your repertoire tree is ready to train.";
+  el.summaryFamilies.textContent = String(summary.families ?? "--");
+  el.summaryUrgent.textContent = String(summary.urgent_lines ?? "--");
+  el.summaryQueue.textContent = String(summary.trainable_positions ?? "--");
+  el.badgeGames.textContent = String(payload.games_imported ?? "--");
+  el.badgeKnown.textContent = String(summary.known_lines ?? "--");
+  el.badgeWinRate.textContent = typeof summary.win_rate === "number" ? `${summary.win_rate}%` : "--";
 
-  el.heroTitle.textContent = `${payload.username} repertoire prep`;
-  el.heroSummary.textContent =
-    payload.explorer_enabled
-      ? "Bookup is using your authenticated Lichess opening database access to rank the branches this player repeats most, then turns those lines into board drills."
-      : "Bookup turns the openings this player actually repeats into a trainable prep tree: named variations, practical counters, and board drills for the positions that matter.";
-  el.badgeWinRate.textContent = `${payload.games_imported || 0}`;
-  el.badgeChaos.textContent = topWhite?.opening || "--";
-  el.badgeColor.textContent = topBlack?.opening || `${lessons.length} lessons`;
+  renderFirstMoves(profile.first_move_repertoire || {});
+  renderOpeningFamilies(profile.top_openings_by_color || {});
+  renderRepertoireTree(profile.repertoire_tree || []);
+  renderImproveList(el.urgentList, profile.urgent_lines || [], "No urgent lines right now.");
+  renderImproveList(el.sidelineList, profile.sidelines || [], "No rare sidelines right now.");
+  renderSuggestions(profile.repertoire_updates || []);
+  renderMistakes(profile.opening_mistakes || []);
+  renderQueue();
 
-  renderFirstMove(profile.first_move_repertoire || {});
-  renderOpenings(profile.top_openings_by_color || {});
-  renderMistakes(profile.improvements || []);
-  renderImproveRepertoire(profile.prep_repertoire || []);
-  renderLessonList();
-  setActiveTab("my-repertoire");
-
-  if (state.lessonIndex >= 0) {
-    loadLesson(state.lessonIndex);
+  if (state.queue.length) {
+    loadLesson(state.queue[0].lesson_id);
   } else {
     clearTrainer();
   }
+  setActiveTab("my-repertoire");
 }
 
-function flattenLessons(items) {
-  return items.flatMap((item) =>
-    (item.lessons || []).map((lesson, index) => ({
-      ...lesson,
-      opening: item.opening,
-      opening_code: item.opening_code,
-      color: item.color,
-      parent_index: index,
-      sample_line: item.sample_line,
-    }))
-  );
+function renderFirstMoves(data) {
+  renderFirstMoveColumn(el.firstMoveWhite, data.white || {});
+  renderFirstMoveColumn(el.firstMoveBlack, data.black || {});
 }
 
-function renderFirstMove(data) {
-  const top = data.top_move;
-  if (!top) {
-    el.firstMoveLead.textContent = "No white first-move data yet.";
-    el.firstMoveList.className = "stack empty";
-    el.firstMoveList.textContent = "No first-move repertoire yet.";
-    return;
-  }
-  el.firstMoveLead.innerHTML = `
-    <div class="first-move-title">${escapeHtml(top.move)}</div>
-    <div class="first-move-meta">${top.pct}% · ${top.count}x</div>
-    <div class="first-move-scale">
-      <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-    </div>
-    <div class="bar-track"><div class="bar-fill" style="width:${top.pct}%"></div></div>
-  `;
-  el.firstMoveList.className = "stack";
-  el.firstMoveList.innerHTML = (data.items || [])
-    .map(
-      (item, index) => `
-        <div class="item">
-          <div class="item-title">${index + 1}. ${escapeHtml(item.move)}</div>
-          <div class="item-sub">${item.pct}% · ${item.count} games</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${item.pct}%"></div></div>
-        </div>
-      `
-    )
-    .join("");
-}
-
-function renderOpenings(byColor) {
-  renderOpeningColumn(el.openingListWhite, byColor.white || [], "white");
-  renderOpeningColumn(el.openingListBlack, byColor.black || [], "black");
-}
-
-function renderOpeningColumn(node, items, side) {
+function renderFirstMoveColumn(node, repertoire) {
+  const items = repertoire.items || [];
   if (!items.length) {
     node.className = "stack empty";
-    node.textContent = `No ${side} opening profile yet.`;
+    node.textContent = "No first-move data yet.";
     return;
   }
   node.className = "stack";
   node.innerHTML = items
-    .map(
-      (item, index) => `
-        <div class="item">
-          <div class="item-title">${index + 1}. ${escapeHtml(item.opening)}</div>
-          <div class="item-sub">${item.count}x · ${item.win_rate}% win rate${item.opening_code ? ` · ${escapeHtml(item.opening_code)}` : ""}</div>
-          ${
-            item.position_identifier
-              ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>`
-              : ""
-          }
-          <div class="record-line">
-            <span class="record-win">${item.record.wins}W</span>
-            <span class="record-draw">${item.record.draws}D</span>
-            <span class="record-loss">${item.record.losses}L</span>
-          </div>
+    .map((item, index) => `
+      <article class="line-card">
+        <div class="line-card-header">
+          <div class="line-title">${index + 1}. ${escapeHtml(item.move)}</div>
+          <div class="line-badge">${item.pct}% · ${item.count}x</div>
         </div>
-      `
-    )
+        <div class="line-note">This move starts ${item.count} of your imported games on this side.</div>
+      </article>
+    `)
     .join("");
 }
 
-function renderImproveRepertoire(items) {
-  const buckets = buildImproveBuckets(items);
-  renderPrepCards(el.urgentList, buckets.urgent, "No urgent lines yet.");
-  renderPrepCards(el.sidelineList, buckets.sidelines, "No rare sidelines yet.");
-  renderSuggestionCards(buckets.suggestions);
+function renderOpeningFamilies(byColor) {
+  renderOpeningFamilyColumn(el.openingListWhite, byColor.white || [], "No white opening families yet.");
+  renderOpeningFamilyColumn(el.openingListBlack, byColor.black || [], "No black opening families yet.");
 }
 
-function renderPrepCards(node, items, emptyText) {
-  if (!node) return;
+function renderOpeningFamilyColumn(node, items, emptyText) {
   if (!items.length) {
     node.className = "stack empty";
     node.textContent = emptyText;
     return;
   }
-
   node.className = "stack";
   node.innerHTML = items
-    .map((item) => {
-      const lessons = item.lessons || [];
-      const linePreview = item.sample_line || buildLinePreview(item.steps || []);
-      return `
-        <article class="item prep-item">
-          <div class="item-title">${escapeHtml(item.opening)}${item.opening_code ? ` <span class="prep-code">${escapeHtml(item.opening_code)}</span>` : ""}</div>
-          <div class="item-sub">They play this as ${escapeHtml(item.color)}. Use these lesson branches to prepare the best continuation against what they actually repeat.</div>
-          ${
-            item.position_identifier
-              ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>`
-              : ""
-          }
-          ${linePreview ? `<div class="prep-line-preview">${escapeHtml(linePreview)}</div>` : ""}
-          <div class="prep-lesson-stack">
-            ${lessons
-              .map(
-                (lesson) => `
-                  <div class="prep-lesson ${lesson.lesson_type === "repeat" ? "repeat" : "fix"}">
-                    <div class="prep-lesson-head">
-                      <span class="prep-ply">${lesson.ply}${lesson.ply % 2 === 0 ? "..." : "."}</span>
-                      <span class="prep-trigger">After ${escapeHtml(lesson.trigger_move)}</span>
-                    </div>
-                    <div class="prep-best">${lesson.lesson_type === "repeat" ? "You already know" : "Best continuation"} <strong>${escapeHtml(lesson.best_reply)}</strong></div>
-                    <div class="prep-meta">${escapeHtml(lesson.explanation)}</div>
-                    ${
-                      lesson.your_played
-                        ? `<div class="prep-meta">Your sample move: <strong>${escapeHtml(lesson.your_played)}</strong>${lesson.repeated_count ? ` · repeated ${lesson.repeated_count}x` : ""}</div>`
-                        : ""
-                    }
-                    <div class="item-note">Engine line: ${escapeHtml(lesson.continuation)}</div>
-                  </div>
-                `
-              )
-              .join("")}
+    .map((item, index) => `
+      <article class="opening-family-card">
+        <div class="opening-family-header">
+          <div>
+            <div class="opening-family-title">${index + 1}. ${escapeHtml(item.opening)}</div>
+            <div class="tree-meta">${escapeHtml(item.opening_code || "")}</div>
           </div>
-        </article>
-      `;
-    })
+          <div class="line-badge">${item.count} positions</div>
+        </div>
+        <div class="line-note">${item.trainable_count} trainable lines · ${item.known_count} known lines</div>
+        ${item.position_identifier ? `<div class="line-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>` : ""}
+      </article>
+    `)
     .join("");
 }
 
-function renderSuggestionCards(items) {
-  if (!el.suggestionList) return;
-  if (!items.length) {
-    el.suggestionList.className = "stack empty";
-    el.suggestionList.textContent = "No repertoire update suggestions yet.";
+function renderRepertoireTree(groups) {
+  if (!groups.length) {
+    el.repertoireTree.className = "stack empty";
+    el.repertoireTree.textContent = "Your repertoire tree will show up here.";
     return;
   }
-
-  el.suggestionList.className = "stack";
-  el.suggestionList.innerHTML = items
-    .map(
-      (item, index) => `
-        <article class="item prep-item">
-          <div class="item-title">${index + 1}. ${escapeHtml(item.title)}</div>
-          <div class="item-sub">${escapeHtml(item.detail)}</div>
-          ${item.line ? `<div class="prep-line-preview">${escapeHtml(item.line)}</div>` : ""}
-          ${
-            item.position_identifier
-              ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>`
-              : ""
-          }
-        </article>
-      `
-    )
+  el.repertoireTree.className = "stack";
+  el.repertoireTree.innerHTML = groups
+    .map((group) => `
+      <article class="card">
+        <div class="opening-family-header">
+          <div>
+            <div class="opening-family-title">${escapeHtml(group.opening_name)}</div>
+            <div class="tree-meta">${escapeHtml(group.color)} repertoire${group.opening_code ? ` · ${escapeHtml(group.opening_code)}` : ""}</div>
+          </div>
+          <div class="line-badge">${group.total_frequency}x</div>
+        </div>
+        <div class="tree-node-list">
+          ${(group.nodes || []).map(renderTreeNode).join("")}
+        </div>
+      </article>
+    `)
     .join("");
 }
 
-function buildImproveBuckets(items) {
-  const urgent = [];
-  const sidelines = [];
-  const suggestions = [];
+function renderTreeNode(node) {
+  const replies = (node.common_replies || [])
+    .map((reply) => `${escapeHtml(reply.san)} ${reply.popularity}%`)
+    .join(" · ");
+  const moveFreq = (node.player_move_frequency || [])
+    .map((move) => `${escapeHtml(move.san)} ${move.count}x`)
+    .join(" · ");
+  return `
+    <div class="tree-node">
+      <div class="line-card-header">
+        <div>
+          <div class="line-title">After ${escapeHtml(node.trigger_move)}, play ${escapeHtml(node.best_reply)}</div>
+          <div class="tree-meta">${escapeHtml(node.position_fen)}</div>
+        </div>
+        <div class="line-badge ${statusClass(node.line_status)}">${labelForStatus(node.line_status)}</div>
+      </div>
+      <div class="chip-row">
+        <span class="lesson-chip">Frequency ${node.frequency}</span>
+        <span class="lesson-chip">Importance ${node.importance}</span>
+        <span class="lesson-chip">Confidence ${node.confidence}</span>
+        <span class="lesson-chip">Best move played ${node.repeat_count}x</span>
+      </div>
+      <div class="line-note">Your current moves: ${moveFreq || "No move frequency yet."}</div>
+      <div class="line-note">Common opponent replies: ${replies || "No Lichess reply data available."}</div>
+      <div class="line-preview">${escapeHtml(node.continuation_san)}</div>
+      <div class="line-note">${escapeHtml(node.explanation)}</div>
+      <div class="chip-row">
+        <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(node.lesson_id)}">Train this line</button>
+        ${node.position_identifier ? `<a class="launch-btn" href="${node.position_identifier}" target="_blank" rel="noopener noreferrer">Lichess analysis</a>` : ""}
+      </div>
+    </div>
+  `;
+}
 
-  items.forEach((item) => {
-    const lessons = item.lessons || [];
-    const steps = item.steps || [];
-    const fixLessons = lessons.filter((lesson) => lesson.lesson_type !== "repeat");
-    const knownLessons = lessons.filter((lesson) => lesson.lesson_type === "repeat");
-    const priorityScore = fixLessons.reduce((sum, lesson) => sum + (lesson.repeated_count || 1), 0);
+function renderImproveList(node, items, emptyText) {
+  if (!items.length) {
+    node.className = "stack empty";
+    node.textContent = emptyText;
+    return;
+  }
+  node.className = "stack";
+  node.innerHTML = items
+    .map((item) => `
+      <article class="line-card">
+        <div class="line-card-header">
+          <div>
+            <div class="line-title">${escapeHtml(item.opening_name)}</div>
+            <div class="tree-meta">After ${escapeHtml(item.trigger_move)}</div>
+          </div>
+          <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
+        </div>
+        <div class="line-note">Best continuation: <strong>${escapeHtml(item.best_reply)}</strong></div>
+        <div class="chip-row">
+          <span class="lesson-chip">Frequency ${item.frequency}</span>
+          <span class="lesson-chip">Priority ${Math.round(item.priority)}</span>
+          <span class="lesson-chip">Value lost ${formatCp(item.value_lost_cp)}</span>
+        </div>
+        <div class="line-preview">${escapeHtml(item.continuation_san)}</div>
+        <div class="line-note">${escapeHtml(item.explanation)}</div>
+        <div class="chip-row">
+          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Train this line</button>
+          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
+        </div>
+      </article>
+    `)
+    .join("");
+}
 
-    if (fixLessons.length) {
-      urgent.push({
-        ...item,
-        lessons: fixLessons,
-        priorityScore,
-      });
-      suggestions.push({
-        title: `Add ${fixLessons[0].best_reply} in ${item.opening}`,
-        detail: `Bookup keeps seeing this branch as ${item.color}. The engine wants ${fixLessons[0].best_reply} after ${fixLessons[0].trigger_move}, so this is a clean repertoire upgrade to memorize next.`,
-        line: fixLessons[0].continuation || item.sample_line,
-        position_identifier: fixLessons[0].position_identifier || item.position_identifier,
-        position_identifier_label: fixLessons[0].position_identifier_label || item.position_identifier_label,
-      });
-    }
-
-    const lowFrequencyOptions = steps
-      .filter((step) => step.kind === "opponent")
-      .flatMap((step) =>
-        (step.options || [])
-          .filter((option) => (option.popularity || 0) > 0 && (option.popularity || 0) <= 12)
-          .map((option) => ({
-            opening: item.opening,
-            opening_code: item.opening_code,
-            color: item.color,
-            sample_line: `${item.sample_line || ""} ${option.san}`.trim(),
-            position_identifier: step.position_identifier || item.position_identifier,
-            position_identifier_label: step.position_identifier_label || item.position_identifier_label,
-            lessons: [
-              {
-                trigger_move: step.played,
-                best_reply: option.san,
-                explanation: `${option.san} only shows up in about ${option.popularity}% of the database here, so treat it as a sideline worth covering once your main branches are stable.`,
-                continuation: item.sample_line || "",
-                lesson_type: "sideline",
-              },
-            ],
-            priorityScore: option.popularity || 0,
-          }))
-      );
-
-    sidelines.push(...lowFrequencyOptions);
-
-    if (!fixLessons.length && knownLessons.length) {
-      suggestions.push({
-        title: `Keep ${item.opening} stable`,
-        detail: `You already play the engine move in the main recurring branch here. Leave this line in maintenance mode and spend your study time elsewhere.`,
-        line: knownLessons[0].continuation || item.sample_line,
-        position_identifier: item.position_identifier,
-        position_identifier_label: item.position_identifier_label,
-      });
-    }
-  });
-
-  urgent.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
-  sidelines.sort((a, b) => (a.priorityScore || 0) - (b.priorityScore || 0));
-
-  return {
-    urgent: urgent.slice(0, 8),
-    sidelines: sidelines.slice(0, 8),
-    suggestions: suggestions.slice(0, 8),
-  };
+function renderSuggestions(items) {
+  if (!items.length) {
+    el.suggestionList.className = "stack empty";
+    el.suggestionList.textContent = "No repertoire updates yet.";
+    return;
+  }
+  el.suggestionList.className = "stack";
+  el.suggestionList.innerHTML = items
+    .map((item) => `
+      <article class="suggestion-card">
+        <div class="line-title">${escapeHtml(item.title)}</div>
+        <div class="line-note">${escapeHtml(item.detail)}</div>
+        ${item.line ? `<div class="line-preview">${escapeHtml(item.line)}</div>` : ""}
+        <div class="chip-row">
+          ${item.lesson_id ? `<button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Train this line</button>` : ""}
+          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
+        </div>
+      </article>
+    `)
+    .join("");
 }
 
 function renderMistakes(items) {
   if (!items.length) {
     el.mistakeList.className = "stack empty";
-    el.mistakeList.textContent = "No engine review items yet.";
+    el.mistakeList.textContent = "No opening mistakes to review right now.";
     return;
   }
-
   el.mistakeList.className = "stack";
   el.mistakeList.innerHTML = items
-    .map((item, index) => {
-      const example = item.example || {};
-      const positionLink = example.position_fen
-        ? `https://lichess.org/analysis/standard/${encodeFenForLichess(example.position_fen)}`
-        : "";
-      return `
-        <article class="item prep-item">
-          <div class="item-title">${index + 1}. ${escapeHtml(item.headline || item.phase || "Review")}</div>
-          <div class="item-sub">${escapeHtml(item.detail || "The engine found a stronger continuation in this phase.")}</div>
-          ${
-            example.played || example.best
-              ? `<div class="prep-meta">Played <strong>${escapeHtml(example.played || "-")}</strong> instead of <strong>${escapeHtml(example.best || "-")}</strong></div>`
-              : ""
-          }
-          ${
-            typeof example.loss_cp === "number"
-              ? `<div class="prep-meta">Approximate loss: <strong>${formatCp(example.loss_cp)}</strong></div>`
-              : ""
-          }
-          ${
-            example.why
-              ? `<div class="prep-line-preview">${escapeHtml(example.why)}</div>`
-              : ""
-          }
-          ${
-            positionLink
-              ? `<div class="item-note"><a href="${positionLink}" target="_blank" rel="noopener noreferrer">Lichess analysis</a></div>`
-              : ""
-          }
-        </article>
-      `;
-    })
+    .map((item, index) => `
+      <article class="mistake-card">
+        <div class="mistake-header">
+          <div>
+            <div class="mistake-title">${index + 1}. ${escapeHtml(item.opening_name)}</div>
+            <div class="tree-meta">After ${escapeHtml(item.trigger_move)}</div>
+          </div>
+          <div class="line-badge needs-work">${formatCp(item.value_lost_cp)}</div>
+        </div>
+        <div class="mistake-copy">You usually play <strong>${escapeHtml(item.played)}</strong>, but the best continuation is <strong>${escapeHtml(item.best_move)}</strong>.</div>
+        <div class="line-note">${escapeHtml(item.explanation)}</div>
+        <div class="line-preview">${escapeHtml(item.continuation_san || "")}</div>
+        <div class="chip-row">
+          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Train this position</button>
+          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
+        </div>
+      </article>
+    `)
     .join("");
 }
 
-function renderLessonList() {
-  if (!state.lessons.length) {
+function rebuildQueue() {
+  state.queue = (state.lessons || [])
+    .map((lesson) => {
+      const review = state.reviewStats[lesson.lesson_id] || defaultReviewState();
+      const due = review.due_at || 0;
+      const overdue = due <= Date.now();
+      const score = (overdue ? 1000 : 0) + lesson.priority - (review.streak || 0) * 10 + (review.last_result === "wrong" ? 120 : 0);
+      return { ...lesson, review, dueSoon: overdue, queueScore: score };
+    })
+    .sort((a, b) => b.queueScore - a.queueScore);
+}
+
+function renderQueue() {
+  if (!state.queue.length) {
+    el.lessonQueueMeta.textContent = "No review queue yet.";
     el.lessonList.className = "stack empty";
-    el.lessonList.textContent = "No training lessons yet.";
+    el.lessonList.textContent = "No lessons yet.";
     return;
   }
-
+  const dueNow = state.queue.filter((item) => item.dueSoon).length;
+  el.lessonQueueMeta.textContent = `${dueNow} due now · ${state.queue.length} total lines in the queue`;
   el.lessonList.className = "stack";
-  el.lessonList.innerHTML = state.lessons
-    .map(
-      (lesson, index) => `
-        <button class="item clickable lesson-item ${index === state.lessonIndex ? "active" : ""}" type="button" data-lesson-index="${index}">
-          <div class="item-title">${escapeHtml(lesson.opening)}</div>
-          <div class="item-sub">After ${escapeHtml(lesson.trigger_move)}, play ${escapeHtml(lesson.best_reply)}</div>
-          <div class="coach-item-meta">${lesson.lesson_type === "repeat" ? "Known line" : "Needs prep"} · ${escapeHtml(lesson.color)} repertoire</div>
-        </button>
-      `
-    )
+  el.lessonList.innerHTML = state.queue
+    .map((lesson, index) => `
+      <button class="queue-card ${lesson.lesson_id === currentLessonId() ? "active" : ""}" type="button" data-lesson-launch="${escapeHtml(lesson.lesson_id)}">
+        <div class="queue-card-header">
+          <div>
+            <div class="queue-title">${escapeHtml(lesson.opening_name)}</div>
+            <div class="tree-meta">After ${escapeHtml(lesson.trigger_move)} → ${escapeHtml(lesson.best_reply)}</div>
+          </div>
+          <div class="line-badge ${statusClass(lesson.line_status)}">${index === 0 ? "Next" : labelForStatus(lesson.line_status)}</div>
+        </div>
+        <div class="chip-row">
+          <span class="lesson-chip">Priority ${Math.round(lesson.priority)}</span>
+          <span class="lesson-chip">Frequency ${lesson.frequency}</span>
+          <span class="lesson-chip">Streak ${lesson.review.streak || 0}</span>
+        </div>
+      </button>
+    `)
     .join("");
+}
 
-  el.lessonList.querySelectorAll("[data-lesson-index]").forEach((node) => {
-    node.addEventListener("click", () => loadLesson(Number(node.dataset.lessonIndex)));
-  });
+function currentLessonId() {
+  if (state.lessonIndex < 0 || !state.queue[state.lessonIndex]) return "";
+  return state.queue[state.lessonIndex].lesson_id;
+}
+
+function launchLessonById(lessonId) {
+  const index = state.queue.findIndex((item) => item.lesson_id === lessonId);
+  if (index >= 0) loadLesson(index);
 }
 
 async function loadLesson(index) {
-  const lesson = state.lessons[index];
+  const lesson = state.queue[index];
   if (!lesson) return;
-
   state.lessonIndex = index;
   state.startFen = lesson.position_fen;
   state.boardFen = lesson.position_fen;
   state.selectedSquare = "";
   state.lastMove = null;
 
-  el.boardTitle.textContent = `${lesson.opening}${lesson.opening_code ? ` · ${lesson.opening_code}` : ""}`;
-  el.boardSummary.textContent = `They reach this branch as ${lesson.color}. After ${lesson.trigger_move}, the move you need is ${lesson.best_reply}.`;
-  el.boardLine.textContent = lesson.continuation || "No engine line yet.";
-  el.boardLine.classList.remove("empty");
-  el.trainerFeedback.textContent =
-    lesson.lesson_type === "repeat"
-      ? "You already play the engine move here. Use this drill to keep the line sharp."
-      : `Your target in this position is ${lesson.best_reply}.`;
+  el.boardTitle.textContent = `${lesson.opening_name}${lesson.opening_code ? ` · ${lesson.opening_code}` : ""}`;
+  el.boardSummary.textContent = `After ${lesson.trigger_move}, your move is ${lesson.best_reply}. ${lesson.explanation}`;
+  el.boardLine.textContent = lesson.continuation_san || "No continuation line stored yet.";
+  el.boardLine.classList.toggle("empty", !lesson.continuation_san);
+  el.trainerFeedback.textContent = lesson.line_status === "known"
+    ? "You already know this line. Use it as a maintenance review."
+    : "Find the best continuation on the board. Bookup will explain any miss and then play the line out.";
   el.trainerFeedback.classList.remove("empty");
 
   await refreshLegalMoves(lesson.position_fen);
   renderBoard(lesson.position_fen);
-  renderLessonList();
+  renderQueue();
   setActiveTab("trainer");
 }
 
-function encodeFenForLichess(fen) {
-  return encodeURIComponent(String(fen || "").replace(/ /g, "_"));
-}
-
-function formatCp(cp) {
-  const pawns = Number(cp || 0) / 100;
-  const sign = pawns > 0 ? "+" : "";
-  return `${sign}${pawns.toFixed(2)} pawns`;
-}
-
-function clearTrainer() {
-  el.boardTitle.textContent = "No lesson loaded";
-  el.boardSummary.textContent = "Build a prep report, then choose a lesson to train.";
-  el.boardLine.textContent = "No line loaded yet.";
-  el.boardLine.classList.add("empty");
-  el.trainerFeedback.textContent = "Choose a lesson from the list to start training.";
-  el.trainerFeedback.classList.remove("empty");
-  state.boardFen = "startpos";
-  state.startFen = "startpos";
-  state.legalMoves = [];
-  state.legalByFrom = {};
-  state.selectedSquare = "";
-  state.lastMove = null;
-  renderBoard("startpos");
-}
-
 function nextLesson() {
-  if (!state.lessons.length) return;
-  const next = (state.lessonIndex + 1) % state.lessons.length;
+  if (!state.queue.length) return;
+  const next = state.lessonIndex < 0 ? 0 : (state.lessonIndex + 1) % state.queue.length;
   loadLesson(next);
 }
 
@@ -555,10 +493,20 @@ function resetTrainerLesson() {
   loadLesson(state.lessonIndex);
 }
 
-function renderCoords() {
-  if (!el.rankLabels || !el.fileLabels) return;
-  el.rankLabels.innerHTML = ranks.map((rank) => `<span>${rank}</span>`).join("");
-  el.fileLabels.innerHTML = files.map((file) => `<span>${file}</span>`).join("");
+function clearTrainer() {
+  el.boardTitle.textContent = "No lesson loaded";
+  el.boardSummary.textContent = "Build your repertoire, then train the next due line from your queue.";
+  el.boardLine.textContent = "No line loaded yet.";
+  el.boardLine.classList.add("empty");
+  el.trainerFeedback.textContent = "Choose a due line from the queue or launch one from a repertoire card.";
+  el.trainerFeedback.classList.remove("empty");
+  state.boardFen = "startpos";
+  state.startFen = "startpos";
+  state.legalMoves = [];
+  state.legalByFrom = {};
+  state.selectedSquare = "";
+  state.lastMove = null;
+  renderBoard("startpos");
 }
 
 async function refreshLegalMoves(fen = state.boardFen) {
@@ -578,16 +526,20 @@ async function refreshLegalMoves(fen = state.boardFen) {
   });
 }
 
+function renderCoords() {
+  el.rankLabels.innerHTML = ranks.map((rank) => `<span>${rank}</span>`).join("");
+  el.fileLabels.innerHTML = files.map((file) => `<span>${file}</span>`).join("");
+}
+
 function renderBoard(fen) {
-  if (!el.board) return;
   state.boardFen = fen || state.boardFen;
   const squares = parseFenBoard(state.boardFen);
   el.board.innerHTML = "";
   squares.forEach((piece, index) => {
-    const square = document.createElement("div");
     const file = index % 8;
     const rank = Math.floor(index / 8);
     const squareName = `${files[file]}${8 - rank}`;
+    const square = document.createElement("div");
     square.className = `square ${(file + rank) % 2 === 0 ? "light" : "dark"} selectable`;
     square.dataset.square = squareName;
     if (state.selectedSquare === squareName) square.classList.add("selected");
@@ -624,7 +576,6 @@ function renderBoard(fen) {
       });
       square.appendChild(img);
     }
-
     el.board.appendChild(square);
   });
 }
@@ -638,13 +589,11 @@ function handleSquareClick(squareName) {
     }
     return;
   }
-
   if (state.selectedSquare === squareName) {
     state.selectedSquare = "";
     renderBoard(state.boardFen);
     return;
   }
-
   submitTrainerMove(state.selectedSquare, squareName);
 }
 
@@ -654,9 +603,8 @@ async function submitTrainerMove(from, to) {
   renderBoard(state.boardFen);
   if (!move) return;
 
-  const lesson = state.lessons[state.lessonIndex];
+  const lesson = state.queue[state.lessonIndex];
   if (!lesson) return;
-
   const response = await fetch("/api/trainer-attempt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -668,63 +616,99 @@ async function submitTrainerMove(from, to) {
   });
   const payload = await response.json();
   if (!response.ok) {
-    el.trainerFeedback.textContent = payload.error || "Could not validate move.";
+    el.trainerFeedback.textContent = payload.error || "Bookup could not validate that move.";
     el.trainerFeedback.classList.remove("empty");
     return;
   }
 
   if (!payload.ok) {
-    el.trainerFeedback.textContent = `${payload.played_san} is not the prep move here. ${payload.explanation} Best move: ${payload.best_san}.`;
+    recordReview(lesson.lesson_id, false);
+    el.trainerFeedback.textContent = `${payload.played_san} misses the line here. ${payload.explanation} Best move: ${payload.best_san}.`;
     el.trainerFeedback.classList.remove("empty");
-    el.boardLine.textContent = payload.continuation || lesson.continuation || "";
+    el.boardLine.textContent = payload.continuation || lesson.continuation_san || "";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
     state.lastMove = null;
+    rebuildQueue();
+    renderQueue();
     return;
   }
 
-  state.boardFen = payload.fen;
-  state.lastMove = payload.last_move || null;
-  el.trainerFeedback.textContent = `Correct. ${payload.explanation}`;
-  el.trainerFeedback.classList.remove("empty");
-  el.boardLine.textContent = payload.line || lesson.continuation || "";
-  el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
-  state.selectedSquare = "";
+  recordReview(lesson.lesson_id, true);
+  state.boardFen = payload.fen || state.boardFen;
   state.legalMoves = payload.legal_moves || [];
   state.legalByFrom = {};
-  state.legalMoves.forEach((legalMove) => {
-    if (!state.legalByFrom[legalMove.from]) state.legalByFrom[legalMove.from] = [];
-    state.legalByFrom[legalMove.from].push(legalMove);
+  state.legalMoves.forEach((item) => {
+    if (!state.legalByFrom[item.from]) state.legalByFrom[item.from] = [];
+    state.legalByFrom[item.from].push(item);
   });
+  state.lastMove = payload.last_move || null;
   renderBoard(state.boardFen);
+  el.trainerFeedback.textContent = `Correct. ${payload.explanation || "Bookup played out the stored continuation."}`;
+  el.trainerFeedback.classList.remove("empty");
+  el.boardLine.textContent = payload.line || lesson.continuation_san || "";
+  el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+  rebuildQueue();
+  renderQueue();
+}
+
+function defaultReviewState() {
+  return {
+    streak: 0,
+    due_at: 0,
+    seen: 0,
+    last_result: "",
+  };
+}
+
+function loadReviewStats(username) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(REVIEW_KEY) || "{}");
+    return raw[username] || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveReviewStats(username) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(REVIEW_KEY) || "{}");
+    raw[username] = state.reviewStats;
+    localStorage.setItem(REVIEW_KEY, JSON.stringify(raw));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function recordReview(lessonId, correct) {
+  const current = state.reviewStats[lessonId] || defaultReviewState();
+  const seen = (current.seen || 0) + 1;
+  const streak = correct ? Math.min((current.streak || 0) + 1, REVIEW_INTERVALS.length - 1) : 0;
+  const nextDays = REVIEW_INTERVALS[streak];
+  const dueAt = Date.now() + nextDays * 24 * 60 * 60 * 1000;
+  state.reviewStats[lessonId] = {
+    seen,
+    streak,
+    due_at: dueAt,
+    last_result: correct ? "right" : "wrong",
+  };
+  if (state.payload?.username) {
+    saveReviewStats(state.payload.username);
+  }
 }
 
 function parseFenBoard(fen) {
-  const boardPart = (fen || "").split(" ")[0];
-  if (!boardPart || boardPart === "startpos") {
-    return parseFenBoard("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-  }
-  const out = [];
-  boardPart.split("/").forEach((rank) => {
-    rank.split("").forEach((char) => {
+  const rows = String(fen || "").split(" ")[0].split("/");
+  const squares = [];
+  rows.forEach((row) => {
+    row.split("").forEach((char) => {
       if (/\d/.test(char)) {
-        for (let i = 0; i < Number(char); i += 1) out.push("");
+        for (let i = 0; i < Number(char); i += 1) squares.push("");
       } else {
-        out.push(char);
+        squares.push(char);
       }
     });
   });
-  return out;
-}
-
-function buildLinePreview(steps) {
-  return steps
-    .map((step) => {
-      if (step.kind === "user") return step.san || "";
-      if (step.kind === "opponent") return step.played || "";
-      return "";
-    })
-    .filter(Boolean)
-    .join(" ");
+  return squares;
 }
 
 function pieceSide(piece) {
@@ -732,8 +716,7 @@ function pieceSide(piece) {
 }
 
 function sideToMove(fen) {
-  const parts = String(fen || "").split(" ");
-  return parts[1] === "b" ? "b" : "w";
+  return String(fen || "").split(" ")[1] || "w";
 }
 
 function escapeHtml(value) {
@@ -741,11 +724,28 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-function setStatus(message) {
-  el.status.textContent = message;
+function formatCp(cp) {
+  const pawns = Number(cp || 0) / 100;
+  const sign = pawns > 0 ? "+" : "";
+  return `${sign}${pawns.toFixed(2)} pawns`;
+}
+
+function statusClass(status) {
+  if (status === "known") return "known";
+  if (status === "sideline") return "sideline";
+  if (status === "new") return "new";
+  return "needs-work";
+}
+
+function labelForStatus(status) {
+  if (status === "known") return "Known";
+  if (status === "sideline") return "Sideline";
+  if (status === "new") return "New";
+  return "Needs work";
 }
 
 init();
