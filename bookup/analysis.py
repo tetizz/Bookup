@@ -4,8 +4,14 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from statistics import mean
 from typing import Any
+from urllib.parse import quote
 
 import chess
+import requests
+try:
+    from Openix import ChessOpeningsLibrary
+except Exception:  # pragma: no cover - optional dependency fallback
+    ChessOpeningsLibrary = None
 
 from .chesscom import ImportedGame
 from .engine import EngineSession
@@ -18,16 +24,23 @@ PHASE_LABELS = {
     "endgame": "Endgame",
 }
 
+LICHESS_EXPLORER_URL = "https://explorer.lichess.ovh/lichess"
+ONLINE_OPENING_CACHE: dict[str, dict[str, str]] = {}
+OPENING_LIBRARY: ChessOpeningsLibrary | None = None
+
 
 @dataclass(slots=True)
 class OpeningAdvice:
     opening: str
+    opening_code: str
     color: str
     opponent_reply: str
     recommendation: str
     explanation: str
     example_line: str
     position_fen: str
+    position_identifier: str
+    position_identifier_label: str
 
 
 def _score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
@@ -82,6 +95,113 @@ def opening_name(game: ImportedGame) -> str:
         line.append(board.san(move))
         board.push(move)
     return "Line: " + " ".join(line) if line else "Unknown Opening"
+
+
+def _is_eco_code(value: str) -> bool:
+    text = (value or "").strip().upper()
+    return len(text) == 3 and text[0] in "ABCDE" and text[1:].isdigit()
+
+
+def _analysis_url_for_fen(fen: str) -> str:
+    return f"https://lichess.org/analysis/standard/{quote(fen.replace(' ', '_'), safe='/_-')}"
+
+
+def _opening_library() -> ChessOpeningsLibrary | None:
+    global OPENING_LIBRARY
+    if OPENING_LIBRARY is not None:
+        return OPENING_LIBRARY
+    if ChessOpeningsLibrary is None:
+        return None
+    library = ChessOpeningsLibrary()
+    library.load_builtin_openings()
+    OPENING_LIBRARY = library
+    return OPENING_LIBRARY
+
+
+def _opening_lookup_payload(imported: ImportedGame) -> tuple[str, chess.Board, list[str], list[str]]:
+    board = imported.game.board()
+    play: list[str] = []
+    san_moves: list[str] = []
+    for index, move in enumerate(imported.game.mainline_moves()):
+        if index >= 12:
+            break
+        san_moves.append(board.san(move))
+        play.append(move.uci())
+        board.push(move)
+    return ",".join(play), board, play, san_moves
+
+
+def identify_opening(imported: ImportedGame) -> dict[str, str]:
+    header_name = (imported.game.headers.get("Opening") or "").strip()
+    eco = (imported.game.headers.get("ECO") or "").strip().upper()
+    play_key, board, play, san_moves = _opening_lookup_payload(imported)
+    cache_key = f"{play_key}|{board.fen()}"
+    if cache_key in ONLINE_OPENING_CACHE:
+        cached = dict(ONLINE_OPENING_CACHE[cache_key])
+        if eco and not cached.get("code"):
+            cached["code"] = eco
+        return cached
+
+    result = {
+        "name": header_name if header_name and header_name != "Unknown" and not _is_eco_code(header_name) else "",
+        "code": eco,
+        "position_identifier": _analysis_url_for_fen(board.fen()),
+        "position_identifier_label": "Lichess analysis",
+    }
+
+    library = _opening_library()
+    if library and san_moves:
+        try:
+            for length in range(len(san_moves), 0, -1):
+                matches = library.find_openings_after_moves(san_moves[:length])
+                if not matches:
+                    continue
+                best_match = max(matches, key=lambda item: len(getattr(item, "moves_list", []) or []))
+                if getattr(best_match, "name", ""):
+                    result["name"] = str(best_match.name)
+                if getattr(best_match, "eco_code", ""):
+                    result["code"] = str(best_match.eco_code).upper()
+                break
+        except Exception:
+            pass
+
+    try:
+        response = requests.get(
+            LICHESS_EXPLORER_URL,
+            params={
+                "variant": "standard",
+                "fen": board.fen(),
+                "play": play_key,
+                "speeds": "bullet,blitz,rapid,classical",
+            },
+            timeout=4,
+        )
+        response.raise_for_status()
+        opening = response.json().get("opening") or {}
+        if opening.get("name") and not result["name"]:
+            result["name"] = str(opening.get("name"))
+        if opening.get("eco") and not result["code"]:
+            result["code"] = str(opening.get("eco")).upper()
+    except Exception:
+        pass
+
+    if not result["name"]:
+        if header_name and header_name != "Unknown" and not _is_eco_code(header_name):
+            result["name"] = header_name
+        elif play:
+            preview = imported.game.board()
+            san_line: list[str] = []
+            for move in imported.game.mainline_moves():
+                if len(san_line) >= 6:
+                    break
+                san_line.append(preview.san(move))
+                preview.push(move)
+            result["name"] = "Line: " + " ".join(san_line) if san_line else (result["code"] or "Unknown Opening")
+        else:
+            result["name"] = result["code"] or "Unknown Opening"
+
+    ONLINE_OPENING_CACHE[cache_key] = dict(result)
+    return result
 
 
 def _safe_mean(values: list[float]) -> float:
@@ -274,7 +394,7 @@ def _build_dossier(style_metrics: dict[str, float], white_wr: float, black_wr: f
     ]
 
 
-def build_opening_advice(imported: ImportedGame, color: str, opening: str, reply_san: str, reply_count: int, engine: EngineSession) -> OpeningAdvice | None:
+def build_opening_advice(imported: ImportedGame, color: str, opening_info: dict[str, str], reply_san: str, reply_count: int, engine: EngineSession) -> OpeningAdvice | None:
     board = imported.game.board()
     player_turn = chess.WHITE if color == "white" else chess.BLACK
     player_has_moved = False
@@ -314,17 +434,20 @@ def build_opening_advice(imported: ImportedGame, color: str, opening: str, reply
         temp.push(move)
 
     explanation = (
-        f"In your {opening} games as {color}, opponents often answer with {reply_san}. "
+        f"In your {opening_info['name']} games as {color}, opponents often answer with {reply_san}. "
         f"Stockfish prefers {best_san} here because it keeps your position healthier and gives you the cleanest continuation."
     )
     return OpeningAdvice(
-        opening=opening,
+        opening=opening_info["name"],
+        opening_code=opening_info["code"],
         color=color,
         opponent_reply=f"{reply_san} ({reply_count} games)",
         recommendation=best_san,
         explanation=explanation,
         example_line=" ".join(line_moves),
         position_fen=target_position.fen(),
+        position_identifier=opening_info["position_identifier"],
+        position_identifier_label=opening_info["position_identifier_label"],
     )
 
 
@@ -335,9 +458,10 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     elif len(games) > 150:
         engine_game_cap = 180
 
-    color_openings: Counter[tuple[str, str]] = Counter()
-    opening_records: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
-    opening_responses: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
+    color_openings: Counter[tuple[str, str, str]] = Counter()
+    opening_records: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
+    opening_responses: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
+    opening_samples: dict[tuple[str, str, str], ImportedGame] = {}
     outcome_counter: Counter[str] = Counter()
     termination_counter: Counter[str] = Counter()
     first_move_white: Counter[str] = Counter()
@@ -371,12 +495,16 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     for game_index, imported in enumerate(games):
         game = imported.game
         board = game.board()
-        opening = opening_name(imported)
+        opening_info = identify_opening(imported)
+        opening = opening_info["name"]
+        opening_code = opening_info["code"]
         color = imported.player_color
         result = _classify_result(imported.result)
         outcome_counter[result] += 1
-        color_openings[(color, opening)] += 1
-        opening_records[(color, opening)][result] += 1
+        opening_key = (color, opening, opening_code)
+        color_openings[opening_key] += 1
+        opening_records[opening_key][result] += 1
+        opening_samples.setdefault(opening_key, imported)
         color_records[color][result] += 1
         time_class_records[imported.time_class][result] += 1
         termination_counter[_termination_bucket(imported)] += 1
@@ -486,7 +614,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         if player_seen_queen:
             early_queen_games += 1
         if first_reply:
-            opening_responses[(color, opening)][first_reply] += 1
+            opening_responses[opening_key][first_reply] += 1
 
         total_moves = len(board.move_stack)
         phase_end = _phase_name(total_moves)
@@ -505,22 +633,16 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
 
         tactical_bursts.append(max_burst)
 
-    for (color, opening), _count in color_openings.most_common(8):
-        common_reply = opening_responses[(color, opening)].most_common(1)
+    for (color, opening, opening_code), _count in color_openings.most_common(8):
+        common_reply = opening_responses[(color, opening, opening_code)].most_common(1)
         if not common_reply:
             continue
         reply, reply_count = common_reply[0]
-        sample = next(
-            (
-                item
-                for item in games
-                if item.player_color == color and opening_name(item) == opening
-            ),
-            None,
-        )
+        sample = opening_samples.get((color, opening, opening_code))
         if sample is None:
             continue
-        advice_item = build_opening_advice(sample, color, opening, reply, reply_count, engine)
+        opening_info = identify_opening(sample)
+        advice_item = build_opening_advice(sample, color, opening_info, reply, reply_count, engine)
         if advice_item:
             advice.append(advice_item)
 
@@ -571,7 +693,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     color_gap = abs(white_wr - black_wr)
     opening_loyalty = 0.0
     if total_games:
-        top_opening_count = max((count for (_color, _opening), count in color_openings.items()), default=0)
+        top_opening_count = max((count for (_color, _opening, _code), count in color_openings.items()), default=0)
         opening_loyalty = (top_opening_count / total_games) * 100
     avg_resignation_move = _safe_mean(resigned_loss_moves)
     early_resign_rate = 0.0
@@ -601,17 +723,21 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     top_openings_by_color = {
         side: [
             {
-                "opening": opening,
+                "opening": opening_info["name"],
+                "opening_code": opening_info["code"],
+                "position_identifier": opening_info["position_identifier"],
+                "position_identifier_label": opening_info["position_identifier_label"],
                 "count": count,
-                "win_rate": round(_win_rate(opening_records[(side, opening)]), 1),
+                "win_rate": round(_win_rate(opening_records[(side, opening, opening_code)]), 1),
                 "record": {
-                    "wins": opening_records[(side, opening)]["win"],
-                    "draws": opening_records[(side, opening)]["draw"],
-                    "losses": opening_records[(side, opening)]["loss"],
+                    "wins": opening_records[(side, opening, opening_code)]["win"],
+                    "draws": opening_records[(side, opening, opening_code)]["draw"],
+                    "losses": opening_records[(side, opening, opening_code)]["loss"],
                 },
             }
-            for (side_name, opening), count in color_openings.most_common()
+            for (side_name, opening, opening_code), count in color_openings.most_common()
             if side_name == side
+            for opening_info in [identify_opening(opening_samples[(side, opening, opening_code)])]
         ][:8]
         for side in ("white", "black")
     }

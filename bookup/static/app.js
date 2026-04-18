@@ -25,6 +25,7 @@ const el = {
   username: document.getElementById("usernameInput"),
   timeClasses: document.getElementById("timeClassesInput"),
   maxGames: document.getElementById("maxGamesInput"),
+  importAllGames: document.getElementById("importAllGamesInput"),
   enginePath: document.getElementById("enginePathInput"),
   depth: document.getElementById("depthInput"),
   threads: document.getElementById("threadsInput"),
@@ -97,11 +98,26 @@ function init() {
   el.username.value = defaults.username || "trixize1234";
   el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games ?? 0;
+  el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
   el.enginePath.value = defaults.engine_path || "";
   el.depth.value = defaults.depth || 13;
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
   el.analyze.addEventListener("click", runAnalysis);
+  el.importAllGames?.addEventListener("change", () => {
+    if (el.importAllGames.checked) {
+      el.maxGames.value = 0;
+      el.maxGames.setAttribute("disabled", "disabled");
+    } else {
+      el.maxGames.removeAttribute("disabled");
+      if (Number(el.maxGames.value) === 0) {
+        el.maxGames.value = 200;
+      }
+    }
+  });
+  if (el.importAllGames.checked) {
+    el.maxGames.setAttribute("disabled", "disabled");
+  }
   el.compareBtn?.addEventListener("click", runCompare);
   el.coachReset?.addEventListener("click", resetCoachDrill);
   el.coachReveal?.addEventListener("click", revealCoachDrill);
@@ -164,7 +180,7 @@ function buildProfileRequest(username) {
   return {
     username,
     time_classes: el.timeClasses.value.trim(),
-    max_games: Number(el.maxGames.value),
+    max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
     engine_path: el.enginePath.value.trim(),
     depth: Number(el.depth.value),
     threads: Number(el.threads.value),
@@ -268,7 +284,8 @@ function renderOpeningColumn(node, items, side) {
   node.innerHTML = items.map((item, index) => `
     <div class="item">
       <div class="item-title">${index + 1}. ${item.opening}</div>
-      <div class="item-sub">${item.count}x - ${item.win_rate}% win rate</div>
+      <div class="item-sub">${item.count}x - ${item.win_rate}% win rate${item.opening_code ? ` - ${item.opening_code}` : ""}</div>
+      ${item.position_identifier ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${item.position_identifier_label || "Open position"}</a></div>` : ""}
       <div class="record-line">
         <span class="record-win">${item.record.wins}W</span>
         <span class="record-draw">${item.record.draws}D</span>
@@ -619,9 +636,10 @@ function renderAdvice(advice) {
   el.adviceList.innerHTML = advice.map((item, index) => `
     <div class="item clickable" data-advice-index="${index}">
       <div class="item-title">${item.opening}</div>
-      <div class="item-sub">When opponents usually answer with ${item.opponent_reply}, the engine wants ${item.recommendation}.</div>
+      <div class="item-sub">When opponents usually answer with ${item.opponent_reply}, the engine wants ${item.recommendation}.${item.opening_code ? ` (${item.opening_code})` : ""}</div>
       <div class="item-sub">${item.explanation}</div>
       <div class="item-note">${item.example_line}</div>
+      ${item.position_identifier ? `<div class="item-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${item.position_identifier_label || "Open position"}</a></div>` : ""}
     </div>
   `).join("");
   el.adviceList.querySelectorAll("[data-advice-index]").forEach((node) => {
