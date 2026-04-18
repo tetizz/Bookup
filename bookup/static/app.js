@@ -96,7 +96,7 @@ const state = {
 function init() {
   el.username.value = defaults.username || "trixize1234";
   el.timeClasses.value = defaults.time_classes || "all";
-  el.maxGames.value = defaults.max_games || 40;
+  el.maxGames.value = defaults.max_games ?? 0;
   el.enginePath.value = defaults.engine_path || "";
   el.depth.value = defaults.depth || 13;
   el.threads.value = defaults.threads || 8;

@@ -133,7 +133,7 @@ def index() -> str:
     defaults = {
         "username": config.get("username", "trixize1234"),
         "time_classes": config.get("time_classes", "all"),
-        "max_games": int(config.get("max_games", 40)),
+        "max_games": int(config.get("max_games", 0)),
         "engine_path": config.get("engine_path", default_engine_path()),
         "depth": int(config.get("depth", 13)),
         "threads": int(config.get("threads", max(1, os.cpu_count() or 8))),
@@ -152,7 +152,12 @@ def profile() -> tuple:
     raw_time_classes = str(payload.get("time_classes", "all")).strip()
     time_classes = [item.strip() for item in raw_time_classes.split(",") if item.strip()]
     normalized_time_classes = normalize_time_classes(time_classes)
-    max_games = max(1, min(200, int(payload.get("max_games", 40))))
+    raw_max_games = payload.get("max_games", 0)
+    try:
+        parsed_max_games = int(raw_max_games or 0)
+    except (TypeError, ValueError):
+        parsed_max_games = 0
+    max_games = None if parsed_max_games <= 0 else max(1, min(20000, parsed_max_games))
     engine_path = str(payload.get("engine_path", "")).strip()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
@@ -163,7 +168,7 @@ def profile() -> tuple:
         {
             "username": username,
             "time_classes": raw_time_classes or "all",
-            "max_games": max_games,
+            "max_games": 0 if max_games is None else max_games,
             "engine_path": engine_path,
             "depth": settings.depth,
             "threads": settings.threads,
