@@ -26,7 +26,9 @@ PHASE_LABELS = {
 
 LICHESS_EXPLORER_URL = "https://explorer.lichess.ovh/lichess"
 ONLINE_OPENING_CACHE: dict[str, dict[str, str]] = {}
+EXPLORER_CACHE: dict[str, dict[str, Any]] = {}
 OPENING_LIBRARY: ChessOpeningsLibrary | None = None
+EXPLORER_AVAILABLE = True
 
 
 @dataclass(slots=True)
@@ -106,6 +108,184 @@ def _analysis_url_for_fen(fen: str) -> str:
     return f"https://lichess.org/analysis/standard/{quote(fen.replace(' ', '_'), safe='/_-')}"
 
 
+def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
+    global EXPLORER_AVAILABLE
+    cache_key = f"{board.board_fen()}|{board.turn}|{play_key}"
+    if cache_key in EXPLORER_CACHE:
+        return EXPLORER_CACHE[cache_key]
+    if not EXPLORER_AVAILABLE:
+        return {}
+    try:
+        response = requests.get(
+            LICHESS_EXPLORER_URL,
+            params={
+                "variant": "standard",
+                "fen": board.fen(),
+                "play": play_key,
+                "moves": 12,
+                "speeds": "bullet,blitz,rapid,classical",
+            },
+            timeout=4,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        EXPLORER_AVAILABLE = False
+        payload = {}
+    EXPLORER_CACHE[cache_key] = payload
+    return payload
+
+
+def _move_expected_score(move_data: dict[str, Any], side: chess.Color) -> float:
+    white = float(move_data.get("white", 0) or 0)
+    black = float(move_data.get("black", 0) or 0)
+    draws = float(move_data.get("draws", 0) or 0)
+    total = white + black + draws
+    if total <= 0:
+        return 0.0
+    return ((white + 0.5 * draws) if side == chess.WHITE else (black + 0.5 * draws)) / total
+
+
+def build_prep_tree(
+    imported: ImportedGame,
+    engine: EngineSession,
+    player_move_counts: Counter[tuple[str, str]],
+    max_plies: int = 10,
+    branch_width: int = 3,
+) -> dict[str, Any]:
+    opening_info = identify_opening(imported)
+    board = imported.game.board()
+    user_side = chess.WHITE if imported.player_color == "white" else chess.BLACK
+    play: list[str] = []
+    steps: list[dict[str, Any]] = []
+    lessons: list[dict[str, Any]] = []
+    mainline = list(imported.game.mainline_moves())
+
+    for index, move in enumerate(mainline):
+        if index >= max_plies:
+            break
+        san = board.san(move)
+        explorer = _explorer_lookup(board, ",".join(play))
+        moves = explorer.get("moves") or []
+        move_entry = next((item for item in moves if item.get("uci") == move.uci()), None)
+        total_here = float(explorer.get("white", 0) or 0) + float(explorer.get("black", 0) or 0) + float(explorer.get("draws", 0) or 0)
+        move_total = float(move_entry.get("white", 0) or 0) + float(move_entry.get("black", 0) or 0) + float(move_entry.get("draws", 0) or 0) if move_entry else 0.0
+        popularity = round((move_total / total_here) * 100, 1) if total_here and move_total else 0.0
+
+        if board.turn == user_side:
+            steps.append(
+                {
+                    "kind": "user",
+                    "ply": len(board.move_stack) + 1,
+                    "san": san,
+                    "games": int(move_total),
+                    "popularity": popularity,
+                }
+            )
+        else:
+            sorted_moves = sorted(
+                moves,
+                key=lambda item: (_move_expected_score(item, board.turn), float(item.get("white", 0) or 0) + float(item.get("black", 0) or 0) + float(item.get("draws", 0) or 0)),
+                reverse=True,
+            )
+            options = []
+            for item in sorted_moves[:branch_width]:
+                option_total = float(item.get("white", 0) or 0) + float(item.get("black", 0) or 0) + float(item.get("draws", 0) or 0)
+                options.append(
+                    {
+                        "san": item.get("san") or item.get("uci") or "",
+                        "games": int(option_total),
+                        "popularity": round((option_total / total_here) * 100, 1) if total_here and option_total else 0.0,
+                        "score": round(_move_expected_score(item, board.turn) * 100, 1),
+                        "opening": (item.get("opening") or {}).get("name", ""),
+                    }
+                )
+            if not options:
+                options.append(
+                    {
+                        "san": san,
+                        "games": 0,
+                        "popularity": 0.0,
+                        "score": 0.0,
+                        "opening": "",
+                    }
+                )
+            steps.append(
+                {
+                    "kind": "opponent",
+                    "ply": len(board.move_stack) + 1,
+                    "played": san,
+                    "options": options,
+                    "position_identifier": _analysis_url_for_fen(board.fen()),
+                    "position_identifier_label": "Lichess analysis",
+                }
+            )
+
+            board.push(move)
+
+            reply_info = engine.analyse(board, multipv=1)[0]
+            reply_pv = reply_info.get("pv") or []
+            if reply_pv:
+                best_reply = reply_pv[0]
+                best_reply_san = board.san(best_reply)
+                continuation_board = board.copy(stack=False)
+                continuation_line = [best_reply_san]
+                continuation_board.push(best_reply)
+                for follow in reply_pv[1:5]:
+                    if follow not in continuation_board.legal_moves:
+                        break
+                    continuation_line.append(continuation_board.san(follow))
+                    continuation_board.push(follow)
+
+                your_played = ""
+                if index + 1 < len(mainline) and board.turn == user_side:
+                    next_move = mainline[index + 1]
+                    if next_move in board.legal_moves:
+                        your_played = board.san(next_move)
+
+                repeated_count = player_move_counts.get((board.fen(), your_played), 0) if your_played else 0
+                if not (your_played and your_played == best_reply_san and repeated_count >= 100):
+                    lesson_type = "repeat" if your_played and your_played == best_reply_san else "fix"
+                    lessons.append(
+                        {
+                            "trigger_move": san,
+                            "ply": len(board.move_stack),
+                            "best_reply": best_reply_san,
+                            "your_played": your_played,
+                            "repeated_count": repeated_count,
+                            "lesson_type": lesson_type,
+                            "continuation": " ".join(continuation_line),
+                            "position_identifier": _analysis_url_for_fen(board.fen()),
+                            "position_identifier_label": "Lichess analysis",
+                            "options": options,
+                            "score_cp": _score_cp(reply_info["score"], user_side),
+                            "explanation": (
+                                f"After {san}, Stockfish wants {best_reply_san} because it keeps the initiative and gives the cleanest continuation."
+                                if lesson_type == "fix"
+                                else f"After {san}, you already play {best_reply_san}. Keep using it when this line appears."
+                            ),
+                        }
+                    )
+
+            play.append(move.uci())
+            continue
+
+        play.append(move.uci())
+        board.push(move)
+
+    return {
+        "opening": opening_info["name"],
+        "opening_code": opening_info["code"],
+        "color": imported.player_color,
+        "position_identifier": opening_info["position_identifier"],
+        "position_identifier_label": opening_info["position_identifier_label"],
+        "steps": steps,
+        "lesson_count": len(lessons),
+        "lessons": lessons,
+        "sample_line": " ".join(step.get("san") or step.get("played") or "" for step in steps).strip(),
+    }
+
+
 def _opening_library() -> ChessOpeningsLibrary | None:
     global OPENING_LIBRARY
     if OPENING_LIBRARY is not None:
@@ -165,25 +345,12 @@ def identify_opening(imported: ImportedGame) -> dict[str, str]:
         except Exception:
             pass
 
-    try:
-        response = requests.get(
-            LICHESS_EXPLORER_URL,
-            params={
-                "variant": "standard",
-                "fen": board.fen(),
-                "play": play_key,
-                "speeds": "bullet,blitz,rapid,classical",
-            },
-            timeout=4,
-        )
-        response.raise_for_status()
-        opening = response.json().get("opening") or {}
-        if opening.get("name") and not result["name"]:
-            result["name"] = str(opening.get("name"))
-        if opening.get("eco") and not result["code"]:
-            result["code"] = str(opening.get("eco")).upper()
-    except Exception:
-        pass
+    explorer = _explorer_lookup(board, play_key)
+    opening = explorer.get("opening") or {}
+    if opening.get("name") and not result["name"]:
+        result["name"] = str(opening.get("name"))
+    if opening.get("eco") and not result["code"]:
+        result["code"] = str(opening.get("eco")).upper()
 
     if not result["name"]:
         if header_name and header_name != "Unknown" and not _is_eco_code(header_name):
@@ -462,6 +629,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     opening_records: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
     opening_responses: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
     opening_samples: dict[tuple[str, str, str], ImportedGame] = {}
+    player_move_counts: Counter[tuple[str, str]] = Counter()
     outcome_counter: Counter[str] = Counter()
     termination_counter: Counter[str] = Counter()
     first_move_white: Counter[str] = Counter()
@@ -571,6 +739,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
                     total_castles += 1
                     castling_moves.append(player_move_index + 1)
                     castle_side_counter["kingside" if san == "O-O" else "queenside"] += 1
+                player_move_counts[(before_move.fen(), san)] += 1
                 piece = board.piece_at(move.from_square)
                 if piece and piece.piece_type == chess.QUEEN and player_move_index < 6:
                     player_seen_queen = True
@@ -647,7 +816,6 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             advice.append(advice_item)
 
     improvements = []
-    coach_positions = []
     total_mistakes = sum(mistake_counter.values())
     for phase, count in mistake_counter.most_common():
         examples = mistake_examples[phase]
@@ -661,23 +829,6 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
                 "example": example,
             }
         )
-        for index, mistake in enumerate(examples):
-            coach_positions.append(
-                {
-                    "id": f"{phase}-{index}",
-                    "phase": phase,
-                    "headline": _phase_headline(phase),
-                    "prompt": f"Find the best continuation in this {phase} position.",
-                    "position_fen": mistake["position_fen"],
-                    "played_move": mistake["played"],
-                    "best_move": mistake["best"],
-                    "best_move_uci": mistake["best_uci"],
-                    "loss_cp": mistake["loss_cp"],
-                    "line": mistake["line"],
-                    "why": mistake["why"],
-                }
-            )
-
     capture_rate = (total_captures / total_player_moves) if total_player_moves else 0.0
     checks_per_game = (total_checks / total_games) if total_games else 0.0
     forcing_rate = ((total_captures + total_checks) / total_player_moves) if total_player_moves else 0.0
@@ -741,6 +892,11 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         ][:8]
         for side in ("white", "black")
     }
+
+    prep_repertoire = [
+        build_prep_tree(opening_samples[key], engine, player_move_counts)
+        for key, _count in color_openings.most_common(6)
+    ]
 
     first_move_total = sum(first_move_white.values())
     first_move_items = [
@@ -850,8 +1006,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "total_games": first_move_total,
         },
         "top_openings_by_color": top_openings_by_color,
+        "prep_repertoire": prep_repertoire,
         "improvements": improvements,
-        "coach_positions": coach_positions,
         "opening_advice": [asdict(entry) for entry in advice],
         "phase_breakdown": phase_breakdown,
         "game_length": {

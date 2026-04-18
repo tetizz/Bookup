@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
@@ -52,79 +51,6 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
     )
 
-
-def serialize_legal_moves(board: chess.Board) -> list[dict]:
-    items = []
-    for move in board.legal_moves:
-        items.append(
-            {
-                "uci": move.uci(),
-                "from": chess.square_name(move.from_square),
-                "to": chess.square_name(move.to_square),
-                "san": board.san(move),
-                "promotion": chess.piece_symbol(move.promotion) if move.promotion else "",
-            }
-        )
-    return items
-
-
-def normalize_move_uci(board: chess.Board, move_uci: str) -> chess.Move | None:
-    cleaned = str(move_uci or "").strip().lower()
-    if len(cleaned) < 4:
-        return None
-    if len(cleaned) == 4:
-        base = chess.Move.from_uci(cleaned)
-        if base in board.legal_moves:
-            return base
-        for suffix in ("q", "r", "b", "n"):
-            promoted = chess.Move.from_uci(cleaned + suffix)
-            if promoted in board.legal_moves:
-                return promoted
-        return None
-    move = chess.Move.from_uci(cleaned)
-    return move if move in board.legal_moves else None
-
-
-def score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
-    pov = score.pov(turn)
-    if pov.is_mate():
-        mate = pov.mate()
-        if mate is None:
-            return 0
-        return 100000 - abs(mate) if mate > 0 else -100000 + abs(mate)
-    return int(pov.score(mate_score=100000) or 0)
-
-
-def san_line(board: chess.Board, pv: list[chess.Move], plies: int = 4) -> list[str]:
-    probe = board.copy(stack=False)
-    out: list[str] = []
-    for move in pv[:plies]:
-        if move not in probe.legal_moves:
-            break
-        out.append(probe.san(move))
-        probe.push(move)
-    return out
-
-
-def explain_best_move(board: chess.Board, best_move: chess.Move, best_line: list[str], eval_gain_cp: int) -> str:
-    best_san = board.san(best_move)
-    move_piece = board.piece_at(best_move.from_square)
-    piece_name = chess.piece_name(move_piece.piece_type).title() if move_piece else "Move"
-    reasons: list[str] = []
-    if "+" in best_san or "#" in best_san:
-        reasons.append("it creates an immediate forcing threat against the king")
-    if "x" in best_san:
-        reasons.append("it wins material or forces a material concession")
-    if best_move.to_square in chess.SquareSet(chess.BB_CENTER):
-        reasons.append("it improves central control and piece activity")
-    if not reasons:
-        reasons.append("it keeps the initiative and preserves the healthiest evaluation")
-    line_text = " ".join(best_line) if best_line else best_san
-    return (
-        f"{best_san} is best because {piece_name.lower()} {reasons[0]}. "
-        f"The engine continuation is {line_text}. "
-        f"This keeps roughly {round(eval_gain_cp / 100, 2)} pawns more value than the move you chose."
-    )
 
 
 @app.get("/")
@@ -202,110 +128,6 @@ def profile() -> tuple:
             "profile": profile_data,
         }
     )
-
-
-@app.post("/api/legal-moves")
-def legal_moves() -> tuple:
-    payload = request.get_json(force=True)
-    fen = str(payload.get("fen", "")).strip()
-    if not fen:
-        return jsonify({"error": "FEN is required."}), 400
-    try:
-        board = chess.Board(fen)
-    except ValueError as exc:
-        return jsonify({"error": f"Invalid FEN: {exc}"}), 400
-    return jsonify(
-        {
-            "fen": board.fen(),
-            "turn": "white" if board.turn == chess.WHITE else "black",
-            "legal_moves": serialize_legal_moves(board),
-        }
-    )
-
-
-@app.post("/api/coach-move")
-def coach_move() -> tuple:
-    payload = request.get_json(force=True)
-    fen = str(payload.get("fen", "")).strip()
-    move_uci = str(payload.get("move_uci", "")).strip()
-    if not fen or not move_uci:
-        return jsonify({"error": "FEN and move_uci are required."}), 400
-
-    try:
-        board = chess.Board(fen)
-    except ValueError as exc:
-        return jsonify({"error": f"Invalid FEN: {exc}"}), 400
-
-    selected_move = normalize_move_uci(board, move_uci)
-    if selected_move is None:
-        return jsonify({"error": "That move is not legal from this position.", "legal_moves": serialize_legal_moves(board)}), 400
-
-    settings = build_engine_settings(payload)
-    if not settings.path:
-        return jsonify({"error": "Stockfish path is required."}), 400
-
-    try:
-        with EngineSession(settings) as engine:
-            root_info = engine.analyse(board, multipv=1)[0]
-            pv = root_info.get("pv") or []
-            if not pv:
-                return jsonify({"error": "Engine did not return a principal variation."}), 500
-            best_move = pv[0]
-            best_move_san = board.san(best_move)
-            root_eval = score_cp(root_info["score"], board.turn)
-            if selected_move != best_move:
-                wrong_probe = board.copy(stack=False)
-                wrong_san = wrong_probe.san(selected_move)
-                wrong_probe.push(selected_move)
-                wrong_info = engine.analyse(wrong_probe, multipv=1)[0]
-                wrong_eval = score_cp(wrong_info["score"], board.turn)
-                best_line = san_line(board, pv, 5)
-                explanation = explain_best_move(board, best_move, best_line, max(0, root_eval - wrong_eval))
-                return jsonify(
-                    {
-                        "correct": False,
-                        "fen": board.fen(),
-                        "played_move_san": wrong_san,
-                        "best_move_uci": best_move.uci(),
-                        "best_move_san": best_move_san,
-                        "best_line": best_line,
-                        "explanation": explanation,
-                        "message": f"Best move was {best_move_san}. {explanation}",
-                        "legal_moves": serialize_legal_moves(board),
-                    }
-                )
-
-            played_san = board.san(selected_move)
-            board.push(selected_move)
-            continuation = []
-            final_reply_uci = selected_move.uci()
-            reply_info = engine.analyse(board, multipv=1)[0]
-            reply_pv = reply_info.get("pv") or []
-            for follow_move in reply_pv[:4]:
-                if follow_move not in board.legal_moves:
-                    break
-                continuation.append(board.san(follow_move))
-                final_reply_uci = follow_move.uci()
-                board.push(follow_move)
-
-            return jsonify(
-                {
-                    "correct": True,
-                    "played_move_san": played_san,
-                    "best_move_uci": best_move.uci(),
-                    "best_move_san": best_move_san,
-                    "continuation": continuation,
-                    "final_fen": board.fen(),
-                    "last_move_uci": final_reply_uci,
-                    "line_over": len(continuation) < 4,
-                    "message": "Correct. Bookup played out the engine continuation from there.",
-                    "legal_moves": serialize_legal_moves(board),
-                }
-            )
-    except FileNotFoundError:
-        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
-    except Exception as exc:
-        return jsonify({"error": f"Coach analysis failed: {exc}"}), 500
 
 
 def run_app() -> None:

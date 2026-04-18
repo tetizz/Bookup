@@ -15,17 +15,17 @@
   </script>
 
   <header class="topbar">
-    <div class="brand-line">BOOKUP // CLASSIFIED DOSSIER</div>
+    <div class="brand-line">BOOKUP // PREP ROBOT</div>
     <div class="topbar-row">
       <div>
-        <div class="eyebrow">Chess.com Scout Profile</div>
+        <div class="eyebrow">Chess.com Prep Teacher</div>
         <h1>Bookup</h1>
-        <p class="subhead">Profile how someone actually plays, where they leak value, what openings they repeat, and how the engine thinks you should prepare against those habits.</p>
+        <p class="subhead">Import the openings they actually repeat, turn those habits into a clean prep report, and learn the best continuations before you sit down to play them.</p>
       </div>
       <div class="hero-badges">
-        <div class="hero-badge"><span>Win Rate</span><strong id="badgeWinRate">--</strong></div>
-        <div class="hero-badge"><span>Chaos</span><strong id="badgeChaos">--</strong></div>
-        <div class="hero-badge"><span>Better As</span><strong id="badgeColor">--</strong></div>
+        <div class="hero-badge"><span>Games</span><strong id="badgeWinRate">--</strong></div>
+        <div class="hero-badge"><span>Top White</span><strong id="badgeChaos">--</strong></div>
+        <div class="hero-badge"><span>Top Black</span><strong id="badgeColor">--</strong></div>
       </div>
     </div>
   </header>
@@ -73,240 +73,56 @@
         </label>
       </div>
 
-      <button id="analyzeBtn" class="primary-btn">Build Scout Report</button>
+      <button id="analyzeBtn" class="primary-btn">Build Prep Report</button>
       <div id="status" class="status">Ready.</div>
     </aside>
 
     <section class="results-panel">
       <section class="hero-card">
-        <div class="hero-kicker">AI Coach Report</div>
-        <div id="heroTitle" class="hero-title">No scout report yet</div>
-        <div id="heroSummary" class="hero-summary">Run an import to get a full dossier: first move repertoire, opening map, phase breakdowns, clock habits, resignation behavior, and engine-backed prep notes.</div>
+        <div class="hero-kicker">Prep Report</div>
+        <div id="heroTitle" class="hero-title">No prep report yet</div>
+        <div id="heroSummary" class="hero-summary">Run an import to get a prep report: first move repertoire, most played named openings, and the best continuations against the lines they keep reaching.</div>
       </section>
 
-      <section class="board-card">
-        <div class="board-head">
-          <div>
-            <div class="hero-kicker">Coach Lab</div>
-            <div id="boardTitle" class="board-title">Missed-move trainer</div>
-          </div>
-          <div class="board-actions">
-            <button id="coachResetBtn" class="ghost-btn" type="button">Reset</button>
-            <button id="coachRevealBtn" class="ghost-btn" type="button">Reveal Best Move</button>
-            <button id="coachNextBtn" class="ghost-btn" type="button">Next Drill</button>
-          </div>
-        </div>
-        <div class="board-layout">
-          <div class="board-wrap">
-            <div class="board-coords">
-              <div id="rankLabels" class="rank-labels"></div>
-              <div id="board" class="board-grid"></div>
-              <div id="fileLabels" class="file-labels"></div>
+      <section class="tab-strip">
+        <button class="tab-btn active" data-tab-target="report">Prep Report</button>
+        <button class="tab-btn" data-tab-target="teacher">Prep Teacher</button>
+      </section>
+
+      <section class="tab-panel active" data-tab-panel="report">
+        <section class="section-block">
+          <div class="section-cap">First Move Repertoire As White</div>
+          <div class="section-sub">The very first move tells you a lot about how someone thinks.</div>
+          <div class="card">
+            <div class="first-move-wrap">
+              <div id="firstMoveLead" class="first-move-lead">No white games yet.</div>
+              <div id="firstMoveList" class="stack empty">No first-move data yet.</div>
             </div>
           </div>
-          <div class="board-side">
-            <div id="boardSummary" class="board-summary">Bookup will load your missed positions here and ask for the best continuation.</div>
-            <div id="coachPrompt" class="coach-prompt">Run an import to build your coach drills.</div>
-            <div id="coachFeedback" class="coach-feedback empty">No drill active yet.</div>
-            <div id="boardLine" class="board-line empty">No line selected.</div>
+        </section>
+
+        <section class="section-block">
+          <div class="section-cap">Most Played Openings</div>
+          <div class="section-sub">These are the named openings and variations they keep coming back to.</div>
+          <div class="two-up">
+            <article class="card">
+              <h2>As White</h2>
+              <div id="openingListWhite" class="stack empty">No white opening profile yet.</div>
+            </article>
+            <article class="card">
+              <h2>As Black</h2>
+              <div id="openingListBlack" class="stack empty">No black opening profile yet.</div>
+            </article>
           </div>
-        </div>
-        <div class="coach-grid">
-          <div class="coach-list-wrap">
-            <div class="metric-label">Missed Positions</div>
-            <div id="coachList" class="stack empty">No coach drills yet.</div>
-          </div>
-        </div>
+        </section>
       </section>
 
-      <section class="section-block">
-        <div class="section-cap">Player Style Radar</div>
-        <div class="section-sub">Let's look at the shape of their game first.</div>
-        <div class="two-up wide-gap">
-          <article class="card radar-card">
-            <h2>Style DNA</h2>
-            <div id="radarWrap" class="radar-wrap"></div>
-          </article>
-          <article class="card">
-            <div id="styleMetrics" class="metric-grid metric-grid-tall"></div>
-            <p id="styleSummary" class="body-copy empty">Your style summary will show up here.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">First Move Repertoire As White</div>
-        <div class="section-sub">The very first move tells you a lot about how someone thinks.</div>
-        <div class="card">
-          <div class="first-move-wrap">
-            <div id="firstMoveLead" class="first-move-lead">No white games yet.</div>
-            <div id="firstMoveList" class="stack empty">No first-move data yet.</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Most Played Openings</div>
-        <div class="section-sub">Now - how well does each opening actually work for them?</div>
-        <div class="two-up">
-          <article class="card">
-            <h2>As White</h2>
-            <div id="openingListWhite" class="stack empty">No white opening profile yet.</div>
-          </article>
-          <article class="card">
-            <h2>As Black</h2>
-            <div id="openingListBlack" class="stack empty">No black opening profile yet.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Phase Breakdown</div>
-        <div class="section-sub">Here's how their games play out phase by phase.</div>
-        <div id="phaseBreakdown" class="three-up"></div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Wins &amp; Losses By Phase</div>
-        <div class="section-sub">When do they win, and when do they lose?</div>
-        <div class="two-up">
-          <article class="card">
-            <h2>Where Games End</h2>
-            <div id="whereGamesEnd" class="donut-wrap"></div>
-          </article>
-          <article class="card">
-            <h2>Wins vs Losses by Phase</h2>
-            <div id="phaseBars" class="stack empty">No phase data yet.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Game Length</div>
-        <div class="section-sub">Game length tells you even more about their style.</div>
-        <div id="gameLengthStats" class="four-up"></div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Resignation Behaviour</div>
-        <div class="section-sub">How long do they keep fighting when it's lost?</div>
-        <div class="card">
-          <div id="resignationStats" class="three-up"></div>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Color Record</div>
-        <div class="section-sub">Does it matter which side they play?</div>
-        <div class="two-up">
-          <article class="card">
-            <h2>As White</h2>
-            <div id="colorWhite" class="record-box empty">No data yet.</div>
-          </article>
-          <article class="card">
-            <h2>As Black</h2>
-            <div id="colorBlack" class="record-box empty">No data yet.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Vs Opponent Strength</div>
-        <div class="section-sub">How do they hold up against different rating levels?</div>
-        <div class="card">
-          <div id="opponentStrength" class="three-up"></div>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Clock Drain</div>
-        <div class="section-sub">Here's how the clock drains across a typical game.</div>
-        <div class="two-up">
-          <article class="card">
-            <h2>Clock Remaining</h2>
-            <div id="clockLine" class="chart-wrap empty">No clock data yet.</div>
-          </article>
-          <article class="card">
-            <h2>Thinking Time By Phase</h2>
-            <div id="clockPhaseStats" class="four-up"></div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Castling Behaviour</div>
-        <div class="section-sub">Castling - king safety and preparation in one move.</div>
-        <div class="two-up">
-          <article class="card">
-            <h2>Castling Preference</h2>
-            <div id="castlingPie" class="donut-wrap"></div>
-          </article>
-          <article class="card">
-            <h2>Castling Timing</h2>
-            <div id="castlingStats" class="grid two-col"></div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Time Control &amp; Time Of Day</div>
-        <div class="section-sub">When do they play best - and at what time of day?</div>
-        <div class="two-up">
-          <article class="card">
-            <h2>By Time Control</h2>
-            <div id="timeControlChart" class="stack empty">No time control data yet.</div>
-          </article>
-          <article class="card">
-            <h2>Win Rate By Hour (UTC)</h2>
-            <div id="hourlyChart" class="chart-wrap empty">No hourly data yet.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Scout Dossier</div>
-        <div class="section-sub">A compact summary of the biggest preparation tells.</div>
-        <div id="dossierGrid" class="three-up"></div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Head-To-Head Compare</div>
-        <div class="section-sub">Search a second player to get a full matchup breakdown - who has the edge, where the battle is won, and what the stats say.</div>
-        <div class="compare-hero">
-          <div id="compareSummary" class="compare-summary empty">Build a scout report first, then search a second Chess.com username here to compare both profiles side by side.</div>
-        </div>
-        <div class="compare-grid">
-          <article class="card compare-player compare-player-primary">
-            <h2>Player 1</h2>
-            <div id="comparePrimary" class="compare-player-body empty">No primary player loaded yet.</div>
-          </article>
-          <article class="card compare-vs-card">
-            <div class="compare-vs">VS</div>
-          </article>
-          <article class="card compare-player compare-player-secondary">
-            <h2>Player 2</h2>
-            <div class="compare-form">
-              <label class="field">
-                <span>Chess.com Username</span>
-                <input id="compareUsernameInput" type="text" placeholder="Enter username...">
-              </label>
-              <button id="compareBtn" class="primary-btn secondary-btn">Scout This Player</button>
-            </div>
-            <div id="compareSecondary" class="compare-player-body empty">No comparison player loaded yet.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">Engine Improvement Areas</div>
-        <div class="section-sub">Where the engine thinks the cleanest points are still being left behind.</div>
-        <div id="improvementList" class="stack empty">Engine-backed improvement notes will show up here.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-cap">What To Play Next</div>
-        <div class="section-sub">If opponents keep answering your openings the same way, these are the lines to know.</div>
-        <div id="adviceList" class="stack empty">Your opponent-response guide will show up here.</div>
+      <section class="tab-panel" data-tab-panel="teacher">
+        <section class="section-block">
+          <div class="section-cap">How To Beat Their Variations</div>
+          <div class="section-sub">Built from their recurring lines so you can see the variation branches they reach and the strongest continuation against each one.</div>
+          <div id="prepList" class="stack empty">Repertoire prep lines will show up here.</div>
+        </section>
       </section>
     </section>
   </main>
