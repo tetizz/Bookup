@@ -10,3 +10,8 @@ build/
 dist/
 release/
 *.spec
+.build_dist/
+.build_work/
+.build_spec/
+Bookup.exe
+_internal/

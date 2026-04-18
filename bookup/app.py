@@ -44,7 +44,7 @@ def save_config(payload: dict) -> None:
 
 
 def build_engine_settings(payload: dict) -> EngineSettings:
-    engine_path = str(payload.get("engine_path", "")).strip()
+    engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     return EngineSettings(
         path=engine_path,
         depth=max(8, min(24, int(payload.get("depth", 13)))),
@@ -74,12 +74,18 @@ def serialize_legal_moves(board: chess.Board) -> list[dict]:
 @app.get("/")
 def index() -> str:
     config = load_config()
+    bundled_engine = default_engine_path()
+    default_engine = bundled_engine or config.get("engine_path", "")
+    if getattr(sys, "frozen", False) and bundled_engine:
+        engine_path = bundled_engine
+    else:
+        engine_path = config.get("engine_path", "") or default_engine
     defaults = {
         "username": config.get("username", "trixize1234"),
         "time_classes": config.get("time_classes", "all"),
         "max_games": int(config.get("max_games", 0)),
         "lichess_token": config.get("lichess_token", ""),
-        "engine_path": config.get("engine_path", default_engine_path()),
+        "engine_path": engine_path,
         "depth": int(config.get("depth", 13)),
         "threads": int(config.get("threads", max(1, os.cpu_count() or 8))),
         "hash_mb": int(config.get("hash_mb", 2048)),
@@ -104,7 +110,7 @@ def profile() -> tuple:
         parsed_max_games = 0
     max_games = None if parsed_max_games <= 0 else max(1, min(20000, parsed_max_games))
     lichess_token = str(payload.get("lichess_token", "")).strip()
-    engine_path = str(payload.get("engine_path", "")).strip()
+    engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
 

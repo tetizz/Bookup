@@ -100,8 +100,12 @@ def _opening_library() -> ChessOpeningsLibrary | None:
         return OPENING_LIBRARY
     if ChessOpeningsLibrary is None:
         return None
-    library = ChessOpeningsLibrary()
-    library.load_builtin_openings()
+    try:
+        library = ChessOpeningsLibrary()
+        library.load_builtin_openings()
+    except Exception:
+        OPENING_LIBRARY = None
+        return None
     OPENING_LIBRARY = library
     return OPENING_LIBRARY
 
