@@ -61,6 +61,7 @@ const el = {
   boardTitle: document.getElementById("boardTitle"),
   boardSummary: document.getElementById("boardSummary"),
   trainerCoach: document.getElementById("trainerCoach"),
+  trainerDecision: document.getElementById("trainerDecision"),
   boardLine: document.getElementById("boardLine"),
   trainerFeedback: document.getElementById("trainerFeedback"),
   trainerReset: document.getElementById("trainerResetBtn"),
@@ -123,6 +124,13 @@ async function init() {
     const lessonId = target.dataset.lessonLaunch;
     if (lessonId) {
       launchLessonById(lessonId);
+      return;
+    }
+    const trainerMove = target.dataset.trainerMove;
+    if (trainerMove) {
+      const from = trainerMove.slice(0, 2);
+      const to = trainerMove.slice(2, 4);
+      void submitTrainerMove(from, to);
     }
   });
   document.addEventListener("pointerdown", unlockAudio);
@@ -759,6 +767,40 @@ function currentLesson() {
   return state.lessonMap[state.activeLessonId] || null;
 }
 
+function renderTrainerDecision(lesson) {
+  if (!lesson) {
+    el.trainerDecision.textContent = "No decision point loaded yet.";
+    el.trainerDecision.classList.add("empty");
+    return;
+  }
+  if (state.branchLocked || state.trainingCursor !== lessonRootCursor(lesson)) {
+    el.trainerDecision.textContent = "Bookup is inside a locked repertoire branch now.";
+    el.trainerDecision.classList.add("empty");
+    return;
+  }
+
+  const knownMoves = (lesson.discovery_nodes || [])
+    .filter((item) => item.has_branch_line)
+    .slice(0, 6);
+  const practicalMoves = (lesson.common_replies || [])
+    .slice(0, 5)
+    .map((item) => `${escapeHtml(item.san)} ${item.popularity}%`)
+    .join(" | ");
+
+  el.trainerDecision.classList.remove("empty");
+  el.trainerDecision.innerHTML = `
+    <div class="trainer-decision-copy">What would you play here? Pick your move on the board, or tap one of your known branches below.</div>
+    <div class="chip-row">
+      ${knownMoves.map((item) => `
+        <button class="launch-btn" type="button" data-trainer-move="${escapeHtml(item.uci)}">
+          ${escapeHtml(item.san)} ${item.is_preferred ? "(preferred)" : `${item.count}x`}
+        </button>
+      `).join("")}
+    </div>
+    <div class="line-note">Moves played from this position on Lichess: ${practicalMoves || "No explorer move data available."}</div>
+  `;
+}
+
 function trainerUserTurn(lesson, cursor = state.trainingCursor) {
   return (cursor % 2 === 0 && lesson?.color === "white") || (cursor % 2 === 1 && lesson?.color === "black");
 }
@@ -786,10 +828,15 @@ function updateTrainerCopy() {
       ? `Your repeated moves in this position: ${discoveryPreview}. Preferred move: ${lesson.best_reply}.`
       : `Preferred move here: ${lesson.best_reply}.`;
     el.trainerCoach.classList.remove("empty");
+    renderTrainerDecision(lesson);
+    el.trainerFeedback.textContent = "Your repertoire check: what would you play here?";
+    el.trainerFeedback.classList.remove("empty");
     el.boardLine.textContent = lesson.intro_line_san || "No lead-in moves loaded.";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
     return;
   }
+  el.trainerDecision.textContent = "Bookup is inside a locked repertoire branch now.";
+  el.trainerDecision.classList.add("empty");
   if (state.trainingCursor >= line.length) {
     el.boardSummary.textContent = "Line complete. Reset it or move on to the next due line.";
     el.trainerCoach.textContent = `Bookup locked this line after ${lesson.trigger_move} and ran the continuation to the end.`;
@@ -917,6 +964,8 @@ function clearTrainer() {
   state.branchLocked = false;
   el.trainerCoach.textContent = "Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.";
   el.trainerCoach.classList.remove("empty");
+  el.trainerDecision.textContent = "No decision point loaded yet.";
+  el.trainerDecision.classList.add("empty");
   renderCoords();
   renderBoard(START_FEN);
 }

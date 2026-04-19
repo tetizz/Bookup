@@ -435,7 +435,8 @@ input:focus {
 
 .line-preview,
 .board-line,
-.trainer-feedback {
+.trainer-feedback,
+.trainer-decision {
   border-radius: 16px;
   background: rgba(10, 15, 21, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -601,7 +602,8 @@ input:focus {
 }
 
 .board-line.empty,
-.trainer-feedback.empty {
+.trainer-feedback.empty,
+.trainer-decision.empty {
   color: var(--muted);
 }
 
@@ -609,6 +611,17 @@ input:focus {
   margin-top: 14px;
   color: var(--accent);
   line-height: 1.8;
+}
+
+.trainer-decision {
+  margin-top: 14px;
+  color: var(--text);
+  line-height: 1.8;
+}
+
+.trainer-decision-copy {
+  color: var(--text-strong);
+  margin-bottom: 10px;
 }
 
 .queue-meta {
