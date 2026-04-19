@@ -17,6 +17,19 @@ const PIECE_ASSETS = {
   q: "/static/pieces/cburnett/bQ.svg",
   k: "/static/pieces/cburnett/bK.svg",
 };
+const MOVE_CLASSIFICATION_ICONS = {
+  brilliant: "/static/move-classifications/brilliant.png",
+  great: "/static/move-classifications/great.png",
+  best: "/static/move-classifications/best.png",
+  excellent: "/static/move-classifications/excellent.png",
+  good: "/static/move-classifications/good.png",
+  book: "/static/move-classifications/book.svg",
+  inaccuracy: "/static/move-classifications/inaccuracy.png",
+  mistake: "/static/move-classifications/mistake.png",
+  blunder: "/static/move-classifications/blunder.png",
+  miss: "/static/move-classifications/miss.png",
+};
+window.BOOKUP_MOVE_CLASSIFICATION_ICONS = MOVE_CLASSIFICATION_ICONS;
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 const REVIEW_INTERVALS = [0, 1, 3, 7, 14];

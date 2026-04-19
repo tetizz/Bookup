@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Book move">
+  <circle cx="256" cy="256" r="256" fill="#d9aa7e"/>
+  <g transform="translate(0 10)">
+    <path d="M111 127h108c31 0 53 8 72 27v222c-22-18-42-25-72-25H111z" fill="#7f5d43"/>
+    <path d="M401 127H293c-31 0-53 8-72 27v222c22-18 42-25 72-25h108z" fill="#7f5d43"/>
+    <path d="M139 119h102c30 0 52 8 70 26v208c-20-16-40-22-70-22H139z" fill="#f7f7f7"/>
+    <path d="M373 119H271c-30 0-52 8-70 26v208c20-16 40-22 70-22h102z" fill="#f7f7f7"/>
+  </g>
+</svg>
