@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+import math
 from statistics import mean
 from typing import Any
 from urllib.parse import quote
@@ -34,6 +35,25 @@ PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
+MOVE_CLASSIFICATION_LABELS = {
+    "best": "Best",
+    "excellent": "Excellent",
+    "good": "Good",
+    "inaccuracy": "Inaccuracy",
+    "mistake": "Mistake",
+    "blunder": "Blunder",
+    "great": "Great",
+    "brilliant": "Brilliant",
+    "miss": "Miss",
+    "book": "Book",
+}
+EXPECTED_POINTS_BANDS = (
+    ("excellent", 0.02),
+    ("good", 0.05),
+    ("inaccuracy", 0.10),
+    ("mistake", 0.20),
+    ("blunder", 1.00),
+)
 
 
 @dataclass(slots=True)
@@ -102,6 +122,165 @@ def _score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
 
 def _clamp_cp(cp: int, limit: int = MAX_EXPLANATION_CP) -> int:
     return max(-limit, min(limit, int(cp)))
+
+
+def _expected_points_from_cp(cp: int) -> float:
+    clamped = max(-1200, min(1200, int(cp)))
+    return 1.0 / (1.0 + math.exp(-clamped / 220.0))
+
+
+def _expected_points_from_score(score: chess.engine.PovScore, turn: chess.Color, ply: int = 24) -> float:
+    pov_score = score.pov(turn)
+    for model in ("sf16", "sf15.1", "sf"):
+        try:
+            wdl = pov_score.wdl(model=model, ply=max(8, min(60, int(ply or 24))))
+            relative = getattr(wdl, "relative", wdl)
+            total = int(relative.wins) + int(relative.draws) + int(relative.losses)
+            if total:
+                return (float(relative.wins) + 0.5 * float(relative.draws)) / float(total)
+        except Exception:
+            continue
+    return _expected_points_from_cp(_score_cp(score, turn))
+
+
+def _material_balance(board: chess.Board, turn: chess.Color) -> int:
+    piece_values = {
+        chess.PAWN: 100,
+        chess.KNIGHT: 320,
+        chess.BISHOP: 330,
+        chess.ROOK: 500,
+        chess.QUEEN: 900,
+        chess.KING: 0,
+    }
+    score = 0
+    for piece in board.piece_map().values():
+        value = piece_values[piece.piece_type]
+        score += value if piece.color == turn else -value
+    return score
+
+
+def _move_material_drop(board: chess.Board, move: chess.Move) -> int:
+    before = _material_balance(board, board.turn)
+    after_board = board.copy(stack=False)
+    after_board.push(move)
+    after = _material_balance(after_board, board.turn)
+    return before - after
+
+
+def _classification_icon(key: str) -> str:
+    if key == "book":
+        return "/static/move-classifications/book.svg"
+    return f"/static/move-classifications/{key}.png"
+
+
+def _classification_payload(key: str, *, loss: float, reason: str, expected_points: float) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": MOVE_CLASSIFICATION_LABELS[key],
+        "icon": _classification_icon(key),
+        "expected_points_loss": round(float(loss), 4),
+        "expected_points": round(float(expected_points), 4),
+        "reason": reason,
+    }
+
+
+def _base_classification_key(loss: float, *, is_best_move: bool) -> str:
+    if is_best_move or loss <= 0.0005:
+        return "best"
+    for key, limit in EXPECTED_POINTS_BANDS:
+        if loss <= limit:
+            return key
+    return "blunder"
+
+
+def _base_classification_reason(key: str, *, best_move_san: str, move_san: str) -> str:
+    if key == "best":
+        return f"{move_san} is the engine's top move in this position."
+    if key == "excellent":
+        return f"{move_san} stays extremely close to the best move, {best_move_san}."
+    if key == "good":
+        return f"{move_san} is still solid, but it trails the best move {best_move_san} a little."
+    if key == "inaccuracy":
+        return f"{move_san} gives away a small amount compared with {best_move_san}."
+    if key == "mistake":
+        return f"{move_san} drops a meaningful amount against the best move {best_move_san}."
+    return f"{move_san} loses too much value compared with the best move {best_move_san}."
+
+
+def _classify_move_record(
+    board: chess.Board,
+    move_record: dict[str, Any],
+    best_record: dict[str, Any],
+    *,
+    second_loss: float = 0.0,
+    is_player_move: bool = False,
+) -> dict[str, Any]:
+    best_move_san = best_record.get("move", "")
+    move_san = move_record.get("move", "")
+    move_uci = move_record.get("uci", "")
+    loss = max(0.0, float(best_record.get("expected_points", 0.0)) - float(move_record.get("expected_points", 0.0)))
+    is_best_move = move_uci == best_record.get("uci") or loss <= 0.0005
+    key = _base_classification_key(loss, is_best_move=is_best_move)
+    reason = _base_classification_reason(key, best_move_san=best_move_san, move_san=move_san)
+
+    if is_best_move:
+        try:
+            move = chess.Move.from_uci(move_uci)
+        except ValueError:
+            move = None
+        if move is not None:
+            moved_piece = board.piece_at(move.from_square)
+            sacrifice = bool(
+                moved_piece
+                and moved_piece.piece_type != chess.PAWN
+                and _move_material_drop(board, move) >= 250
+            )
+            already_winning = float(best_record.get("expected_points", 0.0)) >= 0.92
+            sound_enough = float(best_record.get("expected_points", 0.0)) >= 0.45
+            if sacrifice and sound_enough and not already_winning:
+                key = "brilliant"
+                reason = (
+                    f"{move_san} is best or nearly best and gives up real material while keeping the position sound."
+                )
+            elif second_loss >= 0.10:
+                key = "great"
+                reason = (
+                    f"{move_san} is clearly the critical move here. The next-best option already gives away a lot."
+                )
+    elif is_player_move and float(best_record.get("expected_points", 0.0)) >= 0.75 and 0.05 <= loss <= 0.20:
+        key = "miss"
+        reason = (
+            f"{move_san} misses a stronger way to press the position. {best_move_san} keeps much more of the advantage."
+        )
+
+    return _classification_payload(
+        key,
+        loss=loss,
+        reason=reason,
+        expected_points=float(move_record.get("expected_points", 0.0)),
+    )
+
+
+def _annotate_candidate_classifications(board: chess.Board, candidate_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not candidate_lines:
+        return candidate_lines
+    best_record = candidate_lines[0]
+    best_expected = float(best_record.get("expected_points", 0.0))
+    second_loss = 0.0
+    if len(candidate_lines) > 1:
+        second_loss = max(0.0, best_expected - float(candidate_lines[1].get("expected_points", 0.0)))
+    for line in candidate_lines:
+        line["expected_points_loss"] = round(max(0.0, best_expected - float(line.get("expected_points", 0.0))), 4)
+    for line in candidate_lines:
+        line["classification"] = _classify_move_record(
+            board,
+            line,
+            best_record,
+            second_loss=second_loss,
+        )
+        line["classification_label"] = line["classification"]["label"]
+        line["classification_icon"] = line["classification"]["icon"]
+    return candidate_lines
 
 
 def _edge_label(cp: int) -> str:
@@ -451,6 +630,7 @@ def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, pla
                 "move": first_san,
                 "uci": first_move.uci(),
                 "score_cp": _score_cp(line["score"], board.turn),
+                "expected_points": _expected_points_from_score(line["score"], board.turn, engine.settings.depth),
                 "line_san": " ".join(continuation_san),
                 "line_uci": continuation_uci,
                 "purpose": _move_purpose(board, first_move),
@@ -458,6 +638,7 @@ def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, pla
                 "popularity": next((item["popularity"] for item in database_moves if item.get("uci") == first_move.uci()), 0.0),
             }
         )
+    candidate_lines = _annotate_candidate_classifications(board, candidate_lines)
 
     POSITION_INSIGHT_CACHE[cache_key] = {
         "candidate_lines": list(candidate_lines),
@@ -565,15 +746,41 @@ def build_position_insight(
             "database_moves": database_moves,
             "recommended_move": "",
             "recommended_move_uci": "",
+            "recommended_classification": None,
+            "your_move_classification": None,
             "coach_explanation": "No engine line is available for this position yet.",
             "position_identifier": _analysis_url_for_fen(board.fen()),
         }
+    your_move_classification = None
+    if your_move_uci:
+        your_line = next((line for line in candidate_lines if line["uci"] == your_move_uci), None)
+        if your_line is None:
+            your_line = _build_branch_line(
+                board,
+                your_move_uci,
+                your_move_san or your_move_uci,
+                engine,
+                source="repertoire",
+                repeated_count=your_move_count,
+                popularity=next((item["popularity"] for item in database_moves if item.get("uci") == your_move_uci), 0.0),
+            )
+        if your_line is not None:
+            second_loss = candidate_lines[1]["expected_points_loss"] if len(candidate_lines) > 1 else 0.0
+            your_move_classification = _classify_move_record(
+                board,
+                your_line,
+                best_line,
+                second_loss=second_loss,
+                is_player_move=True,
+            )
     return {
         "candidate_lines": candidate_lines,
         "threat_lines": _threat_lines_for_board(board, candidate_lines),
         "database_moves": database_moves,
         "recommended_move": best_line["move"],
         "recommended_move_uci": best_line["uci"],
+        "recommended_classification": best_line.get("classification"),
+        "your_move_classification": your_move_classification,
         "coach_explanation": _build_coach_explanation(
             board,
             best_move_uci=best_line["uci"],
@@ -622,6 +829,7 @@ def _build_branch_line(
         "move": move_san,
         "uci": move_uci,
         "score_cp": branch_score_cp,
+        "expected_points": _expected_points_from_score(line["score"], board.turn, engine.settings.depth),
         "line_san": " ".join(full_san),
         "line_uci": full_uci,
         "source": source,
@@ -716,6 +924,23 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
     preferred_branch = branch_by_uci.get(best_move_uci)
     if not preferred_branch:
         return {}
+    second_loss = candidate_lines[1]["expected_points_loss"] if len(candidate_lines) > 1 else 0.0
+    recommended_classification = root.get("classification") or _classify_move_record(
+        board,
+        root,
+        root,
+        second_loss=second_loss,
+    )
+    your_branch = branch_by_uci.get(top_played_uci) or next((line for line in candidate_lines if line["uci"] == top_played_uci), None)
+    your_move_classification = None
+    if your_branch:
+        your_move_classification = your_branch.get("classification") or _classify_move_record(
+            board,
+            your_branch,
+            root,
+            second_loss=second_loss,
+            is_player_move=True,
+        )
 
     locked_training_line_uci = [*node.play_uci, *preferred_branch["line_uci"]]
     locked_training_line_san = _uci_line_sans_from_start(locked_training_line_uci)
@@ -794,7 +1019,9 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "your_top_move_count": top_played_count,
         "value_lost_cp": value_lost_cp,
         "recommended_move": best_reply,
+        "recommended_classification": recommended_classification,
         "your_repeated_move": top_played,
+        "your_move_classification": your_move_classification,
         "common_replies": database_moves,
         "database_moves": database_moves,
         "discovery_nodes": discovery_nodes,
@@ -816,6 +1043,11 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
                 "uci": uci,
                 "count": count,
                 "pct": round((count / node.occurrences) * 100, 1) if node.occurrences else 0.0,
+                "classification": (
+                    your_move_classification
+                    if uci == top_played_uci
+                    else next((line.get("classification") for line in candidate_lines if line["uci"] == uci), None)
+                ),
             }
             for uci, count in node.player_moves.most_common(4)
         ],
@@ -876,6 +1108,8 @@ def _build_repertoire_map(lessons: list[dict[str, Any]]) -> dict[str, list[dict[
                 "candidate_lines": lesson["candidate_lines"],
                 "transposition_group_id": lesson["transposition_group_id"],
                 "coach_explanation": lesson["coach_explanation"],
+                "recommended_classification": lesson["recommended_classification"],
+                "your_move_classification": lesson["your_move_classification"],
                 "player_move_frequency": lesson["player_move_frequency"],
                 "continuation_san": lesson["continuation_san"],
             }
@@ -977,6 +1211,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "played": item["your_top_move"],
             "best_move": item["best_reply"],
             "value_lost_cp": item["value_lost_cp"],
+            "recommended_classification": item["recommended_classification"],
+            "played_classification": item["your_move_classification"],
             "position_fen": item["position_fen"],
             "position_identifier": item["position_identifier"],
             "position_identifier_label": item["position_identifier_label"],

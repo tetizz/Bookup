@@ -629,7 +629,10 @@ function renderRepertoireMapColumn(node, items, emptyText) {
           </div>
           <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
-        <div class="line-note">You usually play <strong>${escapeHtml(item.your_repeated_move || item.recommended_move)}</strong>. Stockfish recommends <strong>${escapeHtml(item.recommended_move)}</strong>.</div>
+        <div class="line-note">
+          You usually play <strong>${escapeHtml(item.your_repeated_move || item.recommended_move)}</strong>${classificationBadge(item.your_move_classification, "inline")}
+          . Stockfish recommends <strong>${escapeHtml(item.recommended_move)}</strong>${classificationBadge(item.recommended_classification, "inline")}.
+        </div>
         <div class="chip-row">
           <span class="lesson-chip">Frequency ${item.frequency}</span>
           <span class="lesson-chip">Confidence ${Math.round(item.confidence)}</span>
@@ -671,8 +674,8 @@ async function previewLessonById(lessonId) {
 function renderPreview(lesson, insight) {
   const enginePreview = (insight.candidate_lines || [])
     .slice(0, 5)
-    .map((line) => `${escapeHtml(line.move)} ${formatEval(line.score_cp)}`)
-    .join(" | ");
+    .map((line) => renderCandidateLineSummary(line))
+    .join("");
   const dbPreview = (insight.database_moves || [])
     .slice(0, 5)
     .map((line) => `${escapeHtml(line.san)} ${line.popularity}%`)
@@ -680,14 +683,17 @@ function renderPreview(lesson, insight) {
   el.previewPanel.innerHTML = `
     <div class="section-label">Preview</div>
     <h3 class="section-title">${escapeHtml(lesson.line_label || lesson.opening_name)}</h3>
-    <div class="line-note">You usually play <strong>${escapeHtml(lesson.your_repeated_move || lesson.best_reply)}</strong> here. Bookup recommends <strong>${escapeHtml(lesson.best_reply)}</strong>.</div>
+    <div class="line-note">
+      You usually play <strong>${escapeHtml(lesson.your_repeated_move || lesson.best_reply)}</strong>${classificationBadge(lesson.your_move_classification, "inline")}
+      here. Bookup recommends <strong>${escapeHtml(lesson.best_reply)}</strong>${classificationBadge(insight.recommended_classification || lesson.recommended_classification, "inline")}.
+    </div>
     <div class="chip-row">
       <span class="lesson-chip">Frequency ${lesson.frequency}</span>
       <span class="lesson-chip">Repeated ${lesson.your_top_move_count || 0}x</span>
       <span class="lesson-chip ${statusClass(lesson.line_status)}">${labelForStatus(lesson.line_status)}</span>
     </div>
     ${lesson.opening_name ? `<div class="line-note">${escapeHtml(lesson.opening_name)}${lesson.opening_code ? ` | ${escapeHtml(lesson.opening_code)}` : ""}</div>` : ""}
-    <div class="line-note">Top engine lines: ${enginePreview || "No engine candidates yet."}</div>
+    <div class="line-note">Top engine lines: <span class="candidate-line-list">${enginePreview || "No engine candidates yet."}</span></div>
     <div class="line-note">Common database moves: ${dbPreview || "No database move data available."}</div>
     <div class="line-preview">${escapeHtml(lesson.continuation_san || lesson.training_line_san || "")}</div>
     <div class="line-note">${escapeHtml(insight.coach_explanation || lesson.coach_explanation || lesson.explanation || "")}</div>
@@ -710,8 +716,8 @@ function renderImproveList(node, items, emptyText) {
     .map((item) => {
       const candidatePreview = (item.candidate_lines || [])
         .slice(0, 5)
-        .map((line) => `${escapeHtml(line.move)} (${formatEval(line.score_cp)})`)
-        .join(" | ");
+        .map((line) => renderCandidateLineSummary(line))
+        .join("");
       return `
       <article class="line-card">
         <div class="line-card-header">
@@ -721,8 +727,10 @@ function renderImproveList(node, items, emptyText) {
           </div>
           <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
-        <div class="line-note">Best continuation: <strong>${escapeHtml(item.best_reply)}</strong></div>
-        <div class="line-note">Top engine lines: ${candidatePreview || "No candidate lines available."}</div>
+        <div class="line-note">
+          Best continuation: <strong>${escapeHtml(item.best_reply)}</strong>${classificationBadge(item.recommended_classification, "inline")}
+        </div>
+        <div class="line-note">Top engine lines: <span class="candidate-line-list">${candidatePreview || "No candidate lines available."}</span></div>
         <div class="line-note">Repeated mistake count: ${item.repeat_mistake_count || 0}</div>
         <div class="chip-row">
           <span class="lesson-chip">Frequency ${item.frequency}</span>
@@ -787,6 +795,8 @@ function buildLessonInsight(lesson) {
     database_moves: Array.isArray(lesson?.database_moves) ? lesson.database_moves : [],
     recommended_move: lesson?.best_reply || "",
     recommended_move_uci: lesson?.best_reply_uci || "",
+    recommended_classification: lesson?.recommended_classification || null,
+    your_move_classification: lesson?.your_move_classification || null,
     coach_explanation: lesson?.coach_explanation || lesson?.explanation || "",
     position_identifier: lesson?.position_identifier || "",
     position_identifier_label: lesson?.position_identifier_label || "Lichess analysis",
@@ -825,7 +835,10 @@ function renderMistakes(items) {
           </div>
           <div class="line-badge needs-work">Needs work</div>
         </div>
-        <div class="mistake-copy">You usually play <strong>${escapeHtml(item.played)}</strong>, but the best continuation is <strong>${escapeHtml(item.best_move)}</strong>.</div>
+        <div class="mistake-copy">
+          You usually play <strong>${escapeHtml(item.played)}</strong>${classificationBadge(item.played_classification, "inline")},
+          but the best continuation is <strong>${escapeHtml(item.best_move)}</strong>${classificationBadge(item.recommended_classification, "inline")}.
+        </div>
         <div class="line-note">Repeated mistake count: ${item.repeat_mistake_count || 0}</div>
         <div class="line-note">${escapeHtml(item.explanation)}</div>
         <div class="line-preview">${escapeHtml(item.continuation_san || "")}</div>
@@ -1570,6 +1583,33 @@ function describeEdge(cp) {
   if (value < 120) return "Small edge";
   if (value < 250) return "Clear edge";
   return "Big edge";
+}
+
+function classificationKey(record) {
+  return String(record?.key || record?.label || "").trim().toLowerCase();
+}
+
+function classificationBadge(record, extraClass = "") {
+  const key = classificationKey(record);
+  const label = String(record?.label || "").trim();
+  if (!key || !label) return "";
+  const icon = MOVE_CLASSIFICATION_ICONS[key];
+  if (!icon) return "";
+  const title = escapeHtml(record?.reason || label);
+  return `
+    <span class="classification-badge ${escapeHtml(extraClass)} ${escapeHtml(key)}" title="${title}">
+      <img src="${icon}" alt="${escapeHtml(label)}" />
+      <span>${escapeHtml(label)}</span>
+    </span>
+  `;
+}
+
+function renderCandidateLineSummary(line) {
+  const badge = classificationBadge(line?.classification, "compact");
+  const move = escapeHtml(line?.move || "");
+  const evalText = formatEval(line?.score_cp);
+  if (!move) return "";
+  return `<span class="candidate-line">${badge}${move} ${evalText}</span>`;
 }
 
 function statusClass(status) {

@@ -423,6 +423,48 @@ input:focus {
   margin-top: 12px;
 }
 
+.classification-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(20, 28, 38, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-strong);
+  font-size: 11px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.classification-badge.inline {
+  margin-left: 8px;
+}
+
+.classification-badge.compact {
+  margin-right: 6px;
+  padding: 3px 7px;
+}
+
+.classification-badge img {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.candidate-line-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  vertical-align: middle;
+}
+
+.candidate-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .line-note,
 .mistake-copy,
 .reply-list,
