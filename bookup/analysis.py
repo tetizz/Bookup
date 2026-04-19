@@ -810,6 +810,8 @@ def _group_repertoire(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _build_repertoire_map(lessons: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     by_color: dict[str, list[dict[str, Any]]] = {"white": [], "black": []}
     for lesson in lessons:
+        if lesson["your_top_move_uci"] == lesson["best_reply_uci"]:
+            continue
         by_color[lesson["color"]].append(
             {
                 "lesson_id": lesson["lesson_id"],
