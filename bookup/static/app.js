@@ -1,5 +1,6 @@
 const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const PIECE_ASSETS = {
   P: "/static/pieces/cburnett/wP.svg",
   N: "/static/pieces/cburnett/wN.svg",
@@ -71,8 +72,8 @@ const state = {
   boardOrientation: "white",
   trainingCursor: 0,
   lessonMistakes: 0,
-  boardFen: "startpos",
-  startFen: "startpos",
+  boardFen: START_FEN,
+  startFen: START_FEN,
   legalMoves: [],
   legalByFrom: {},
   selectedSquare: "",
@@ -114,9 +115,31 @@ async function init() {
 
   syncImportScope();
   renderCoords();
-  renderBoard("startpos");
+  renderBoard(START_FEN);
   setActiveTab("setup");
   await bootstrapLocalState();
+}
+
+function normalizeFen(fen) {
+  return String(fen || "").trim() || START_FEN;
+}
+
+function rebuildLegalByFrom() {
+  state.legalByFrom = {};
+  state.legalMoves.forEach((move) => {
+    if (!state.legalByFrom[move.from]) state.legalByFrom[move.from] = [];
+    state.legalByFrom[move.from].push(move);
+  });
+}
+
+function applyBoardState(payload) {
+  state.boardFen = normalizeFen(payload?.fen || state.boardFen);
+  state.legalMoves = Array.isArray(payload?.legal_moves) ? payload.legal_moves : [];
+  rebuildLegalByFrom();
+  state.lastMove = payload?.last_move || null;
+  if (state.selectedSquare && !(state.legalByFrom[state.selectedSquare] || []).length) {
+    state.selectedSquare = "";
+  }
 }
 
 function clearDragState() {
@@ -243,7 +266,7 @@ function renderProfile(payload) {
   renderQueue();
 
   if (state.queue.length) {
-    loadLesson(state.queue[0].lesson_id);
+    loadLesson(0);
   } else {
     clearTrainer();
   }
@@ -463,9 +486,9 @@ function rebuildQueue() {
 
 function renderQueue() {
   if (!state.queue.length) {
-    el.lessonQueueMeta.textContent = "No review queue yet.";
+    el.lessonQueueMeta.textContent = "No repeated misses due right now.";
     el.lessonList.className = "stack empty";
-    el.lessonList.textContent = "No lessons yet.";
+    el.lessonList.textContent = "Bookup only queues repeated repertoire misses here. Import more games or launch a line from My Repertoire.";
     return;
   }
   const dueNow = state.queue.filter((item) => item.dueSoon).length;
@@ -549,19 +572,12 @@ async function applyMoveToBoard(moveUci) {
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not apply move.");
-  state.boardFen = payload.fen || state.boardFen;
-  state.legalMoves = payload.legal_moves || [];
-  state.legalByFrom = {};
-  state.legalMoves.forEach((item) => {
-    if (!state.legalByFrom[item.from]) state.legalByFrom[item.from] = [];
-    state.legalByFrom[item.from].push(item);
-  });
-  state.lastMove = payload.last_move || null;
+  applyBoardState(payload);
   renderBoard(state.boardFen);
   return payload;
 }
 
-async function advanceTrainerLine() {
+async function syncTrainerToPlayableTurn() {
   const lesson = currentLesson();
   if (!lesson) return;
   const line = lessonTrainingLine(lesson);
@@ -579,8 +595,8 @@ async function loadLesson(index) {
   state.lessonIndex = index;
   state.activeLessonId = lesson.lesson_id;
   state.boardOrientation = lesson.color === "black" ? "black" : "white";
-  state.startFen = lesson.line_start_fen || "startpos";
-  state.boardFen = lesson.line_start_fen || "startpos";
+  state.startFen = normalizeFen(lesson.line_start_fen);
+  state.boardFen = state.startFen;
   state.trainingCursor = 0;
   state.lessonMistakes = 0;
   state.selectedSquare = "";
@@ -594,7 +610,7 @@ async function loadLesson(index) {
   await refreshLegalMoves(state.boardFen);
   renderCoords();
   renderBoard(state.boardFen);
-  await advanceTrainerLine();
+  await syncTrainerToPlayableTurn();
   renderQueue();
   setActiveTab("trainer");
 }
@@ -619,10 +635,11 @@ function clearTrainer() {
   el.boardLine.classList.add("empty");
   el.trainerFeedback.textContent = "Choose a due line from the queue or launch one from a repertoire card.";
   el.trainerFeedback.classList.remove("empty");
-  state.boardFen = "startpos";
+  state.lessonIndex = -1;
+  state.boardFen = START_FEN;
   state.activeLessonId = "";
   state.boardOrientation = "white";
-  state.startFen = "startpos";
+  state.startFen = START_FEN;
   state.trainingCursor = 0;
   state.lessonMistakes = 0;
   state.legalMoves = [];
@@ -631,24 +648,18 @@ function clearTrainer() {
   state.dragFrom = "";
   state.lastMove = null;
   renderCoords();
-  renderBoard("startpos");
+  renderBoard(START_FEN);
 }
 
 async function refreshLegalMoves(fen = state.boardFen) {
   const response = await fetch("/api/legal-moves", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fen }),
+    body: JSON.stringify({ fen: normalizeFen(fen) }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load legal moves.");
-  state.boardFen = payload.fen;
-  state.legalMoves = payload.legal_moves || [];
-  state.legalByFrom = {};
-  state.legalMoves.forEach((move) => {
-    if (!state.legalByFrom[move.from]) state.legalByFrom[move.from] = [];
-    state.legalByFrom[move.from].push(move);
-  });
+  applyBoardState(payload);
 }
 
 function renderCoords() {
@@ -771,6 +782,9 @@ async function submitTrainerMove(from, to) {
     el.boardLine.textContent = lesson.training_line_san || lesson.continuation_san || "";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
     state.lastMove = null;
+    await applyMoveToBoard(expectedUci);
+    state.trainingCursor += 1;
+    await syncTrainerToPlayableTurn();
     rebuildQueue();
     renderQueue();
     return;
@@ -778,7 +792,7 @@ async function submitTrainerMove(from, to) {
 
   await applyMoveToBoard(move.uci);
   state.trainingCursor += 1;
-  await advanceTrainerLine();
+  await syncTrainerToPlayableTurn();
 
   const lineFinished = state.trainingCursor >= lessonTrainingLine(lesson).length;
   if (lineFinished) {
