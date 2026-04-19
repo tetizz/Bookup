@@ -29,7 +29,7 @@ EXPLORER_HEADERS = {
 }
 KNOWN_LINE_THRESHOLD = 100
 OPENING_PLIES = 16
-PV_LENGTH = 8
+PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 
 
@@ -381,7 +381,10 @@ def _common_replies(board: chess.Board, play_uci: list[str], best_reply_uci: str
 
 def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[str, Any]:
     board = chess.Board(node.position_fen)
-    root = engine.analyse(board, multipv=1)[0]
+    root_lines = engine.analyse(board, multipv=engine.settings.multipv)
+    if not root_lines:
+        return {}
+    root = root_lines[0]
     pv = root.get("pv") or []
     if not pv:
         return {}
@@ -424,10 +427,28 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
     training_line_san = _uci_line_sans_from_start(training_line_uci)
     intro_line_uci = list(node.play_uci)
     intro_line_san = _uci_line_sans_from_start(intro_line_uci)
+    candidate_lines = []
+    for line in root_lines[: engine.settings.multipv]:
+        line_pv = line.get("pv") or []
+        if not line_pv:
+            continue
+        first_move = line_pv[0]
+        first_san = board.san(first_move) if first_move in board.legal_moves else first_move.uci()
+        line_san, line_uci = _pv_sans(board, line_pv)
+        candidate_lines.append(
+            {
+                "move": first_san,
+                "uci": first_move.uci(),
+                "score_cp": _score_cp(line["score"], board.turn),
+                "line_san": " ".join(line_san),
+                "line_uci": line_uci,
+            }
+        )
+
     explanation = (
-        f"After {node.trigger_move}, Stockfish wants {best_reply} because it keeps the cleanest continuation."
+        f"After {node.trigger_move}, Stockfish prefers {best_reply} after checking the top {engine.settings.multipv} lines at depth {engine.settings.depth}."
         if top_played == best_reply
-        else f"After {node.trigger_move}, {best_reply} is stronger than your usual {top_played} and saves about {round(value_lost_cp / 100, 2)} pawns inside your current opening."
+        else f"After {node.trigger_move}, {best_reply} comes out best after checking the top {engine.settings.multipv} lines at depth {engine.settings.depth}; it scores better than your usual {top_played} by about {round(value_lost_cp / 100, 2)} pawns inside your opening."
     )
 
     return {
@@ -460,6 +481,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "your_top_move_count": top_played_count,
         "value_lost_cp": value_lost_cp,
         "common_replies": common_replies,
+        "candidate_lines": candidate_lines,
         "player_move_frequency": [
             {
                 "san": node.player_san[uci],

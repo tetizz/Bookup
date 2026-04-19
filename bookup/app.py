@@ -50,9 +50,10 @@ def build_engine_settings(payload: dict) -> EngineSettings:
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     return EngineSettings(
         path=engine_path,
-        depth=max(8, min(24, int(payload.get("depth", 13)))),
+        depth=max(10, min(28, int(payload.get("depth", 16)))),
         threads=max(1, min(max(1, os.cpu_count() or 8), int(payload.get("threads", max(1, os.cpu_count() or 8))))),
         hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
+        multipv=max(1, min(10, int(payload.get("multipv", 5)))),
     )
 
 
@@ -89,9 +90,10 @@ def index() -> str:
         "max_games": int(config.get("max_games", 0)),
         "lichess_token": config.get("lichess_token", ""),
         "engine_path": engine_path,
-        "depth": int(config.get("depth", 13)),
+        "depth": int(config.get("depth", 16)),
         "threads": int(config.get("threads", max(1, os.cpu_count() or 8))),
         "hash_mb": int(config.get("hash_mb", 2048)),
+        "multipv": int(config.get("multipv", 5)),
     }
     return render_template("index.html", defaults=defaults)
 
@@ -149,6 +151,7 @@ def profile() -> tuple:
             "depth": settings.depth,
             "threads": settings.threads,
             "hash_mb": settings.hash_mb,
+            "multipv": settings.multipv,
         }
     )
 

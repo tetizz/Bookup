@@ -28,6 +28,7 @@ const el = {
   lichessToken: document.getElementById("lichessTokenInput"),
   enginePath: document.getElementById("enginePathInput"),
   depth: document.getElementById("depthInput"),
+  multiPv: document.getElementById("multiPvInput"),
   threads: document.getElementById("threadsInput"),
   hash: document.getElementById("hashInput"),
   analyze: document.getElementById("analyzeBtn"),
@@ -93,7 +94,8 @@ async function init() {
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
   el.lichessToken.value = defaults.lichess_token || "";
   el.enginePath.value = defaults.engine_path || "";
-  el.depth.value = defaults.depth || 13;
+  el.depth.value = defaults.depth || 16;
+  el.multiPv.value = defaults.multipv || 5;
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
 
@@ -326,6 +328,7 @@ async function fetchProfilePayload(username) {
       lichess_token: el.lichessToken.value.trim(),
       engine_path: el.enginePath.value.trim(),
       depth: Number(el.depth.value),
+      multipv: Number(el.multiPv.value),
       threads: Number(el.threads.value),
       hash_mb: Number(el.hash.value),
     }),
@@ -483,6 +486,10 @@ function renderTreeNode(node) {
   const moveFreq = (node.player_move_frequency || [])
     .map((move) => `${escapeHtml(move.san)} ${move.count}x`)
     .join(" · ");
+  const candidatePreview = (node.candidate_lines || [])
+    .slice(0, 5)
+    .map((line) => `${escapeHtml(line.move)} (${formatCp(line.score_cp)})`)
+    .join(" · ");
   return `
     <div class="tree-node">
       <div class="line-card-header">
@@ -500,6 +507,7 @@ function renderTreeNode(node) {
       </div>
       <div class="line-note">Your current moves: ${moveFreq || "No move frequency yet."}</div>
       <div class="line-note">Common opponent replies: ${replies || "No Lichess reply data available."}</div>
+      <div class="line-note">Top engine lines: ${candidatePreview || "No candidate lines available."}</div>
       <div class="line-preview">${escapeHtml(node.continuation_san)}</div>
       <div class="line-note">${escapeHtml(node.explanation)}</div>
       <div class="chip-row">
@@ -518,7 +526,12 @@ function renderImproveList(node, items, emptyText) {
   }
   node.className = "stack";
   node.innerHTML = items
-    .map((item) => `
+    .map((item) => {
+      const candidatePreview = (item.candidate_lines || [])
+        .slice(0, 5)
+        .map((line) => `${escapeHtml(line.move)} (${formatCp(line.score_cp)})`)
+        .join(" · ");
+      return `
       <article class="line-card">
         <div class="line-card-header">
           <div>
@@ -528,6 +541,7 @@ function renderImproveList(node, items, emptyText) {
           <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
         <div class="line-note">Best continuation: <strong>${escapeHtml(item.best_reply)}</strong></div>
+        <div class="line-note">Top engine lines: ${candidatePreview || "No candidate lines available."}</div>
         <div class="chip-row">
           <span class="lesson-chip">Frequency ${item.frequency}</span>
           <span class="lesson-chip">Priority ${Math.round(item.priority)}</span>
@@ -540,7 +554,8 @@ function renderImproveList(node, items, emptyText) {
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
-    `)
+    `;
+    })
     .join("");
 }
 

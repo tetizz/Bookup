@@ -34,9 +34,10 @@ def default_engine_path() -> str:
 @dataclass(slots=True)
 class EngineSettings:
     path: str
-    depth: int = 13
+    depth: int = 16
     threads: int = 8
     hash_mb: int = 2048
+    multipv: int = 5
 
 
 class EngineSession:
@@ -59,6 +60,7 @@ class EngineSession:
             {
                 "Threads": max(1, int(self.settings.threads)),
                 "Hash": max(128, int(self.settings.hash_mb)),
+                "MultiPV": max(1, int(self.settings.multipv)),
             }
         )
 
@@ -75,11 +77,11 @@ class EngineSession:
         assert self._engine is not None
         return self._engine
 
-    def analyse(self, board: chess.Board, depth: int | None = None, multipv: int = 1) -> list[dict]:
+    def analyse(self, board: chess.Board, depth: int | None = None, multipv: int | None = None) -> list[dict]:
         info = self.engine.analyse(
             board,
             chess.engine.Limit(depth=depth or self.settings.depth),
-            multipv=max(1, multipv),
+            multipv=max(1, int(multipv or self.settings.multipv)),
             info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
         )
         if isinstance(info, dict):
