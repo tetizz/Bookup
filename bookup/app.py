@@ -186,6 +186,7 @@ def profile() -> tuple:
             "time_classes": sorted(normalized_time_classes) if normalized_time_classes else ["all public games"],
             "archives_found": len(archives),
             "games_imported": len(games),
+            "games": serialize_games(games),
             "explorer_enabled": bool(lichess_token),
             "explorer_notice": (
                 "Lichess explorer is authenticated and can be used for richer repertoire move popularity."
