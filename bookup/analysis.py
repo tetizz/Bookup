@@ -31,6 +31,7 @@ KNOWN_LINE_THRESHOLD = 100
 OPENING_PLIES = 16
 PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
+REPEATED_MISTAKE_THRESHOLD = 2
 
 
 @dataclass(slots=True)
@@ -354,29 +355,63 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
     return nodes, position_counts, opening_by_position
 
 
-def _common_replies(board: chess.Board, play_uci: list[str], best_reply_uci: str) -> list[dict[str, Any]]:
-    try:
-        best_move = chess.Move.from_uci(best_reply_uci)
-    except ValueError:
-        return []
-    if best_move not in board.legal_moves:
-        return []
-    board_after = board.copy(stack=False)
-    board_after.push(best_move)
-    explorer = _explorer_lookup(board_after, ",".join([*play_uci, best_reply_uci]))
+def _database_moves(board: chess.Board, play_uci: list[str], limit: int = 6) -> list[dict[str, Any]]:
+    explorer = _explorer_lookup(board, ",".join(play_uci))
     moves = explorer.get("moves") or []
     total = float(explorer.get("white", 0) or 0) + float(explorer.get("black", 0) or 0) + float(explorer.get("draws", 0) or 0)
     items = []
-    for item in moves[:4]:
+    for item in moves[:limit]:
         count = float(item.get("white", 0) or 0) + float(item.get("black", 0) or 0) + float(item.get("draws", 0) or 0)
         items.append(
             {
                 "san": item.get("san") or item.get("uci") or "",
+                "uci": item.get("uci") or "",
                 "games": int(count),
                 "popularity": round((count / total) * 100, 1) if total and count else 0.0,
             }
         )
     return items
+
+
+def _build_branch_line(
+    board: chess.Board,
+    move_uci: str,
+    move_san: str,
+    engine: EngineSession,
+    *,
+    source: str,
+    repeated_count: int = 0,
+    popularity: float = 0.0,
+    score_cp: int | None = None,
+) -> dict[str, Any] | None:
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        return None
+    if move not in board.legal_moves:
+        return None
+
+    branch_board = board.copy(stack=False)
+    branch_board.push(move)
+    analysis = engine.analyse(branch_board, depth=max(12, engine.settings.depth - 1), multipv=1)
+    if not analysis:
+        return None
+    line = analysis[0]
+    pv = line.get("pv") or []
+    continuation_san, continuation_uci = _pv_sans(branch_board, pv)
+    branch_score_cp = score_cp if score_cp is not None else _score_cp(line["score"], board.turn)
+    full_uci = [move_uci, *continuation_uci]
+    full_san = [move_san, *continuation_san]
+    return {
+        "move": move_san,
+        "uci": move_uci,
+        "score_cp": branch_score_cp,
+        "line_san": " ".join(full_san),
+        "line_uci": full_uci,
+        "source": source,
+        "repeated_count": repeated_count,
+        "popularity": popularity,
+    }
 
 
 def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[str, Any]:
@@ -418,32 +453,103 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             played_info = engine.analyse(played_board, multipv=1)[0]
             value_lost_cp = max(0, _score_cp(root["score"], board.turn) - _score_cp(played_info["score"], board.turn))
 
-    common_replies = _common_replies(board, node.play_uci, best_move.uci())
+    database_moves = _database_moves(board, node.play_uci)
     frequency = node.occurrences
-    importance = round(min(100.0, (frequency * 8) + max((common_replies[0]["popularity"] if common_replies else 0.0), 0.0) * 1.5), 1)
+    importance = round(min(100.0, (frequency * 8) + max((database_moves[0]["popularity"] if database_moves else 0.0), 0.0) * 1.5), 1)
     confidence = round(min(100.0, 35 + (frequency * 4)), 1)
     priority = round((frequency * 10) + min(value_lost_cp / 10, 60) + (25 if line_status == "needs_work" else 0) - (40 if is_known else 0), 1)
-    training_line_uci = [*node.play_uci, *continuation_uci]
-    training_line_san = _uci_line_sans_from_start(training_line_uci)
     intro_line_uci = list(node.play_uci)
     intro_line_san = _uci_line_sans_from_start(intro_line_uci)
     candidate_lines = []
+    branch_lines: list[dict[str, Any]] = []
+    branch_by_uci: dict[str, dict[str, Any]] = {}
     for line in root_lines[: engine.settings.multipv]:
         line_pv = line.get("pv") or []
         if not line_pv:
             continue
         first_move = line_pv[0]
         first_san = board.san(first_move) if first_move in board.legal_moves else first_move.uci()
-        line_san, line_uci = _pv_sans(board, line_pv)
-        candidate_lines.append(
-            {
-                "move": first_san,
-                "uci": first_move.uci(),
-                "score_cp": _score_cp(line["score"], board.turn),
-                "line_san": " ".join(line_san),
-                "line_uci": line_uci,
-            }
+        score_cp = _score_cp(line["score"], board.turn)
+        branch_record = _build_branch_line(
+            board,
+            first_move.uci(),
+            first_san,
+            engine,
+            source="engine",
+            repeated_count=node.player_moves.get(first_move.uci(), 0),
+            popularity=next((item["popularity"] for item in database_moves if item.get("uci") == first_move.uci()), 0.0),
+            score_cp=score_cp,
         )
+        if branch_record:
+            branch_by_uci[first_move.uci()] = branch_record
+            branch_lines.append(branch_record)
+            candidate_lines.append(
+                {
+                    "move": branch_record["move"],
+                    "uci": branch_record["uci"],
+                    "score_cp": branch_record["score_cp"],
+                    "line_san": branch_record["line_san"],
+                    "line_uci": branch_record["line_uci"],
+                    "source": branch_record["source"],
+                    "repeated_count": branch_record["repeated_count"],
+                    "popularity": branch_record["popularity"],
+                }
+            )
+
+    if top_played_count >= REPEATED_MISTAKE_THRESHOLD and top_played_uci not in branch_by_uci:
+        repertoire_branch = _build_branch_line(
+            board,
+            top_played_uci,
+            top_played,
+            engine,
+            source="repertoire",
+            repeated_count=top_played_count,
+            popularity=next((item["popularity"] for item in database_moves if item.get("uci") == top_played_uci), 0.0),
+        )
+        if repertoire_branch:
+            branch_by_uci[top_played_uci] = repertoire_branch
+            branch_lines.append(repertoire_branch)
+
+    preferred_branch = branch_by_uci.get(best_move.uci())
+    if not preferred_branch:
+        return {}
+
+    locked_training_line_uci = [*node.play_uci, *preferred_branch["line_uci"]]
+    locked_training_line_san = _uci_line_sans_from_start(locked_training_line_uci)
+    discovery_nodes = [
+        {
+            "san": move["san"],
+            "uci": move["uci"],
+            "count": move["count"],
+            "pct": move["pct"],
+            "is_preferred": move["uci"] == best_move.uci(),
+            "is_repertoire": move["count"] >= REPEATED_MISTAKE_THRESHOLD,
+            "has_branch_line": move["uci"] in branch_by_uci,
+        }
+        for move in [
+            {
+                "san": node.player_san[uci],
+                "uci": uci,
+                "count": count,
+                "pct": round((count / node.occurrences) * 100, 1) if node.occurrences else 0.0,
+            }
+            for uci, count in node.player_moves.most_common(4)
+        ]
+    ]
+    if best_move.uci() not in {item["uci"] for item in discovery_nodes}:
+        discovery_nodes.insert(
+            0,
+            {
+                "san": best_reply,
+                "uci": best_move.uci(),
+                "count": best_repeat_count,
+                "pct": round((best_repeat_count / node.occurrences) * 100, 1) if node.occurrences else 0.0,
+                "is_preferred": True,
+                "is_repertoire": best_repeat_count >= REPEATED_MISTAKE_THRESHOLD,
+                "has_branch_line": True,
+            },
+        )
+    repeat_mistake_count = top_played_count if top_played_uci != best_move.uci() else 0
 
     explanation = (
         f"After {node.trigger_move}, Stockfish prefers {best_reply} after checking the top {engine.settings.multipv} lines at depth {engine.settings.depth}."
@@ -462,16 +568,21 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "line_start_fen": chess.STARTING_FEN,
         "intro_line_uci": intro_line_uci,
         "intro_line_san": " ".join(intro_line_san),
-        "training_line_uci": training_line_uci,
-        "training_line_san": " ".join(training_line_san),
+        "training_line_uci": locked_training_line_uci,
+        "training_line_san": " ".join(locked_training_line_san),
         "target_ply_index": len(node.play_uci),
         "trigger_move": node.trigger_move,
         "best_reply": best_reply,
         "best_reply_uci": best_move.uci(),
-        "continuation_san": " ".join(continuation_san),
-        "continuation_moves_uci": continuation_uci,
+        "preferred_branch_san": preferred_branch["move"],
+        "preferred_branch_uci": preferred_branch["uci"],
+        "locked_training_line_san": " ".join(locked_training_line_san),
+        "locked_training_line_uci": locked_training_line_uci,
+        "continuation_san": preferred_branch["line_san"],
+        "continuation_moves_uci": preferred_branch["line_uci"],
         "line_status": line_status,
         "repeat_count": best_repeat_count,
+        "repeat_mistake_count": repeat_mistake_count,
         "frequency": frequency,
         "importance": importance,
         "confidence": confidence,
@@ -480,7 +591,19 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "your_top_move_uci": top_played_uci,
         "your_top_move_count": top_played_count,
         "value_lost_cp": value_lost_cp,
-        "common_replies": common_replies,
+        "common_replies": database_moves,
+        "discovery_nodes": discovery_nodes,
+        "transposition_targets": [
+            {
+                "uci": item["uci"],
+                "san": item["move"],
+                "source": item["source"],
+                "repeated_count": item["repeated_count"],
+                "popularity": item["popularity"],
+            }
+            for item in branch_lines
+        ],
+        "branch_lines": branch_lines,
         "candidate_lines": candidate_lines,
         "player_move_frequency": [
             {
@@ -584,15 +707,19 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     repeated_work_lines = [
         item
         for item in needs_work_lines
-        if item["your_top_move_count"] >= 2 or item["frequency"] >= 3
+        if item["repeat_mistake_count"] >= REPEATED_MISTAKE_THRESHOLD
     ]
-    queue_source = repeated_work_lines or needs_work_lines
-    urgent_lines = [item for item in queue_source if item["frequency"] >= 2 or item["value_lost_cp"] >= 60]
+    queue_due = sorted(repeated_work_lines, key=lambda item: (-item["priority"], -item["frequency"]))[:32]
+    queue_new = sorted(
+        [item for item in new_lines if item["repeat_count"] < KNOWN_LINE_THRESHOLD],
+        key=lambda item: (-item["frequency"], -item["priority"]),
+    )[:24]
+    urgent_lines = [item for item in repeated_work_lines if item["frequency"] >= REPEATED_MISTAKE_THRESHOLD or item["value_lost_cp"] >= 60]
     urgent_lines = sorted(urgent_lines, key=lambda item: (-item["priority"], -item["frequency"]))[:16]
     sidelines = [
         item
         for item in needs_work_lines
-        if item not in urgent_lines and (
+        if item not in urgent_lines and item["repeat_mistake_count"] >= REPEATED_MISTAKE_THRESHOLD and (
             any(0 < reply.get("popularity", 0) <= 10 for reply in item.get("common_replies", []))
             or item["frequency"] == 1
         )
@@ -611,18 +738,19 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "position_identifier_label": item["position_identifier_label"],
             "explanation": item["explanation"],
             "continuation_san": item["continuation_san"],
+            "repeat_mistake_count": item["repeat_mistake_count"],
         }
-        for item in sorted(needs_work_lines, key=lambda row: (-row["value_lost_cp"], -row["frequency"]))[:20]
+        for item in sorted(repeated_work_lines, key=lambda row: (-row["value_lost_cp"], -row["frequency"]))[:20]
     ]
-    trainer_queue = sorted(queue_source, key=lambda item: (-item["priority"], -item["frequency"]))[:48]
     repertoire_updates = _build_repertoire_updates(urgent_lines, known_lines)
+    known_line_archive = sorted(known_lines, key=lambda item: (-item["repeat_count"], -item["frequency"]))[:24]
 
     white_first = _first_move_repertoire(games, "white")
     black_first = _first_move_repertoire(games, "black")
     total_results = Counter(_classify_result(game.result) for game in games)
     win_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
     prep_summary = (
-        f"Bookup found {len(repertoire_tree)} opening families, {len(queue_source)} repeated lines that need work, and {len(new_lines)} lines you already play correctly. "
+        f"Bookup found {len(repertoire_tree)} opening families, {len(queue_due)} repeated lines that need work, and {len(new_lines)} lines you already play correctly. "
         "Import your games, learn the lines you actually reach, and drill the replies you still miss."
     )
 
@@ -631,7 +759,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "summary": {
             "win_rate": win_rate,
             "families": len(repertoire_tree),
-            "trainable_positions": len(trainer_queue),
+            "trainable_positions": len(queue_due) + len(queue_new),
             "known_lines": len(known_lines),
             "urgent_lines": len(urgent_lines),
             "prep_summary": prep_summary,
@@ -647,5 +775,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "sidelines": sidelines,
         "repertoire_updates": repertoire_updates,
         "opening_mistakes": opening_mistakes,
-        "trainer_queue": trainer_queue,
+        "trainer_queue_due": queue_due,
+        "trainer_queue_new": queue_new,
+        "trainer_queue": queue_due,
+        "known_line_archive": known_line_archive,
     }

@@ -164,6 +164,12 @@
         <h2 class="section-title">The positions you actually reach</h2>
         <div id="repertoireTree" class="stack empty">Your repertoire tree will show up here.</div>
       </section>
+
+      <section class="section-block">
+        <div class="section-label">Known Line Archive</div>
+        <h2 class="section-title">Lines you already know well enough to keep out of the urgent queue</h2>
+        <div id="knownArchiveList" class="stack empty">Known lines will show up here.</div>
+      </section>
     </section>
 
     <section class="workspace-panel" data-tab-panel="improve-repertoire">
@@ -212,6 +218,7 @@
             <div id="fileLabels" class="file-labels"></div>
           </div>
 
+          <div id="trainerCoach" class="trainer-feedback empty">Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.</div>
           <div id="boardLine" class="board-line empty">No line loaded yet.</div>
           <div id="trainerFeedback" class="trainer-feedback empty">Choose a due line from the queue or launch one from a repertoire card.</div>
         </section>
@@ -220,7 +227,10 @@
           <div class="section-label">Due Queue</div>
           <h2 class="section-title">Your next lines to review</h2>
           <div id="lessonQueueMeta" class="queue-meta">No review queue yet.</div>
-          <div id="lessonList" class="stack empty">No lessons yet.</div>
+          <div class="section-label">Due Today</div>
+          <div id="lessonListDue" class="stack empty">No due lines yet.</div>
+          <div class="section-label">New Later</div>
+          <div id="lessonListNew" class="stack empty">No new lines yet.</div>
         </section>
       </div>
     </section>
