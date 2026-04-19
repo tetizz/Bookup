@@ -557,12 +557,19 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     repertoire_tree = _group_repertoire(lessons)
     top_openings_by_color = _opening_lists(repertoire_tree)
     known_lines = [item for item in lessons if item["line_status"] == "known"]
-    non_known = [item for item in lessons if item["line_status"] != "known"]
-    urgent_lines = [item for item in non_known if item["frequency"] >= 2 or item["value_lost_cp"] >= 60]
+    needs_work_lines = [item for item in lessons if item["line_status"] == "needs_work"]
+    new_lines = [item for item in lessons if item["line_status"] == "new"]
+    repeated_work_lines = [
+        item
+        for item in needs_work_lines
+        if item["your_top_move_count"] >= 2 or item["frequency"] >= 3
+    ]
+    queue_source = repeated_work_lines or needs_work_lines
+    urgent_lines = [item for item in queue_source if item["frequency"] >= 2 or item["value_lost_cp"] >= 60]
     urgent_lines = sorted(urgent_lines, key=lambda item: (-item["priority"], -item["frequency"]))[:16]
     sidelines = [
         item
-        for item in non_known
+        for item in needs_work_lines
         if item not in urgent_lines and (
             any(0 < reply.get("popularity", 0) <= 10 for reply in item.get("common_replies", []))
             or item["frequency"] == 1
@@ -583,10 +590,9 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "explanation": item["explanation"],
             "continuation_san": item["continuation_san"],
         }
-        for item in sorted(non_known, key=lambda row: (-row["value_lost_cp"], -row["frequency"]))[:20]
-        if item["your_top_move"] != item["best_reply"]
+        for item in sorted(needs_work_lines, key=lambda row: (-row["value_lost_cp"], -row["frequency"]))[:20]
     ]
-    trainer_queue = sorted(non_known, key=lambda item: (-item["priority"], -item["frequency"]))[:48]
+    trainer_queue = sorted(queue_source, key=lambda item: (-item["priority"], -item["frequency"]))[:48]
     repertoire_updates = _build_repertoire_updates(urgent_lines, known_lines)
 
     white_first = _first_move_repertoire(games, "white")
@@ -594,7 +600,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     total_results = Counter(_classify_result(game.result) for game in games)
     win_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
     prep_summary = (
-        f"Bookup found {len(repertoire_tree)} opening families and {len(trainer_queue)} trainable positions. "
+        f"Bookup found {len(repertoire_tree)} opening families, {len(queue_source)} repeated lines that need work, and {len(new_lines)} lines you already play correctly. "
         "Import your games, learn the lines you actually reach, and drill the replies you still miss."
     )
 
