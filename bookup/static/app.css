@@ -481,6 +481,7 @@ input:focus {
 }
 
 .board-wrap {
+  position: relative;
   display: grid;
   grid-template-columns: 22px 560px;
   grid-template-rows: 560px 22px;
@@ -577,10 +578,26 @@ input:focus {
   touch-action: none;
   -webkit-user-drag: none;
   cursor: grab;
+  transition: opacity 0.18s ease;
 }
 
 .piece:active {
   cursor: grabbing;
+}
+
+.piece-arriving {
+  opacity: 0.18;
+}
+
+.piece-ghost {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  transform: translate(0, 0);
+  transition:
+    transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.2s ease;
+  will-change: transform, opacity;
 }
 
 .board-line.empty,

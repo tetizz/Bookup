@@ -1,6 +1,7 @@
 const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+let audioContext = null;
 const PIECE_ASSETS = {
   P: "/static/pieces/cburnett/wP.svg",
   N: "/static/pieces/cburnett/wN.svg",
@@ -50,6 +51,7 @@ const el = {
   mistakeList: document.getElementById("mistakeList"),
   lessonList: document.getElementById("lessonList"),
   lessonQueueMeta: document.getElementById("lessonQueueMeta"),
+  boardWrap: document.querySelector(".board-wrap"),
   board: document.getElementById("board"),
   rankLabels: document.getElementById("rankLabels"),
   fileLabels: document.getElementById("fileLabels"),
@@ -79,6 +81,7 @@ const state = {
   selectedSquare: "",
   dragFrom: "",
   lastMove: null,
+  previousRenderedPieces: {},
   reviewStats: {},
   games: [],
 };
@@ -110,6 +113,7 @@ async function init() {
       launchLessonById(lessonId);
     }
   });
+  document.addEventListener("pointerdown", unlockAudio);
   document.addEventListener("pointerup", handleGlobalPointerUp);
   document.addEventListener("pointercancel", clearDragState);
 
@@ -122,6 +126,25 @@ async function init() {
 
 function normalizeFen(fen) {
   return String(fen || "").trim() || START_FEN;
+}
+
+function pieceMapFromFen(fen) {
+  const boardPart = normalizeFen(fen).split(" ")[0] || "";
+  const rows = boardPart.split("/");
+  const map = {};
+  rows.forEach((row, rowIndex) => {
+    let fileIndex = 0;
+    row.split("").forEach((char) => {
+      if (/\d/.test(char)) {
+        fileIndex += Number(char);
+        return;
+      }
+      const square = `${files[fileIndex]}${8 - rowIndex}`;
+      map[square] = char;
+      fileIndex += 1;
+    });
+  });
+  return map;
 }
 
 function rebuildLegalByFrom() {
@@ -140,6 +163,106 @@ function applyBoardState(payload) {
   if (state.selectedSquare && !(state.legalByFrom[state.selectedSquare] || []).length) {
     state.selectedSquare = "";
   }
+}
+
+function unlockAudio() {
+  if (!window.AudioContext && !window.webkitAudioContext) return;
+  if (!audioContext) {
+    const Context = window.AudioContext || window.webkitAudioContext;
+    audioContext = new Context();
+  }
+  if (audioContext?.state === "suspended") {
+    void audioContext.resume();
+  }
+}
+
+function playTone({ frequency = 440, duration = 0.08, type = "sine", volume = 0.05, frequencyEnd = null }) {
+  unlockAudio();
+  if (!audioContext || audioContext.state !== "running") return;
+  const now = audioContext.currentTime;
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, now);
+  if (frequencyEnd && frequencyEnd !== frequency) {
+    oscillator.frequency.exponentialRampToValueAtTime(frequencyEnd, now + duration);
+  }
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  oscillator.connect(gain);
+  gain.connect(audioContext.destination);
+  oscillator.start(now);
+  oscillator.stop(now + duration + 0.02);
+}
+
+function playMoveSound(san, options = {}) {
+  if (options.error) {
+    playTone({ frequency: 220, frequencyEnd: 140, duration: 0.12, type: "sawtooth", volume: 0.045 });
+    return;
+  }
+  if (options.complete) {
+    playTone({ frequency: 520, frequencyEnd: 780, duration: 0.16, type: "triangle", volume: 0.05 });
+    window.setTimeout(() => playTone({ frequency: 660, frequencyEnd: 990, duration: 0.14, type: "triangle", volume: 0.04 }), 70);
+    return;
+  }
+  const notation = String(san || "");
+  if (!notation) {
+    playTone({ frequency: 420, frequencyEnd: 470, duration: 0.08, type: "triangle", volume: 0.03 });
+    return;
+  }
+  if (notation.includes("#") || notation.includes("+")) {
+    playTone({ frequency: 660, frequencyEnd: 900, duration: 0.12, type: "triangle", volume: 0.05 });
+    return;
+  }
+  if (notation.startsWith("O-O")) {
+    playTone({ frequency: 360, frequencyEnd: 560, duration: 0.1, type: "triangle", volume: 0.04 });
+    return;
+  }
+  if (notation.includes("x")) {
+    playTone({ frequency: 300, frequencyEnd: 220, duration: 0.1, type: "square", volume: 0.04 });
+    return;
+  }
+  playTone({ frequency: 480, frequencyEnd: 520, duration: 0.07, type: "sine", volume: 0.025 });
+}
+
+function animateLastMove(previousPieces) {
+  if (!state.lastMove || !el.boardWrap) return;
+  const { from, to } = state.lastMove;
+  const movedPiece = previousPieces[from];
+  if (!movedPiece) return;
+  const boardRect = el.boardWrap.getBoundingClientRect();
+  const fromSquare = el.board.querySelector(`[data-square="${from}"]`);
+  const toSquare = el.board.querySelector(`[data-square="${to}"]`);
+  if (!(fromSquare instanceof HTMLElement) || !(toSquare instanceof HTMLElement)) return;
+  const fromRect = fromSquare.getBoundingClientRect();
+  const toRect = toSquare.getBoundingClientRect();
+  const ghost = document.createElement("img");
+  ghost.className = "piece-ghost";
+  ghost.src = PIECE_ASSETS[movedPiece] || "";
+  ghost.alt = movedPiece;
+  ghost.style.left = `${fromRect.left - boardRect.left}px`;
+  ghost.style.top = `${fromRect.top - boardRect.top}px`;
+  ghost.style.width = `${fromRect.width}px`;
+  ghost.style.height = `${fromRect.height}px`;
+  el.boardWrap.appendChild(ghost);
+
+  const arrivingPiece = toSquare.querySelector(".piece");
+  if (arrivingPiece instanceof HTMLElement) {
+    arrivingPiece.classList.add("piece-arriving");
+  }
+
+  requestAnimationFrame(() => {
+    ghost.style.transform = `translate(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px)`;
+    ghost.style.opacity = "0";
+    if (arrivingPiece instanceof HTMLElement) {
+      arrivingPiece.classList.remove("piece-arriving");
+    }
+  });
+
+  window.setTimeout(() => {
+    ghost.remove();
+  }, 220);
 }
 
 function clearDragState() {
@@ -572,6 +695,7 @@ async function applyMoveToBoard(moveUci) {
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not apply move.");
+  playMoveSound(payload.played_san);
   applyBoardState(payload);
   renderBoard(state.boardFen);
   return payload;
@@ -647,6 +771,7 @@ function clearTrainer() {
   state.selectedSquare = "";
   state.dragFrom = "";
   state.lastMove = null;
+  state.previousRenderedPieces = {};
   renderCoords();
   renderBoard(START_FEN);
 }
@@ -671,6 +796,7 @@ function renderCoords() {
 
 function renderBoard(fen) {
   state.boardFen = fen || state.boardFen;
+  const previousPieces = state.previousRenderedPieces || {};
   const squares = parseFenBoard(state.boardFen);
   const displayFiles = state.boardOrientation === "black" ? [...files].reverse() : files;
   const displayRanks = state.boardOrientation === "black" ? [...ranks].reverse() : ranks;
@@ -720,6 +846,8 @@ function renderBoard(fen) {
     el.board.appendChild(square);
     });
   });
+  animateLastMove(previousPieces);
+  state.previousRenderedPieces = pieceMapFromFen(state.boardFen);
 }
 
 async function handleGlobalPointerUp(event) {
@@ -772,6 +900,7 @@ async function submitTrainerMove(from, to) {
   if (move.uci !== expectedUci) {
     state.lessonMistakes += 1;
     recordReview(lesson.lesson_id, false);
+    playMoveSound("", { error: true });
     const expectedSan = expectedEntry?.san || lesson.best_reply;
     const explanation =
       state.trainingCursor === (lesson.target_ply_index || 0)
@@ -801,6 +930,7 @@ async function submitTrainerMove(from, to) {
     }
     rebuildQueue();
     renderQueue();
+    playMoveSound("", { complete: true });
   }
 
   const successExplanation =
