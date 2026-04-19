@@ -145,7 +145,7 @@ async function init() {
     if (!(target instanceof HTMLElement)) return;
     const lessonId = target.dataset.lessonLaunch;
     if (lessonId) {
-      previewLessonById(lessonId);
+      loadLessonById(lessonId);
       return;
     }
     const previewTrain = target.dataset.previewTrain;
