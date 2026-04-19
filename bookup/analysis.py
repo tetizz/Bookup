@@ -33,6 +33,7 @@ OPENING_PLIES = 16
 PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 REPEATED_MISTAKE_THRESHOLD = 2
+MAX_EXPLANATION_CP = 600
 
 
 @dataclass(slots=True)
@@ -97,6 +98,31 @@ def _score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
             return 0
         return 100000 - abs(mate) if mate > 0 else -100000 + abs(mate)
     return int(pov.score(mate_score=100000) or 0)
+
+
+def _clamp_cp(cp: int, limit: int = MAX_EXPLANATION_CP) -> int:
+    return max(-limit, min(limit, int(cp)))
+
+
+def _edge_label(cp: int) -> str:
+    value = abs(int(cp))
+    if value < 40:
+        return "tiny edge"
+    if value < 120:
+        return "small edge"
+    if value < 250:
+        return "clear edge"
+    return "big edge"
+
+
+def _line_label(trigger_move: str, play_uci: list[str]) -> str:
+    intro = _uci_line_sans_from_start(play_uci)
+    if intro:
+        tail = " ".join(intro[-6:])
+        return f"After {tail}"
+    if trigger_move and trigger_move != "Start position":
+        return f"After {trigger_move}"
+    return "From the start position"
 
 
 def _safe_mean(values: list[float]) -> float:
@@ -458,24 +484,26 @@ def _build_coach_explanation(
     database_note = ""
     if database_moves:
         top_reply = database_moves[0]
-        database_note = f" The opponent move here appears in real games about {top_reply.get('popularity', 0)}% of the time."
+        popularity = top_reply.get("popularity", 0)
+        if popularity:
+            database_note = f" That reply shows up in about {popularity}% of the Lichess database."
     if your_move_uci and your_move_uci != best_move_uci:
         alt_line = next((line for line in candidate_lines if line["uci"] == your_move_uci), None)
-        best_score = best_line.get("score_cp", 0)
-        alt_score = alt_line.get("score_cp", best_score)
-        score_delta = round((best_score - alt_score) / 100, 2)
+        best_score = _clamp_cp(best_line.get("score_cp", 0))
+        alt_score = _clamp_cp(alt_line.get("score_cp", best_score) if alt_line else best_score)
+        score_delta = best_score - alt_score
         habit_note = f" You usually play {your_move_san or your_move_uci} here"
         if your_move_count:
             habit_note += f" ({your_move_count}x)"
         habit_note += "."
         return (
             f"{best_move_san} is best because it {purpose}."
-            f"{habit_note} Stockfish's top lines score {best_move_san} about {score_delta} pawns better here."
-            f" The main engine continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
+            f"{habit_note} Compared with {your_move_san or your_move_uci}, it keeps a {_edge_label(score_delta)} for your side."
+            f" The main continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
         )
     return (
         f"{best_move_san} is best because it {purpose}."
-        f" The main engine continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
+        f" The main continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
     )
 
 
@@ -539,7 +567,7 @@ def _build_branch_line(
 
     branch_board = board.copy(stack=False)
     branch_board.push(move)
-    analysis = engine.analyse(branch_board, depth=max(12, engine.settings.depth - 1), multipv=1)
+    analysis = engine.analyse(branch_board, depth=max(8, min(14, engine.settings.depth - 4)), multipv=1)
     if not analysis:
         return None
     line = analysis[0]
@@ -561,6 +589,9 @@ def _build_branch_line(
 
 
 def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[str, Any]:
+    if node.occurrences < REPEATED_MISTAKE_THRESHOLD:
+        return {}
+
     board = chess.Board(node.position_fen)
     insight = build_position_insight(
         board,
@@ -594,15 +625,14 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
 
     is_known = best_repeat_count >= KNOWN_LINE_THRESHOLD
     line_status = "known" if is_known else ("new" if top_played == best_reply else "needs_work")
+    if line_status == "needs_work" and top_played_count < REPEATED_MISTAKE_THRESHOLD:
+        return {}
 
     value_lost_cp = 0
     if top_played_uci != best_move_uci:
-        played_board = board.copy(stack=False)
-        played_move = chess.Move.from_uci(top_played_uci)
-        if played_move in played_board.legal_moves:
-            played_board.push(played_move)
-            played_info = engine.analyse(played_board, multipv=1)[0]
-            value_lost_cp = max(0, int(root["score_cp"]) - _score_cp(played_info["score"], board.turn))
+        compared_line = next((line for line in candidate_lines if line["uci"] == top_played_uci), None)
+        compared_score = compared_line["score_cp"] if compared_line else root["score_cp"]
+        value_lost_cp = max(0, _clamp_cp(root["score_cp"]) - _clamp_cp(compared_score))
 
     frequency = node.occurrences
     importance = round(min(100.0, (frequency * 8) + max((database_moves[0]["popularity"] if database_moves else 0.0), 0.0) * 1.5), 1)
@@ -653,7 +683,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             "uci": move["uci"],
             "count": move["count"],
             "pct": move["pct"],
-            "is_preferred": move["uci"] == best_move.uci(),
+            "is_preferred": move["uci"] == best_move_uci,
             "is_repertoire": move["count"] >= REPEATED_MISTAKE_THRESHOLD,
             "has_branch_line": move["uci"] in branch_by_uci,
         }
@@ -680,9 +710,10 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
                 "has_branch_line": True,
             },
         )
-    repeat_mistake_count = top_played_count if top_played_uci != best_move.uci() else 0
+    repeat_mistake_count = top_played_count if top_played_uci != best_move_uci else 0
 
     explanation = insight["coach_explanation"]
+    line_label = _line_label(node.trigger_move, node.play_uci)
 
     return {
         "lesson_id": f"{node.color}:{quote(node.key, safe='')[:48]}:{best_move_uci}",
@@ -691,6 +722,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "position_identifier_label": "Lichess analysis",
         "opening_name": node.opening_name,
         "opening_code": node.opening_code,
+        "line_label": line_label,
         "transposition_group_id": node.key,
         "color": node.color,
         "line_start_fen": chess.STARTING_FEN,
@@ -784,6 +816,7 @@ def _build_repertoire_map(lessons: list[dict[str, Any]]) -> dict[str, list[dict[
                 "position_fen": lesson["position_fen"],
                 "position_identifier": lesson["position_identifier"],
                 "position_identifier_label": lesson["position_identifier_label"],
+                "line_label": lesson["line_label"],
                 "opening_name": lesson["opening_name"],
                 "opening_code": lesson["opening_code"],
                 "trigger_move": lesson["trigger_move"],
@@ -832,8 +865,8 @@ def _build_repertoire_updates(urgent: list[dict[str, Any]], known_lines: list[di
     for lesson in urgent[:8]:
         updates.append(
             {
-                "title": f"Add {lesson['best_reply']} in {lesson['opening_name']}",
-                "detail": f"After {lesson['trigger_move']}, make {lesson['best_reply']} your default continuation.",
+                "title": lesson["line_label"],
+                "detail": f"After this position, make {lesson['best_reply']} your default continuation.",
                 "line": lesson["continuation_san"],
                 "lesson_id": lesson["lesson_id"],
                 "position_identifier": lesson["position_identifier"],
@@ -844,8 +877,8 @@ def _build_repertoire_updates(urgent: list[dict[str, Any]], known_lines: list[di
         lesson = known_lines[0]
         updates.append(
             {
-                "title": f"Keep {lesson['opening_name']} sharp",
-                "detail": f"You already know {lesson['best_reply']} after {lesson['trigger_move']}. Keep it in your maintenance queue.",
+                "title": lesson["line_label"],
+                "detail": f"You already know {lesson['best_reply']} here. Keep it in your maintenance queue.",
                 "line": lesson["continuation_san"],
                 "lesson_id": lesson["lesson_id"],
                 "position_identifier": lesson["position_identifier"],
@@ -863,7 +896,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         if lesson:
             lessons.append(lesson)
 
-    lessons.sort(key=lambda item: (-item["priority"], -item["frequency"], item["opening_name"]))
+    lessons.sort(key=lambda item: (-item["priority"], -item["frequency"], item["line_label"]))
     repertoire_map = _build_repertoire_map(lessons)
     repertoire_tree = _group_repertoire(lessons)
     top_openings_by_color = _opening_lists(repertoire_tree)
@@ -877,7 +910,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     ]
     queue_due = sorted(repeated_work_lines, key=lambda item: (-item["priority"], -item["frequency"]))[:32]
     queue_new = sorted(
-        [item for item in new_lines if item["repeat_count"] < KNOWN_LINE_THRESHOLD],
+        [item for item in new_lines if item["repeat_count"] < KNOWN_LINE_THRESHOLD and item["frequency"] >= REPEATED_MISTAKE_THRESHOLD],
         key=lambda item: (-item["frequency"], -item["priority"]),
     )[:24]
     urgent_lines = [item for item in repeated_work_lines if item["frequency"] >= REPEATED_MISTAKE_THRESHOLD or item["value_lost_cp"] >= 60]
@@ -893,6 +926,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     opening_mistakes = [
         {
             "lesson_id": item["lesson_id"],
+            "line_label": item["line_label"],
             "opening_name": item["opening_name"],
             "opening_code": item["opening_code"],
             "trigger_move": item["trigger_move"],

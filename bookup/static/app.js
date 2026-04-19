@@ -1,5 +1,6 @@
 const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
+const PROFILE_SCHEMA_VERSION = 2;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 let audioContext = null;
 const PIECE_ASSETS = {
@@ -111,7 +112,7 @@ async function init() {
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
   el.lichessToken.value = defaults.lichess_token || "";
   el.enginePath.value = defaults.engine_path || "";
-  el.depth.value = defaults.depth || 16;
+  el.depth.value = defaults.depth || 24;
   el.multiPv.value = defaults.multipv || 5;
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
@@ -439,10 +440,14 @@ async function bootstrapLocalState() {
     const response = await fetch(`/api/local-state?username=${encodeURIComponent(username)}`);
     const payload = await response.json();
     if (!response.ok) return;
-    if (payload.profile) {
+    const profile = payload.profile || {};
+    const snapshotLooksCurrent =
+      Number(payload.schema_version || 0) >= PROFILE_SCHEMA_VERSION &&
+      Boolean(profile.repertoire_map && Array.isArray(profile.trainer_queue_due));
+    if (snapshotLooksCurrent) {
       state.payload = {
         username: payload.username,
-        profile: payload.profile,
+        profile,
         games_imported: payload.games_imported || 0,
         archives_found: payload.archives_found || 0,
       };
@@ -455,6 +460,9 @@ async function bootstrapLocalState() {
           ? `Loaded your saved Bookup workspace for ${payload.username}.`
           : `Loaded local Bookup data for ${payload.username}.`
       );
+    } else if (payload.profile) {
+      state.reviewStats = payload.training_progress || {};
+      setStatus("Saved data is from an older Bookup version. Rebuild your repertoire to refresh it.");
     } else {
       state.reviewStats = loadReviewStats(username);
     }
@@ -484,7 +492,7 @@ function renderProfile(payload) {
   rebuildQueue();
 
   el.heroTitle.textContent = `${payload.username} repertoire ready`;
-  el.heroSummary.textContent = summary.prep_summary || "Your repertoire tree is ready to train.";
+  el.heroSummary.textContent = summary.prep_summary || "Your repertoire positions are ready to train.";
   el.summaryPositions.textContent = String(summary.positions ?? "--");
   el.summaryNeedsWork.textContent = String((profile.needs_work || []).length ?? "--");
   el.summaryQueue.textContent = String(summary.trainable_positions ?? "--");
@@ -548,8 +556,8 @@ function renderKnownArchive(items) {
       <article class="line-card">
         <div class="line-card-header">
           <div>
-            <div class="line-title">${escapeHtml(item.opening_name)}</div>
-            <div class="tree-meta">After ${escapeHtml(item.trigger_move)} -> ${escapeHtml(item.best_reply)}</div>
+            <div class="line-title">${escapeHtml(item.line_label || item.opening_name)}</div>
+            ${item.opening_name ? `<div class="tree-meta">${escapeHtml(item.opening_name)}${item.opening_code ? ` | ${escapeHtml(item.opening_code)}` : ""}</div>` : ""}
           </div>
           <div class="line-badge known">Known</div>
         </div>
@@ -575,8 +583,8 @@ function renderRepertoireMapColumn(node, items, emptyText) {
       <article class="opening-family-card repertoire-node-card">
         <div class="opening-family-header">
           <div>
-            <div class="opening-family-title">${index + 1}. ${escapeHtml(item.opening_name)}</div>
-            <div class="tree-meta">After ${escapeHtml(item.trigger_move)}${item.opening_code ? ` | ${escapeHtml(item.opening_code)}` : ""}</div>
+            <div class="opening-family-title">${index + 1}. ${escapeHtml(item.line_label || item.opening_name)}</div>
+            <div class="tree-meta">${escapeHtml(item.opening_name || "")}${item.opening_code ? ` | ${escapeHtml(item.opening_code)}` : ""}</div>
           </div>
           <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
@@ -613,28 +621,16 @@ async function previewLessonById(lessonId) {
   if (!lesson) return;
   state.previewLessonId = lessonId;
   el.previewPanel.classList.remove("empty");
-  el.previewPanel.innerHTML = `<div class="line-note">Loading preview...</div>`;
   setActiveTab("repertoire-map");
-  try {
-    const insight = await fetchPositionInsight(
-      lesson.position_fen,
-      lesson.intro_line_uci || [],
-      lesson.your_top_move_uci || "",
-      lesson.your_top_move || "",
-      lesson.your_top_move_count || 0
-    );
-    state.previewInsight = insight;
-    renderPreview(lesson, insight);
-  } catch (error) {
-    state.previewInsight = null;
-    el.previewPanel.innerHTML = `<div class="line-note">${escapeHtml(error.message || "Could not load preview.")}</div>`;
-  }
+  const insight = buildLessonInsight(lesson);
+  state.previewInsight = insight;
+  renderPreview(lesson, insight);
 }
 
 function renderPreview(lesson, insight) {
   const enginePreview = (insight.candidate_lines || [])
     .slice(0, 5)
-    .map((line) => `${escapeHtml(line.move)} ${formatCp(line.score_cp)}`)
+    .map((line) => `${escapeHtml(line.move)} ${formatEval(line.score_cp)}`)
     .join(" | ");
   const dbPreview = (insight.database_moves || [])
     .slice(0, 5)
@@ -642,13 +638,14 @@ function renderPreview(lesson, insight) {
     .join(" | ");
   el.previewPanel.innerHTML = `
     <div class="section-label">Preview</div>
-    <h3 class="section-title">${escapeHtml(lesson.opening_name)}</h3>
-    <div class="line-note">After ${escapeHtml(lesson.trigger_move)} | You usually play <strong>${escapeHtml(lesson.your_repeated_move || lesson.best_reply)}</strong> | Stockfish recommends <strong>${escapeHtml(lesson.best_reply)}</strong>.</div>
+    <h3 class="section-title">${escapeHtml(lesson.line_label || lesson.opening_name)}</h3>
+    <div class="line-note">You usually play <strong>${escapeHtml(lesson.your_repeated_move || lesson.best_reply)}</strong> here. Bookup recommends <strong>${escapeHtml(lesson.best_reply)}</strong>.</div>
     <div class="chip-row">
       <span class="lesson-chip">Frequency ${lesson.frequency}</span>
       <span class="lesson-chip">Repeated ${lesson.your_top_move_count || 0}x</span>
       <span class="lesson-chip ${statusClass(lesson.line_status)}">${labelForStatus(lesson.line_status)}</span>
     </div>
+    ${lesson.opening_name ? `<div class="line-note">${escapeHtml(lesson.opening_name)}${lesson.opening_code ? ` | ${escapeHtml(lesson.opening_code)}` : ""}</div>` : ""}
     <div class="line-note">Top engine lines: ${enginePreview || "No engine candidates yet."}</div>
     <div class="line-note">Common database moves: ${dbPreview || "No database move data available."}</div>
     <div class="line-preview">${escapeHtml(lesson.continuation_san || lesson.training_line_san || "")}</div>
@@ -672,14 +669,14 @@ function renderImproveList(node, items, emptyText) {
     .map((item) => {
       const candidatePreview = (item.candidate_lines || [])
         .slice(0, 5)
-        .map((line) => `${escapeHtml(line.move)} (${formatCp(line.score_cp)})`)
+        .map((line) => `${escapeHtml(line.move)} (${formatEval(line.score_cp)})`)
         .join(" | ");
       return `
       <article class="line-card">
         <div class="line-card-header">
           <div>
-            <div class="line-title">${escapeHtml(item.opening_name)}</div>
-            <div class="tree-meta">After ${escapeHtml(item.trigger_move)}</div>
+            <div class="line-title">${escapeHtml(item.line_label || item.opening_name)}</div>
+            <div class="tree-meta">${escapeHtml(item.opening_name || "")}</div>
           </div>
           <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
@@ -689,7 +686,7 @@ function renderImproveList(node, items, emptyText) {
         <div class="chip-row">
           <span class="lesson-chip">Frequency ${item.frequency}</span>
           <span class="lesson-chip">Priority ${Math.round(item.priority)}</span>
-          <span class="lesson-chip">Value lost ${formatCp(item.value_lost_cp)}</span>
+          <span class="lesson-chip">${describeEdge(item.value_lost_cp)}</span>
         </div>
         <div class="line-preview">${escapeHtml(item.continuation_san)}</div>
         <div class="line-note">${escapeHtml(item.explanation)}</div>
@@ -742,6 +739,18 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
   return payload;
 }
 
+function buildLessonInsight(lesson) {
+  return {
+    candidate_lines: Array.isArray(lesson?.candidate_lines) ? lesson.candidate_lines : [],
+    database_moves: Array.isArray(lesson?.database_moves) ? lesson.database_moves : [],
+    recommended_move: lesson?.best_reply || "",
+    recommended_move_uci: lesson?.best_reply_uci || "",
+    coach_explanation: lesson?.coach_explanation || lesson?.explanation || "",
+    position_identifier: lesson?.position_identifier || "",
+    position_identifier_label: lesson?.position_identifier_label || "Lichess analysis",
+  };
+}
+
 function addLessonToNeedsWork(lessonId) {
   if (!lessonId) return;
   if (!state.manualNeedsWork.includes(lessonId)) {
@@ -757,21 +766,22 @@ function addLessonToNeedsWork(lessonId) {
 }
 
 function renderMistakes(items) {
-  if (!items.length) {
+  const repeatedItems = items.filter((item) => (item.repeat_mistake_count || 0) >= 2);
+  if (!repeatedItems.length) {
     el.mistakeList.className = "stack empty";
     el.mistakeList.textContent = "No opening mistakes to review right now.";
     return;
   }
   el.mistakeList.className = "stack";
-  el.mistakeList.innerHTML = items
+  el.mistakeList.innerHTML = repeatedItems
     .map((item, index) => `
       <article class="mistake-card">
         <div class="mistake-header">
           <div>
-            <div class="mistake-title">${index + 1}. ${escapeHtml(item.opening_name)}</div>
-            <div class="tree-meta">After ${escapeHtml(item.trigger_move)}</div>
+            <div class="mistake-title">${index + 1}. ${escapeHtml(item.line_label || item.opening_name)}</div>
+            <div class="tree-meta">${escapeHtml(item.opening_name || "")}</div>
           </div>
-          <div class="line-badge needs-work">${formatCp(item.value_lost_cp)}</div>
+          <div class="line-badge needs-work">Needs work</div>
         </div>
         <div class="mistake-copy">You usually play <strong>${escapeHtml(item.played)}</strong>, but the best continuation is <strong>${escapeHtml(item.best_move)}</strong>.</div>
         <div class="line-note">Repeated mistake count: ${item.repeat_mistake_count || 0}</div>
@@ -830,8 +840,8 @@ function renderQueue() {
       <button class="queue-card ${lesson.lesson_id === currentLessonId() ? "active" : ""}" type="button" data-lesson-launch="${escapeHtml(lesson.lesson_id)}">
         <div class="queue-card-header">
           <div>
-            <div class="queue-title">${escapeHtml(lesson.opening_name)}</div>
-            <div class="tree-meta">After ${escapeHtml(lesson.trigger_move)} -> ${escapeHtml(lesson.best_reply)}</div>
+            <div class="queue-title">${escapeHtml(lesson.line_label || lesson.opening_name)}</div>
+            <div class="tree-meta">${escapeHtml(lesson.opening_name || "")} -> ${escapeHtml(lesson.best_reply)}</div>
           </div>
           <div class="line-badge ${statusClass(lesson.line_status)}">${index === 0 ? "Next" : labelForStatus(lesson.line_status)}</div>
         </div>
@@ -946,7 +956,7 @@ function updateTrainerCopy() {
   const expectedUci = expectedMoveAtCursor(lesson);
   const expectedEntry = (state.legalMoves || []).find((move) => move.uci === expectedUci);
   const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
-  const openingLabel = lesson.opening_code ? `${lesson.opening_name} | ${lesson.opening_code}` : lesson.opening_name;
+  const openingLabel = lesson.line_label || lesson.opening_name;
   el.boardTitle.textContent = openingLabel;
   if (!state.branchLocked && state.trainingCursor === lessonRootCursor(lesson)) {
     const discoveryPreview = (lesson.discovery_nodes || [])
@@ -981,7 +991,7 @@ function updateTrainerCopy() {
   } else {
     el.boardSummary.textContent = `Bookup is playing the line for the other side. Step ${progress}.`;
   }
-  el.trainerCoach.textContent = `Bookup is now training the locked branch inside ${lesson.opening_name}.`;
+  el.trainerCoach.textContent = `Bookup is now training the branch you reached from this position.`;
   el.trainerCoach.classList.remove("empty");
   el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
@@ -998,7 +1008,6 @@ async function applyMoveToBoard(moveUci) {
   playMoveSound(payload.played_san);
   applyBoardState(payload);
   renderBoard(state.boardFen);
-  await updateCurrentInsight();
   return payload;
 }
 
@@ -1015,6 +1024,7 @@ async function syncTrainerToPlayableTurn() {
       state.trainingCursor += 1;
     }
     updateTrainerCopy();
+    updateCurrentInsight();
     return;
   }
   while (state.trainingCursor < line.length && !trainerUserTurn(lesson)) {
@@ -1023,6 +1033,7 @@ async function syncTrainerToPlayableTurn() {
     state.trainingCursor += 1;
   }
   updateTrainerCopy();
+  updateCurrentInsight();
 }
 
 async function loadLessonById(lessonId) {
@@ -1051,7 +1062,7 @@ async function loadLessonById(lessonId) {
   await refreshLegalMoves(state.boardFen);
   renderCoords();
   renderBoard(state.boardFen);
-  await updateCurrentInsight();
+  updateCurrentInsight();
   await syncTrainerToPlayableTurn();
   renderQueue();
   setActiveTab("trainer");
@@ -1123,31 +1134,25 @@ function renderCoords() {
   el.fileLabels.innerHTML = fileOrder.map((file) => `<span>${file}</span>`).join("");
 }
 
-async function updateCurrentInsight() {
+function updateCurrentInsight() {
   const lesson = currentLesson();
-  if (!lesson || !state.boardFen || state.lessonIndex < 0) {
+  if (!lesson || !state.boardFen) {
     state.currentInsight = null;
     renderArrows([]);
+    el.trainerInsight.textContent = "Blue arrows show the top MultiPV engine moves for the current position.";
     return;
   }
-  try {
-    const insight = await fetchPositionInsight(
-      state.boardFen,
-      lesson.intro_line_uci || [],
-      lesson.your_top_move_uci || "",
-      lesson.your_top_move || "",
-      lesson.your_top_move_count || 0
-    );
+  if (!state.branchLocked && state.trainingCursor === lessonRootCursor(lesson)) {
+    const insight = buildLessonInsight(lesson);
     state.currentInsight = insight;
     renderArrows(insight.candidate_lines || []);
-    el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top MultiPV engine moves for the current position.";
-    el.trainerInsight.classList.remove("empty");
-  } catch {
+    el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top MultiPV engine moves for this repertoire choice.";
+  } else {
     state.currentInsight = null;
     renderArrows([]);
-    el.trainerInsight.textContent = "Position insight is unavailable for this board state right now.";
-    el.trainerInsight.classList.remove("empty");
+    el.trainerInsight.textContent = "Bookup is following the branch now. The arrows come back at the next repertoire choice.";
   }
+  el.trainerInsight.classList.remove("empty");
 }
 
 function renderBoard(fen) {
@@ -1463,6 +1468,22 @@ function formatCp(cp) {
   const pawns = Number(cp || 0) / 100;
   const sign = pawns > 0 ? "+" : "";
   return `${sign}${pawns.toFixed(2)} pawns`;
+}
+
+function formatEval(cp) {
+  const value = Number(cp || 0);
+  if (Math.abs(value) >= 9000) return value > 0 ? "winning" : "losing";
+  const pawns = Math.max(-6, Math.min(6, value / 100));
+  const sign = pawns > 0 ? "+" : "";
+  return `${sign}${pawns.toFixed(1)}`;
+}
+
+function describeEdge(cp) {
+  const value = Math.abs(Number(cp || 0));
+  if (value < 40) return "Tiny edge";
+  if (value < 120) return "Small edge";
+  if (value < 250) return "Clear edge";
+  return "Big edge";
 }
 
 function statusClass(status) {

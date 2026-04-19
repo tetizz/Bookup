@@ -60,7 +60,6 @@ class EngineSession:
             {
                 "Threads": max(1, int(self.settings.threads)),
                 "Hash": max(128, int(self.settings.hash_mb)),
-                "MultiPV": max(1, int(self.settings.multipv)),
             }
         )
 

@@ -25,6 +25,7 @@ RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
+PROFILE_SCHEMA_VERSION = 2
 
 app = Flask(
     __name__,
@@ -113,6 +114,7 @@ def local_state() -> tuple:
             "saved_at": snapshot.get("saved_at"),
             "training_progress": progress.get("lessons", {}),
             "training_summary": progress.get("summary", {}),
+            "schema_version": snapshot.get("schema_version", 0),
         }
     )
 
@@ -176,6 +178,7 @@ def profile() -> tuple:
     STORE.save_snapshot(
         username,
         {
+            "schema_version": PROFILE_SCHEMA_VERSION,
             "archives_found": len(archives),
             "games_imported": len(games),
             "games": serialize_games(games),
@@ -196,6 +199,7 @@ def profile() -> tuple:
                 if lichess_token
                 else "Add a Lichess token to use the live Lichess opening database for richer repertoire branching."
             ),
+            "schema_version": PROFILE_SCHEMA_VERSION,
             "profile": profile_data,
             "training_progress": progress.get("lessons", {}),
             "training_summary": progress.get("summary", {}),
