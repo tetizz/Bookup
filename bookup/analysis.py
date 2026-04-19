@@ -22,6 +22,7 @@ from .opening_names import lookup_by_board, lookup_by_eco
 OPENING_LIBRARY: ChessOpeningsLibrary | None = None
 ONLINE_OPENING_CACHE: dict[str, dict[str, str]] = {}
 EXPLORER_CACHE: dict[str, dict[str, Any]] = {}
+POSITION_INSIGHT_CACHE: dict[str, dict[str, Any]] = {}
 EXPLORER_AVAILABLE = True
 LICHESS_EXPLORER_URL = "https://explorer.lichess.ovh/lichess"
 EXPLORER_HEADERS = {
@@ -373,6 +374,151 @@ def _database_moves(board: chess.Board, play_uci: list[str], limit: int = 6) -> 
     return items
 
 
+def _move_purpose(board: chess.Board, move: chess.Move) -> str:
+    piece = board.piece_at(move.from_square)
+    if piece is None:
+        return "improves coordination"
+    san = board.san(move)
+    destination = chess.square_name(move.to_square)
+    if board.is_castling(move):
+        return "gets the king safe and connects the rooks"
+    if "+" in san or "#" in san:
+        return "creates forcing pressure against the king"
+    if board.is_capture(move):
+        return f"wins material or removes a defender on {destination}"
+    if piece.piece_type == chess.PAWN:
+        if destination in {"d4", "d5", "e4", "e5", "c4", "c5"}:
+            return f"claims central space with the pawn on {destination}"
+        return f"improves the pawn structure with {san}"
+    if piece.piece_type == chess.KNIGHT:
+        return f"improves the knight on {destination}"
+    if piece.piece_type == chess.BISHOP:
+        return f"activates the bishop toward {destination}"
+    if piece.piece_type == chess.ROOK:
+        return f"brings the rook onto a more active file or rank via {destination}"
+    if piece.piece_type == chess.QUEEN:
+        return f"improves the queen while keeping pressure on the position"
+    return "improves coordination"
+
+
+def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, play_uci: list[str] | None = None, limit: int = 5) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    play_uci = play_uci or []
+    cache_key = f"{board.epd()}|{','.join(play_uci)}|d{engine.settings.depth}|mpv{engine.settings.multipv}|{limit}"
+    if cache_key in POSITION_INSIGHT_CACHE:
+        cached = POSITION_INSIGHT_CACHE[cache_key]
+        return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", []))
+
+    root_lines = engine.analyse(board, multipv=max(limit, engine.settings.multipv))
+    database_moves = _database_moves(board, play_uci, limit=limit + 1)
+    candidate_lines: list[dict[str, Any]] = []
+    for line in root_lines[:limit]:
+        pv = line.get("pv") or []
+        if not pv:
+            continue
+        first_move = pv[0]
+        if first_move not in board.legal_moves:
+            continue
+        first_san = board.san(first_move)
+        continuation_san, continuation_uci = _pv_sans(board, pv)
+        candidate_lines.append(
+            {
+                "move": first_san,
+                "uci": first_move.uci(),
+                "score_cp": _score_cp(line["score"], board.turn),
+                "line_san": " ".join(continuation_san),
+                "line_uci": continuation_uci,
+                "purpose": _move_purpose(board, first_move),
+                "source": "engine",
+                "popularity": next((item["popularity"] for item in database_moves if item.get("uci") == first_move.uci()), 0.0),
+            }
+        )
+
+    POSITION_INSIGHT_CACHE[cache_key] = {
+        "candidate_lines": list(candidate_lines),
+        "database_moves": list(database_moves),
+    }
+    return candidate_lines, database_moves
+
+
+def _build_coach_explanation(
+    board: chess.Board,
+    *,
+    best_move_uci: str,
+    best_move_san: str,
+    candidate_lines: list[dict[str, Any]],
+    database_moves: list[dict[str, Any]],
+    your_move_uci: str = "",
+    your_move_san: str = "",
+    your_move_count: int = 0,
+) -> str:
+    best_line = next((line for line in candidate_lines if line["uci"] == best_move_uci), candidate_lines[0] if candidate_lines else None)
+    if best_line is None:
+        return f"{best_move_san} is the best move here."
+    purpose = best_line.get("purpose") or "improves the position"
+    database_note = ""
+    if database_moves:
+        top_reply = database_moves[0]
+        database_note = f" The opponent move here appears in real games about {top_reply.get('popularity', 0)}% of the time."
+    if your_move_uci and your_move_uci != best_move_uci:
+        alt_line = next((line for line in candidate_lines if line["uci"] == your_move_uci), None)
+        best_score = best_line.get("score_cp", 0)
+        alt_score = alt_line.get("score_cp", best_score)
+        score_delta = round((best_score - alt_score) / 100, 2)
+        habit_note = f" You usually play {your_move_san or your_move_uci} here"
+        if your_move_count:
+            habit_note += f" ({your_move_count}x)"
+        habit_note += "."
+        return (
+            f"{best_move_san} is best because it {purpose}."
+            f"{habit_note} Stockfish's top lines score {best_move_san} about {score_delta} pawns better here."
+            f" The main engine continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
+        )
+    return (
+        f"{best_move_san} is best because it {purpose}."
+        f" The main engine continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
+    )
+
+
+def build_position_insight(
+    board: chess.Board,
+    engine: EngineSession,
+    *,
+    play_uci: list[str] | None = None,
+    your_move_uci: str = "",
+    your_move_san: str = "",
+    your_move_count: int = 0,
+) -> dict[str, Any]:
+    candidate_lines, database_moves = _candidate_lines_for_board(board, engine, play_uci=play_uci, limit=5)
+    best_line = candidate_lines[0] if candidate_lines else None
+    if best_line is None:
+        return {
+            "candidate_lines": [],
+            "database_moves": database_moves,
+            "recommended_move": "",
+            "recommended_move_uci": "",
+            "coach_explanation": "No engine line is available for this position yet.",
+            "position_identifier": _analysis_url_for_fen(board.fen()),
+        }
+    return {
+        "candidate_lines": candidate_lines,
+        "database_moves": database_moves,
+        "recommended_move": best_line["move"],
+        "recommended_move_uci": best_line["uci"],
+        "coach_explanation": _build_coach_explanation(
+            board,
+            best_move_uci=best_line["uci"],
+            best_move_san=best_line["move"],
+            candidate_lines=candidate_lines,
+            database_moves=database_moves,
+            your_move_uci=your_move_uci,
+            your_move_san=your_move_san,
+            your_move_count=your_move_count,
+        ),
+        "position_identifier": _analysis_url_for_fen(board.fen()),
+        "position_identifier_label": "Lichess analysis",
+    }
+
+
 def _build_branch_line(
     board: chess.Board,
     move_uci: str,
@@ -416,26 +562,31 @@ def _build_branch_line(
 
 def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[str, Any]:
     board = chess.Board(node.position_fen)
-    root_lines = engine.analyse(board, multipv=engine.settings.multipv)
-    if not root_lines:
+    insight = build_position_insight(
+        board,
+        engine,
+        play_uci=node.play_uci,
+        your_move_uci=node.player_moves.most_common(1)[0][0] if node.player_moves else "",
+        your_move_san=node.player_san.get(node.player_moves.most_common(1)[0][0], "") if node.player_moves else "",
+        your_move_count=node.player_moves.most_common(1)[0][1] if node.player_moves else 0,
+    )
+    candidate_lines = insight["candidate_lines"]
+    database_moves = insight["database_moves"]
+    if not candidate_lines:
         return {}
-    root = root_lines[0]
-    pv = root.get("pv") or []
-    if not pv:
-        return {}
-    best_move = pv[0]
-    best_reply = board.san(best_move)
-    continuation_san, continuation_uci = _pv_sans(board, pv)
+    root = candidate_lines[0]
+    best_move_uci = root["uci"]
+    best_reply = root["move"]
     top_played_uci, top_played_count = node.player_moves.most_common(1)[0]
     top_played = node.player_san[top_played_uci]
-    best_repeat_count = node.player_moves.get(best_move.uci(), 0)
+    best_repeat_count = node.player_moves.get(best_move_uci, 0)
     # Keep repertoire work inside the opening family the user already plays.
     # If this is still a defining early fork and their main branch is at least as common
     # as the engine alternative,
     # do not turn "switch openings" into a trainer lesson.
     repertoire_locked = (
         node.ply_index <= REPERTOIRE_LOCK_PLIES
-        and top_played_uci != best_move.uci()
+        and top_played_uci != best_move_uci
         and top_played_count >= 2
     )
     if repertoire_locked:
@@ -445,56 +596,36 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
     line_status = "known" if is_known else ("new" if top_played == best_reply else "needs_work")
 
     value_lost_cp = 0
-    if top_played_uci != best_move.uci():
+    if top_played_uci != best_move_uci:
         played_board = board.copy(stack=False)
         played_move = chess.Move.from_uci(top_played_uci)
         if played_move in played_board.legal_moves:
             played_board.push(played_move)
             played_info = engine.analyse(played_board, multipv=1)[0]
-            value_lost_cp = max(0, _score_cp(root["score"], board.turn) - _score_cp(played_info["score"], board.turn))
+            value_lost_cp = max(0, int(root["score_cp"]) - _score_cp(played_info["score"], board.turn))
 
-    database_moves = _database_moves(board, node.play_uci)
     frequency = node.occurrences
     importance = round(min(100.0, (frequency * 8) + max((database_moves[0]["popularity"] if database_moves else 0.0), 0.0) * 1.5), 1)
     confidence = round(min(100.0, 35 + (frequency * 4)), 1)
     priority = round((frequency * 10) + min(value_lost_cp / 10, 60) + (25 if line_status == "needs_work" else 0) - (40 if is_known else 0), 1)
     intro_line_uci = list(node.play_uci)
     intro_line_san = _uci_line_sans_from_start(intro_line_uci)
-    candidate_lines = []
     branch_lines: list[dict[str, Any]] = []
     branch_by_uci: dict[str, dict[str, Any]] = {}
-    for line in root_lines[: engine.settings.multipv]:
-        line_pv = line.get("pv") or []
-        if not line_pv:
-            continue
-        first_move = line_pv[0]
-        first_san = board.san(first_move) if first_move in board.legal_moves else first_move.uci()
-        score_cp = _score_cp(line["score"], board.turn)
+    for line in candidate_lines[: engine.settings.multipv]:
         branch_record = _build_branch_line(
             board,
-            first_move.uci(),
-            first_san,
+            line["uci"],
+            line["move"],
             engine,
             source="engine",
-            repeated_count=node.player_moves.get(first_move.uci(), 0),
-            popularity=next((item["popularity"] for item in database_moves if item.get("uci") == first_move.uci()), 0.0),
-            score_cp=score_cp,
+            repeated_count=node.player_moves.get(line["uci"], 0),
+            popularity=next((item["popularity"] for item in database_moves if item.get("uci") == line["uci"]), 0.0),
+            score_cp=line["score_cp"],
         )
         if branch_record:
-            branch_by_uci[first_move.uci()] = branch_record
+            branch_by_uci[line["uci"]] = branch_record
             branch_lines.append(branch_record)
-            candidate_lines.append(
-                {
-                    "move": branch_record["move"],
-                    "uci": branch_record["uci"],
-                    "score_cp": branch_record["score_cp"],
-                    "line_san": branch_record["line_san"],
-                    "line_uci": branch_record["line_uci"],
-                    "source": branch_record["source"],
-                    "repeated_count": branch_record["repeated_count"],
-                    "popularity": branch_record["popularity"],
-                }
-            )
 
     if top_played_count >= REPEATED_MISTAKE_THRESHOLD and top_played_uci not in branch_by_uci:
         repertoire_branch = _build_branch_line(
@@ -510,7 +641,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             branch_by_uci[top_played_uci] = repertoire_branch
             branch_lines.append(repertoire_branch)
 
-    preferred_branch = branch_by_uci.get(best_move.uci())
+    preferred_branch = branch_by_uci.get(best_move_uci)
     if not preferred_branch:
         return {}
 
@@ -536,12 +667,12 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             for uci, count in node.player_moves.most_common(4)
         ]
     ]
-    if best_move.uci() not in {item["uci"] for item in discovery_nodes}:
+    if best_move_uci not in {item["uci"] for item in discovery_nodes}:
         discovery_nodes.insert(
             0,
             {
                 "san": best_reply,
-                "uci": best_move.uci(),
+                "uci": best_move_uci,
                 "count": best_repeat_count,
                 "pct": round((best_repeat_count / node.occurrences) * 100, 1) if node.occurrences else 0.0,
                 "is_preferred": True,
@@ -551,19 +682,16 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         )
     repeat_mistake_count = top_played_count if top_played_uci != best_move.uci() else 0
 
-    explanation = (
-        f"After {node.trigger_move}, Stockfish prefers {best_reply} after checking the top {engine.settings.multipv} lines at depth {engine.settings.depth}."
-        if top_played == best_reply
-        else f"After {node.trigger_move}, {best_reply} comes out best after checking the top {engine.settings.multipv} lines at depth {engine.settings.depth}; it scores better than your usual {top_played} by about {round(value_lost_cp / 100, 2)} pawns inside your opening."
-    )
+    explanation = insight["coach_explanation"]
 
     return {
-        "lesson_id": f"{node.color}:{quote(node.key, safe='')[:48]}:{best_move.uci()}",
+        "lesson_id": f"{node.color}:{quote(node.key, safe='')[:48]}:{best_move_uci}",
         "position_fen": node.position_fen,
         "position_identifier": _analysis_url_for_fen(node.position_fen),
         "position_identifier_label": "Lichess analysis",
         "opening_name": node.opening_name,
         "opening_code": node.opening_code,
+        "transposition_group_id": node.key,
         "color": node.color,
         "line_start_fen": chess.STARTING_FEN,
         "intro_line_uci": intro_line_uci,
@@ -573,7 +701,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "target_ply_index": len(node.play_uci),
         "trigger_move": node.trigger_move,
         "best_reply": best_reply,
-        "best_reply_uci": best_move.uci(),
+        "best_reply_uci": best_move_uci,
         "preferred_branch_san": preferred_branch["move"],
         "preferred_branch_uci": preferred_branch["uci"],
         "locked_training_line_san": " ".join(locked_training_line_san),
@@ -591,7 +719,10 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "your_top_move_uci": top_played_uci,
         "your_top_move_count": top_played_count,
         "value_lost_cp": value_lost_cp,
+        "recommended_move": best_reply,
+        "your_repeated_move": top_played,
         "common_replies": database_moves,
+        "database_moves": database_moves,
         "discovery_nodes": discovery_nodes,
         "transposition_targets": [
             {
@@ -614,6 +745,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             }
             for uci, count in node.player_moves.most_common(4)
         ],
+        "coach_explanation": explanation,
         "explanation": explanation,
     }
 
@@ -641,6 +773,39 @@ def _group_repertoire(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return repertoire
+
+
+def _build_repertoire_map(lessons: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_color: dict[str, list[dict[str, Any]]] = {"white": [], "black": []}
+    for lesson in lessons:
+        by_color[lesson["color"]].append(
+            {
+                "lesson_id": lesson["lesson_id"],
+                "position_fen": lesson["position_fen"],
+                "position_identifier": lesson["position_identifier"],
+                "position_identifier_label": lesson["position_identifier_label"],
+                "opening_name": lesson["opening_name"],
+                "opening_code": lesson["opening_code"],
+                "trigger_move": lesson["trigger_move"],
+                "recommended_move": lesson["recommended_move"],
+                "your_repeated_move": lesson["your_repeated_move"],
+                "repeat_count": lesson["repeat_count"],
+                "your_top_move_count": lesson["your_top_move_count"],
+                "frequency": lesson["frequency"],
+                "confidence": lesson["confidence"],
+                "priority": lesson["priority"],
+                "line_status": lesson["line_status"],
+                "database_moves": lesson["database_moves"],
+                "candidate_lines": lesson["candidate_lines"],
+                "transposition_group_id": lesson["transposition_group_id"],
+                "coach_explanation": lesson["coach_explanation"],
+                "player_move_frequency": lesson["player_move_frequency"],
+                "continuation_san": lesson["continuation_san"],
+            }
+        )
+    for color in by_color:
+        by_color[color].sort(key=lambda item: (-item["frequency"], -item["priority"], item["opening_name"]))
+    return by_color
 
 
 def _opening_lists(repertoire_tree: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -699,6 +864,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             lessons.append(lesson)
 
     lessons.sort(key=lambda item: (-item["priority"], -item["frequency"], item["opening_name"]))
+    repertoire_map = _build_repertoire_map(lessons)
     repertoire_tree = _group_repertoire(lessons)
     top_openings_by_color = _opening_lists(repertoire_tree)
     known_lines = [item for item in lessons if item["line_status"] == "known"]
@@ -750,15 +916,15 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     total_results = Counter(_classify_result(game.result) for game in games)
     win_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
     prep_summary = (
-        f"Bookup found {len(repertoire_tree)} opening families, {len(queue_due)} repeated lines that need work, and {len(new_lines)} lines you already play correctly. "
-        "Import your games, learn the lines you actually reach, and drill the replies you still miss."
+        f"Bookup found {len(lessons)} repeated repertoire positions, {len(queue_due)} due lines that need work, and {len(known_lines)} known lines already under control. "
+        "Import your games, train the branches you actually reach, and let the database plus Stockfish guide the replies."
     )
 
     return {
         "games_analyzed": len(games),
         "summary": {
             "win_rate": win_rate,
-            "families": len(repertoire_tree),
+            "positions": len(lessons),
             "trainable_positions": len(queue_due) + len(queue_new),
             "known_lines": len(known_lines),
             "urgent_lines": len(urgent_lines),
@@ -769,9 +935,11 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             "black": black_first,
         },
         "top_openings_by_color": top_openings_by_color,
+        "repertoire_map": repertoire_map,
         "repertoire_tree": repertoire_tree,
         "known_lines": known_lines,
         "urgent_lines": urgent_lines,
+        "needs_work": queue_due,
         "sidelines": sidelines,
         "repertoire_updates": repertoire_updates,
         "opening_mistakes": opening_mistakes,
@@ -779,4 +947,6 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "trainer_queue_new": queue_new,
         "trainer_queue": queue_due,
         "known_line_archive": known_line_archive,
+        "known_archive": known_line_archive,
+        "previewable_lines": lessons[:200],
     }

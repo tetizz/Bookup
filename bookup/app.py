@@ -12,7 +12,7 @@ import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import analyse_games, configure_lichess
+from .analysis import analyse_games, build_position_insight, configure_lichess
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .engine import EngineSession, EngineSettings, default_engine_path
 from .storage import LocalStore, serialize_games
@@ -50,7 +50,7 @@ def build_engine_settings(payload: dict) -> EngineSettings:
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     return EngineSettings(
         path=engine_path,
-        depth=max(10, min(28, int(payload.get("depth", 16)))),
+        depth=max(10, min(30, int(payload.get("depth", 24)))),
         threads=max(1, min(max(1, os.cpu_count() or 8), int(payload.get("threads", max(1, os.cpu_count() or 8))))),
         hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
         multipv=max(1, min(10, int(payload.get("multipv", 5)))),
@@ -90,7 +90,7 @@ def index() -> str:
         "max_games": int(config.get("max_games", 0)),
         "lichess_token": config.get("lichess_token", ""),
         "engine_path": engine_path,
-        "depth": int(config.get("depth", 16)),
+        "depth": int(config.get("depth", 24)),
         "threads": int(config.get("threads", max(1, os.cpu_count() or 8))),
         "hash_mb": int(config.get("hash_mb", 2048)),
         "multipv": int(config.get("multipv", 5)),
@@ -201,6 +201,42 @@ def profile() -> tuple:
             "training_summary": progress.get("summary", {}),
         }
     )
+
+
+@app.post("/api/position-insight")
+def position_insight() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    if not fen:
+        return jsonify({"error": "FEN is required."}), 400
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return jsonify({"error": "Invalid FEN."}), 400
+
+    config = load_config()
+    settings = build_engine_settings(config)
+    settings.depth = min(settings.depth, 16)
+    play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
+    your_move_uci = str(payload.get("your_move_uci", "")).strip()
+    your_move_san = str(payload.get("your_move_san", "")).strip()
+    your_move_count = int(payload.get("your_move_count", 0) or 0)
+    try:
+        with EngineSession(settings) as engine:
+            insight = build_position_insight(
+                board,
+                engine,
+                play_uci=play_uci,
+                your_move_uci=your_move_uci,
+                your_move_san=your_move_san,
+                your_move_count=your_move_count,
+            )
+    except FileNotFoundError:
+        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Position insight failed: {exc}"}), 500
+
+    return jsonify(insight)
 
 
 @app.post("/api/legal-moves")

@@ -484,8 +484,8 @@ input:focus {
 .board-wrap {
   position: relative;
   display: grid;
-  grid-template-columns: 22px 560px;
-  grid-template-rows: 560px 22px;
+  grid-template-columns: 22px 640px;
+  grid-template-rows: 640px 22px;
   margin-bottom: 18px;
 }
 
@@ -512,14 +512,26 @@ input:focus {
 
 .board-grid {
   display: grid;
-  grid-template-columns: repeat(8, 70px);
-  grid-template-rows: repeat(8, 70px);
-  width: 560px;
-  height: 560px;
+  grid-template-columns: repeat(8, 80px);
+  grid-template-rows: repeat(8, 80px);
+  width: 640px;
+  height: 640px;
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 18px 38px rgba(0, 0, 0, 0.28);
   touch-action: none;
+}
+
+.board-arrows {
+  grid-column: 2;
+  grid-row: 1;
+  width: 640px;
+  height: 640px;
+  position: absolute;
+  left: 22px;
+  top: 0;
+  pointer-events: none;
+  z-index: 3;
 }
 
 .square {
@@ -569,8 +581,8 @@ input:focus {
 }
 
 .piece {
-  width: 64px;
-  height: 64px;
+  width: 74px;
+  height: 74px;
   object-fit: contain;
   filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.28));
   position: relative;
@@ -619,6 +631,18 @@ input:focus {
   line-height: 1.8;
 }
 
+.preview-panel {
+  min-height: 220px;
+}
+
+.preview-panel.empty {
+  color: var(--muted);
+}
+
+.repertoire-node-card .line-note strong {
+  color: var(--text-strong);
+}
+
 .trainer-decision-copy {
   color: var(--text-strong);
   margin-bottom: 10px;
@@ -664,19 +688,25 @@ input:focus {
   }
 
   .board-wrap {
-    grid-template-columns: 18px 400px;
-    grid-template-rows: 400px 18px;
+    grid-template-columns: 18px 440px;
+    grid-template-rows: 440px 18px;
   }
 
   .board-grid {
-    width: 400px;
-    height: 400px;
-    grid-template-columns: repeat(8, 50px);
-    grid-template-rows: repeat(8, 50px);
+    width: 440px;
+    height: 440px;
+    grid-template-columns: repeat(8, 55px);
+    grid-template-rows: repeat(8, 55px);
+  }
+
+  .board-arrows {
+    width: 440px;
+    height: 440px;
+    left: 18px;
   }
 
   .piece {
-    width: 46px;
-    height: 46px;
+    width: 50px;
+    height: 50px;
   }
 }

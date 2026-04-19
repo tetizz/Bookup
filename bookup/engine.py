@@ -34,7 +34,7 @@ def default_engine_path() -> str:
 @dataclass(slots=True)
 class EngineSettings:
     path: str
-    depth: int = 16
+    depth: int = 24
     threads: int = 8
     hash_mb: int = 2048
     multipv: int = 5

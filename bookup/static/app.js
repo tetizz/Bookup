@@ -35,17 +35,17 @@ const el = {
   status: document.getElementById("status"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
-  summaryFamilies: document.getElementById("summaryFamilies"),
-  summaryUrgent: document.getElementById("summaryUrgent"),
+  summaryPositions: document.getElementById("summaryPositions"),
+  summaryNeedsWork: document.getElementById("summaryNeedsWork"),
   summaryQueue: document.getElementById("summaryQueue"),
   badgeGames: document.getElementById("badgeGames"),
   badgeKnown: document.getElementById("badgeKnown"),
   badgeWinRate: document.getElementById("badgeWinRate"),
   firstMoveWhite: document.getElementById("firstMoveWhite"),
   firstMoveBlack: document.getElementById("firstMoveBlack"),
-  openingListWhite: document.getElementById("openingListWhite"),
-  openingListBlack: document.getElementById("openingListBlack"),
-  repertoireTree: document.getElementById("repertoireTree"),
+  repertoireMapWhite: document.getElementById("repertoireMapWhite"),
+  repertoireMapBlack: document.getElementById("repertoireMapBlack"),
+  previewPanel: document.getElementById("previewPanel"),
   knownArchiveList: document.getElementById("knownArchiveList"),
   urgentList: document.getElementById("urgentList"),
   sidelineList: document.getElementById("sidelineList"),
@@ -56,12 +56,14 @@ const el = {
   lessonQueueMeta: document.getElementById("lessonQueueMeta"),
   boardWrap: document.querySelector(".board-wrap"),
   board: document.getElementById("board"),
+  boardArrows: document.getElementById("boardArrows"),
   rankLabels: document.getElementById("rankLabels"),
   fileLabels: document.getElementById("fileLabels"),
   boardTitle: document.getElementById("boardTitle"),
   boardSummary: document.getElementById("boardSummary"),
   trainerCoach: document.getElementById("trainerCoach"),
   trainerDecision: document.getElementById("trainerDecision"),
+  trainerInsight: document.getElementById("trainerInsight"),
   boardLine: document.getElementById("boardLine"),
   trainerFeedback: document.getElementById("trainerFeedback"),
   trainerReset: document.getElementById("trainerResetBtn"),
@@ -94,6 +96,10 @@ const state = {
   activeTrainingLine: [],
   activeTrainingLineSan: [],
   branchLocked: false,
+  previewLessonId: "",
+  previewInsight: null,
+  currentInsight: null,
+  manualNeedsWork: [],
   reviewStats: {},
   games: [],
 };
@@ -123,7 +129,17 @@ async function init() {
     if (!(target instanceof HTMLElement)) return;
     const lessonId = target.dataset.lessonLaunch;
     if (lessonId) {
-      launchLessonById(lessonId);
+      previewLessonById(lessonId);
+      return;
+    }
+    const previewTrain = target.dataset.previewTrain;
+    if (previewTrain) {
+      loadLessonById(previewTrain);
+      return;
+    }
+    const previewAdd = target.dataset.previewAddNeeds;
+    if (previewAdd) {
+      addLessonToNeedsWork(previewAdd);
       return;
     }
     const trainerMove = target.dataset.trainerMove;
@@ -295,6 +311,57 @@ function animateLastMove(previousPieces) {
   }, durationMs + 40);
 }
 
+function squareCenter(squareName) {
+  const square = el.board.querySelector(`[data-square="${squareName}"]`);
+  if (!(square instanceof HTMLElement)) return null;
+  return {
+    x: square.offsetLeft + square.offsetWidth / 2,
+    y: square.offsetTop + square.offsetHeight / 2,
+  };
+}
+
+function renderArrows(lines = []) {
+  if (!el.boardArrows || !el.boardWrap) return;
+  const width = el.board.clientWidth || 0;
+  const height = el.board.clientHeight || 0;
+  el.boardArrows.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  el.boardArrows.innerHTML = "";
+  if (!lines.length) return;
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+  marker.setAttribute("id", "engine-arrow-head");
+  marker.setAttribute("markerWidth", "12");
+  marker.setAttribute("markerHeight", "12");
+  marker.setAttribute("refX", "10");
+  marker.setAttribute("refY", "6");
+  marker.setAttribute("orient", "auto");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M0,0 L12,6 L0,12 Z");
+  path.setAttribute("fill", "rgba(84, 139, 255, 0.72)");
+  marker.appendChild(path);
+  defs.appendChild(marker);
+  el.boardArrows.appendChild(defs);
+
+  lines.slice(0, 5).forEach((line, index) => {
+    const uci = String(line.uci || "");
+    if (uci.length < 4) return;
+    const from = squareCenter(uci.slice(0, 2));
+    const to = squareCenter(uci.slice(2, 4));
+    if (!from || !to) return;
+    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    arrow.setAttribute("x1", String(from.x));
+    arrow.setAttribute("y1", String(from.y));
+    arrow.setAttribute("x2", String(to.x));
+    arrow.setAttribute("y2", String(to.y));
+    arrow.setAttribute("stroke", "rgba(84, 139, 255, 0.78)");
+    arrow.setAttribute("stroke-width", String(Math.max(5 - index * 0.65, 2.2)));
+    arrow.setAttribute("stroke-linecap", "round");
+    arrow.setAttribute("marker-end", "url(#engine-arrow-head)");
+    arrow.setAttribute("class", "engine-arrow");
+    el.boardArrows.appendChild(arrow);
+  });
+}
+
 function clearDragState() {
   if (!state.dragFrom) return;
   state.dragFrom = "";
@@ -380,6 +447,7 @@ async function bootstrapLocalState() {
         archives_found: payload.archives_found || 0,
       };
       state.reviewStats = payload.training_progress || {};
+      state.manualNeedsWork = payload.training_summary?.manual_needs_work || [];
       state.games = payload.games || [];
       renderProfile(state.payload);
       setStatus(
@@ -403,35 +471,43 @@ function renderProfile(payload) {
     ...(profile.trainer_queue_new || []),
     ...(profile.known_line_archive || []),
   ];
+  const seenLessonIds = new Set(state.lessons.map((lesson) => lesson.lesson_id));
+  (profile.previewable_lines || []).forEach((lesson) => {
+    if (!seenLessonIds.has(lesson.lesson_id)) {
+      state.lessons.push(lesson);
+      seenLessonIds.add(lesson.lesson_id);
+    }
+  });
   state.lessonMap = Object.fromEntries(state.lessons.map((lesson) => [lesson.lesson_id, lesson]));
   state.knownArchive = profile.known_line_archive || [];
+  state.manualNeedsWork = (payload.training_summary?.manual_needs_work || []);
   rebuildQueue();
 
   el.heroTitle.textContent = `${payload.username} repertoire ready`;
   el.heroSummary.textContent = summary.prep_summary || "Your repertoire tree is ready to train.";
-  el.summaryFamilies.textContent = String(summary.families ?? "--");
-  el.summaryUrgent.textContent = String(summary.urgent_lines ?? "--");
+  el.summaryPositions.textContent = String(summary.positions ?? "--");
+  el.summaryNeedsWork.textContent = String((profile.needs_work || []).length ?? "--");
   el.summaryQueue.textContent = String(summary.trainable_positions ?? "--");
   el.badgeGames.textContent = String(payload.games_imported ?? "--");
   el.badgeKnown.textContent = String(summary.known_lines ?? "--");
   el.badgeWinRate.textContent = typeof summary.win_rate === "number" ? `${summary.win_rate}%` : "--";
 
   renderFirstMoves(profile.first_move_repertoire || {});
-  renderOpeningFamilies(profile.top_openings_by_color || {});
-  renderRepertoireTree(profile.repertoire_tree || []);
+  renderRepertoireMap(profile.repertoire_map || {});
   renderKnownArchive(profile.known_line_archive || []);
-  renderImproveList(el.urgentList, profile.urgent_lines || [], "No urgent lines right now.");
-  renderImproveList(el.sidelineList, profile.sidelines || [], "No rare sidelines right now.");
+  renderImproveList(el.urgentList, state.queueDue, "No due lines right now.");
+  renderImproveList(el.sidelineList, state.queueNew, "No fresh lines waiting right now.");
   renderSuggestions(profile.repertoire_updates || []);
   renderMistakes(profile.opening_mistakes || []);
   renderQueue();
+  clearPreview();
 
   if (state.queueDue.length || state.queueNew.length) {
-    loadLessonById((state.queueDue[0] || state.queueNew[0]).lesson_id);
+    previewLessonById((state.queueDue[0] || state.queueNew[0]).lesson_id);
   } else {
     clearTrainer();
   }
-  setActiveTab("my-repertoire");
+  setActiveTab("repertoire-map");
 }
 
 function renderFirstMoves(data) {
@@ -458,11 +534,6 @@ function renderFirstMoveColumn(node, repertoire) {
       </article>
     `)
     .join("");
-}
-
-function renderOpeningFamilies(byColor) {
-  renderOpeningFamilyColumn(el.openingListWhite, byColor.white || [], "No white opening families yet.");
-  renderOpeningFamilyColumn(el.openingListBlack, byColor.black || [], "No black opening families yet.");
 }
 
 function renderKnownArchive(items) {
@@ -492,7 +563,7 @@ function renderKnownArchive(items) {
     .join("");
 }
 
-function renderOpeningFamilyColumn(node, items, emptyText) {
+function renderRepertoireMapColumn(node, items, emptyText) {
   if (!items.length) {
     node.className = "stack empty";
     node.textContent = emptyText;
@@ -501,81 +572,91 @@ function renderOpeningFamilyColumn(node, items, emptyText) {
   node.className = "stack";
   node.innerHTML = items
     .map((item, index) => `
-      <article class="opening-family-card">
+      <article class="opening-family-card repertoire-node-card">
         <div class="opening-family-header">
           <div>
-            <div class="opening-family-title">${index + 1}. ${escapeHtml(item.opening)}</div>
-            <div class="tree-meta">${escapeHtml(item.opening_code || "")}</div>
+            <div class="opening-family-title">${index + 1}. ${escapeHtml(item.opening_name)}</div>
+            <div class="tree-meta">After ${escapeHtml(item.trigger_move)}${item.opening_code ? ` | ${escapeHtml(item.opening_code)}` : ""}</div>
           </div>
-          <div class="line-badge">${item.count} positions</div>
+          <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
-        <div class="line-note">${item.trainable_count} trainable lines | ${item.known_count} known lines</div>
-        ${item.position_identifier ? `<div class="line-note"><a href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a></div>` : ""}
+        <div class="line-note">You usually play <strong>${escapeHtml(item.your_repeated_move || item.recommended_move)}</strong>. Stockfish recommends <strong>${escapeHtml(item.recommended_move)}</strong>.</div>
+        <div class="chip-row">
+          <span class="lesson-chip">Frequency ${item.frequency}</span>
+          <span class="lesson-chip">Confidence ${Math.round(item.confidence)}</span>
+          <span class="lesson-chip">Repeated ${item.your_top_move_count || 0}x</span>
+        </div>
+        <div class="line-note">${escapeHtml(item.coach_explanation || "")}</div>
+        <div class="chip-row">
+          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Preview line</button>
+          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
+        </div>
       </article>
     `)
     .join("");
 }
 
-function renderRepertoireTree(groups) {
-  if (!groups.length) {
-    el.repertoireTree.className = "stack empty";
-    el.repertoireTree.textContent = "Your repertoire tree will show up here.";
-    return;
+function renderRepertoireMap(mapByColor) {
+  renderRepertoireMapColumn(el.repertoireMapWhite, mapByColor.white || [], "No white repertoire positions yet.");
+  renderRepertoireMapColumn(el.repertoireMapBlack, mapByColor.black || [], "No black repertoire positions yet.");
+}
+
+function clearPreview() {
+  state.previewLessonId = "";
+  state.previewInsight = null;
+  el.previewPanel.classList.add("empty");
+  el.previewPanel.textContent = "Click a repertoire position to preview the line, blue engine arrows, database moves, and coaching before adding it to Needs Work or starting training.";
+}
+
+async function previewLessonById(lessonId) {
+  const lesson = state.lessonMap[lessonId];
+  if (!lesson) return;
+  state.previewLessonId = lessonId;
+  el.previewPanel.classList.remove("empty");
+  el.previewPanel.innerHTML = `<div class="line-note">Loading preview...</div>`;
+  setActiveTab("repertoire-map");
+  try {
+    const insight = await fetchPositionInsight(
+      lesson.position_fen,
+      lesson.intro_line_uci || [],
+      lesson.your_top_move_uci || "",
+      lesson.your_top_move || "",
+      lesson.your_top_move_count || 0
+    );
+    state.previewInsight = insight;
+    renderPreview(lesson, insight);
+  } catch (error) {
+    state.previewInsight = null;
+    el.previewPanel.innerHTML = `<div class="line-note">${escapeHtml(error.message || "Could not load preview.")}</div>`;
   }
-  el.repertoireTree.className = "stack";
-  el.repertoireTree.innerHTML = groups
-    .map((group) => `
-      <article class="card">
-        <div class="opening-family-header">
-          <div>
-            <div class="opening-family-title">${escapeHtml(group.opening_name)}</div>
-            <div class="tree-meta">${escapeHtml(group.color)} repertoire${group.opening_code ? ` | ${escapeHtml(group.opening_code)}` : ""}</div>
-          </div>
-          <div class="line-badge">${group.total_frequency}x</div>
-        </div>
-        <div class="tree-node-list">
-          ${(group.nodes || []).map(renderTreeNode).join("")}
-        </div>
-      </article>
-    `)
-    .join("");
 }
 
-function renderTreeNode(node) {
-  const replies = (node.common_replies || [])
-    .map((reply) => `${escapeHtml(reply.san)} ${reply.popularity}%`)
-    .join(" | ");
-  const moveFreq = (node.player_move_frequency || [])
-    .map((move) => `${escapeHtml(move.san)} ${move.count}x`)
-    .join(" | ");
-  const candidatePreview = (node.candidate_lines || [])
+function renderPreview(lesson, insight) {
+  const enginePreview = (insight.candidate_lines || [])
     .slice(0, 5)
-    .map((line) => `${escapeHtml(line.move)} (${formatCp(line.score_cp)})`)
+    .map((line) => `${escapeHtml(line.move)} ${formatCp(line.score_cp)}`)
     .join(" | ");
-  return `
-    <div class="tree-node">
-      <div class="line-card-header">
-        <div>
-          <div class="line-title">After ${escapeHtml(node.trigger_move)}, play ${escapeHtml(node.best_reply)}</div>
-          <div class="tree-meta">${escapeHtml(node.position_fen)}</div>
-        </div>
-        <div class="line-badge ${statusClass(node.line_status)}">${labelForStatus(node.line_status)}</div>
-      </div>
-      <div class="chip-row">
-        <span class="lesson-chip">Frequency ${node.frequency}</span>
-        <span class="lesson-chip">Importance ${node.importance}</span>
-        <span class="lesson-chip">Confidence ${node.confidence}</span>
-        <span class="lesson-chip">Best move played ${node.repeat_count}x</span>
-      </div>
-      <div class="line-note">Your current moves: ${moveFreq || "No move frequency yet."}</div>
-      <div class="line-note">Lichess moves played from this position: ${replies || "No Lichess move data available."}</div>
-      <div class="line-note">Top engine lines: ${candidatePreview || "No candidate lines available."}</div>
-      <div class="line-preview">${escapeHtml(node.continuation_san)}</div>
-      <div class="line-note">${escapeHtml(node.explanation)}</div>
-      <div class="chip-row">
-        <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(node.lesson_id)}">Train this line</button>
-        ${node.position_identifier ? `<a class="launch-btn" href="${node.position_identifier}" target="_blank" rel="noopener noreferrer">Lichess analysis</a>` : ""}
-      </div>
+  const dbPreview = (insight.database_moves || [])
+    .slice(0, 5)
+    .map((line) => `${escapeHtml(line.san)} ${line.popularity}%`)
+    .join(" | ");
+  el.previewPanel.innerHTML = `
+    <div class="section-label">Preview</div>
+    <h3 class="section-title">${escapeHtml(lesson.opening_name)}</h3>
+    <div class="line-note">After ${escapeHtml(lesson.trigger_move)} | You usually play <strong>${escapeHtml(lesson.your_repeated_move || lesson.best_reply)}</strong> | Stockfish recommends <strong>${escapeHtml(lesson.best_reply)}</strong>.</div>
+    <div class="chip-row">
+      <span class="lesson-chip">Frequency ${lesson.frequency}</span>
+      <span class="lesson-chip">Repeated ${lesson.your_top_move_count || 0}x</span>
+      <span class="lesson-chip ${statusClass(lesson.line_status)}">${labelForStatus(lesson.line_status)}</span>
+    </div>
+    <div class="line-note">Top engine lines: ${enginePreview || "No engine candidates yet."}</div>
+    <div class="line-note">Common database moves: ${dbPreview || "No database move data available."}</div>
+    <div class="line-preview">${escapeHtml(lesson.continuation_san || lesson.training_line_san || "")}</div>
+    <div class="line-note">${escapeHtml(insight.coach_explanation || lesson.coach_explanation || lesson.explanation || "")}</div>
+    <div class="chip-row">
+      <button class="launch-btn" type="button" data-previewAddNeeds="${escapeHtml(lesson.lesson_id)}">Add to Needs Work</button>
+      <button class="launch-btn" type="button" data-previewTrain="${escapeHtml(lesson.lesson_id)}">Start training</button>
+      ${lesson.position_identifier ? `<a class="launch-btn" href="${lesson.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(lesson.position_identifier_label || "Lichess analysis")}</a>` : ""}
     </div>
   `;
 }
@@ -613,7 +694,7 @@ function renderImproveList(node, items, emptyText) {
         <div class="line-preview">${escapeHtml(item.continuation_san)}</div>
         <div class="line-note">${escapeHtml(item.explanation)}</div>
         <div class="chip-row">
-          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Train this line</button>
+          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Preview line</button>
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
@@ -644,6 +725,37 @@ function renderSuggestions(items) {
     .join("");
 }
 
+async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMoveSan = "", yourMoveCount = 0) {
+  const response = await fetch("/api/position-insight", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fen,
+      play_uci: playUci,
+      your_move_uci: yourMoveUci,
+      your_move_san: yourMoveSan,
+      your_move_count: yourMoveCount,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not load position insight.");
+  return payload;
+}
+
+function addLessonToNeedsWork(lessonId) {
+  if (!lessonId) return;
+  if (!state.manualNeedsWork.includes(lessonId)) {
+    state.manualNeedsWork.push(lessonId);
+  }
+  rebuildQueue();
+  renderQueue();
+  if (state.payload?.username) {
+    saveReviewStats(state.payload.username);
+    void persistReviewStats(state.payload.username);
+  }
+  setActiveTab("needs-work");
+}
+
 function renderMistakes(items) {
   if (!items.length) {
     el.mistakeList.className = "stack empty";
@@ -666,7 +778,7 @@ function renderMistakes(items) {
         <div class="line-note">${escapeHtml(item.explanation)}</div>
         <div class="line-preview">${escapeHtml(item.continuation_san || "")}</div>
         <div class="chip-row">
-          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Train this position</button>
+          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Preview position</button>
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
@@ -679,12 +791,20 @@ function rebuildQueue() {
     const review = state.reviewStats[lesson.lesson_id] || defaultReviewState();
     const due = review.due_at || 0;
     const overdue = due <= Date.now();
-    const score = (overdue ? 1000 : 0) + lesson.priority - (review.streak || 0) * 10 + (review.last_result === "wrong" ? 120 : 0);
+    const manualBoost = state.manualNeedsWork.includes(lesson.lesson_id) ? 220 : 0;
+    const score = (overdue ? 1000 : 0) + lesson.priority + manualBoost - (review.streak || 0) * 10 + (review.last_result === "wrong" ? 120 : 0);
     return { ...lesson, review, dueSoon: overdue, queueScore: score };
   };
   state.queueDue = (state.payload?.profile?.trainer_queue_due || [])
     .map(enrich)
     .sort((a, b) => b.queueScore - a.queueScore);
+  const manualOnly = state.manualNeedsWork
+    .map((lessonId) => state.lessonMap[lessonId])
+    .filter(Boolean)
+    .filter((lesson) => !state.queueDue.some((item) => item.lesson_id === lesson.lesson_id) && lesson.line_status !== "known")
+    .map(enrich)
+    .sort((a, b) => b.queueScore - a.queueScore);
+  state.queueDue = [...manualOnly, ...state.queueDue];
   state.queueNew = (state.payload?.profile?.trainer_queue_new || [])
     .map(enrich)
     .sort((a, b) => b.priority - a.priority || b.frequency - a.frequency);
@@ -753,6 +873,16 @@ function lessonTrainingLine(lesson) {
 function lessonTrainingLineSan(lesson) {
   if (state.activeTrainingLineSan.length) return state.activeTrainingLineSan.filter(Boolean);
   return String(lesson?.training_line_san || "").trim().split(/\s+/).filter(Boolean);
+}
+
+function combineSanSegments(...segments) {
+  return segments
+    .map((segment) => String(segment || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 function lessonRootCursor(lesson) {
@@ -868,6 +998,7 @@ async function applyMoveToBoard(moveUci) {
   playMoveSound(payload.played_san);
   applyBoardState(payload);
   renderBoard(state.boardFen);
+  await updateCurrentInsight();
   return payload;
 }
 
@@ -920,6 +1051,7 @@ async function loadLessonById(lessonId) {
   await refreshLegalMoves(state.boardFen);
   renderCoords();
   renderBoard(state.boardFen);
+  await updateCurrentInsight();
   await syncTrainerToPlayableTurn();
   renderQueue();
   setActiveTab("trainer");
@@ -962,10 +1094,13 @@ function clearTrainer() {
   state.activeTrainingLine = [];
   state.activeTrainingLineSan = [];
   state.branchLocked = false;
+  state.currentInsight = null;
   el.trainerCoach.textContent = "Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.";
   el.trainerCoach.classList.remove("empty");
   el.trainerDecision.textContent = "No decision point loaded yet.";
   el.trainerDecision.classList.add("empty");
+  el.trainerInsight.textContent = "Blue arrows show the top MultiPV engine moves for the current position.";
+  el.trainerInsight.classList.remove("empty");
   renderCoords();
   renderBoard(START_FEN);
 }
@@ -986,6 +1121,33 @@ function renderCoords() {
   const fileOrder = state.boardOrientation === "black" ? [...files].reverse() : files;
   el.rankLabels.innerHTML = rankOrder.map((rank) => `<span>${rank}</span>`).join("");
   el.fileLabels.innerHTML = fileOrder.map((file) => `<span>${file}</span>`).join("");
+}
+
+async function updateCurrentInsight() {
+  const lesson = currentLesson();
+  if (!lesson || !state.boardFen || state.lessonIndex < 0) {
+    state.currentInsight = null;
+    renderArrows([]);
+    return;
+  }
+  try {
+    const insight = await fetchPositionInsight(
+      state.boardFen,
+      lesson.intro_line_uci || [],
+      lesson.your_top_move_uci || "",
+      lesson.your_top_move || "",
+      lesson.your_top_move_count || 0
+    );
+    state.currentInsight = insight;
+    renderArrows(insight.candidate_lines || []);
+    el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top MultiPV engine moves for the current position.";
+    el.trainerInsight.classList.remove("empty");
+  } catch {
+    state.currentInsight = null;
+    renderArrows([]);
+    el.trainerInsight.textContent = "Position insight is unavailable for this board state right now.";
+    el.trainerInsight.classList.remove("empty");
+  }
 }
 
 function renderBoard(fen) {
@@ -1042,6 +1204,7 @@ function renderBoard(fen) {
   });
   animateLastMove(previousPieces);
   state.previousRenderedPieces = pieceMapFromFen(state.boardFen);
+  renderArrows(state.currentInsight?.candidate_lines || []);
 }
 
 async function handleGlobalPointerUp(event) {
@@ -1095,7 +1258,7 @@ async function submitTrainerMove(from, to) {
     if (chosenBranch) {
       state.branchLocked = true;
       state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(chosenBranch.line_uci || [])];
-      state.activeTrainingLineSan = _uci_line_sans_from_start(state.activeTrainingLine);
+      state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, chosenBranch.line_san);
       await applyMoveToBoard(move.uci);
       state.trainingCursor = rootCursor + 1;
       if (move.uci === lesson.preferred_branch_uci) {
@@ -1118,7 +1281,7 @@ async function submitTrainerMove(from, to) {
     if (preferredBranch) {
       state.branchLocked = true;
       state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(preferredBranch.line_uci || [])];
-      state.activeTrainingLineSan = _uci_line_sans_from_start(state.activeTrainingLine);
+      state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, preferredBranch.line_san);
       await applyMoveToBoard(lesson.preferred_branch_uci);
       state.trainingCursor = rootCursor + 1;
       await syncTrainerToPlayableTurn();
@@ -1259,6 +1422,7 @@ function buildReviewSummary() {
     attempts_seen: seen,
     correct_attempts: correct,
     wrong_attempts: wrong,
+    manual_needs_work: state.manualNeedsWork,
     last_saved_at: new Date().toISOString(),
   };
 }

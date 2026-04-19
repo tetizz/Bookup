@@ -24,12 +24,12 @@
       </div>
       <div class="hero-stats">
         <div class="hero-stat">
-          <span>Families</span>
-          <strong id="summaryFamilies">--</strong>
+          <span>Positions</span>
+          <strong id="summaryPositions">--</strong>
         </div>
         <div class="hero-stat">
-          <span>Urgent</span>
-          <strong id="summaryUrgent">--</strong>
+          <span>Needs Work</span>
+          <strong id="summaryNeedsWork">--</strong>
         </div>
         <div class="hero-stat">
           <span>Queue</span>
@@ -42,10 +42,10 @@
   <main class="app-shell">
     <nav class="workspace-tabs">
       <button class="workspace-tab active" data-tab-target="setup">Setup</button>
-      <button class="workspace-tab" data-tab-target="my-repertoire">My Repertoire</button>
-      <button class="workspace-tab" data-tab-target="improve-repertoire">Improve Repertoire</button>
-      <button class="workspace-tab" data-tab-target="review-mistakes">Review Mistakes</button>
+      <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire Map</button>
+      <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
       <button class="workspace-tab" data-tab-target="trainer">Trainer</button>
+      <button class="workspace-tab" data-tab-target="review">Review</button>
     </nav>
 
     <section class="workspace-panel active" data-tab-panel="setup">
@@ -109,7 +109,7 @@
         <section class="card summary-card">
           <div class="section-label">Summary</div>
           <h2 id="heroTitle" class="section-title">No repertoire loaded yet</h2>
-          <p id="heroSummary" class="summary-copy">Run an import to build your opening families, trainer queue, and repertoire upgrades from the games you actually play.</p>
+          <p id="heroSummary" class="summary-copy">Run an import to build your repertoire map, needs-work queue, and trainable branches from the games you actually play.</p>
           <div class="summary-grid">
             <div class="summary-metric">
               <span>Games</span>
@@ -128,7 +128,7 @@
       </div>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="my-repertoire">
+    <section class="workspace-panel" data-tab-panel="repertoire-map">
       <section class="section-block">
         <div class="section-label">First Moves</div>
         <h2 class="section-title">How your repertoire starts</h2>
@@ -145,24 +145,24 @@
       </section>
 
       <section class="section-block">
-        <div class="section-label">Opening Families</div>
-        <h2 class="section-title">Named openings first, ECO second</h2>
+        <div class="section-label">Repertoire Map</div>
+        <h2 class="section-title">Positions and branches you actually reach</h2>
         <div class="split-grid">
           <article class="card">
             <h3>White repertoire</h3>
-            <div id="openingListWhite" class="stack empty">No white opening families yet.</div>
+            <div id="repertoireMapWhite" class="stack empty">No white repertoire positions yet.</div>
           </article>
           <article class="card">
             <h3>Black repertoire</h3>
-            <div id="openingListBlack" class="stack empty">No black opening families yet.</div>
+            <div id="repertoireMapBlack" class="stack empty">No black repertoire positions yet.</div>
           </article>
         </div>
       </section>
 
       <section class="section-block">
-        <div class="section-label">Repertoire Tree</div>
-        <h2 class="section-title">The positions you actually reach</h2>
-        <div id="repertoireTree" class="stack empty">Your repertoire tree will show up here.</div>
+        <div class="section-label">Preview</div>
+        <h2 class="section-title">Inspect a branch before you train it</h2>
+        <div id="previewPanel" class="card preview-panel empty">Click a repertoire position to preview the line, blue engine arrows, database moves, and coaching before adding it to Needs Work or starting training.</div>
       </section>
 
       <section class="section-block">
@@ -172,27 +172,27 @@
       </section>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="improve-repertoire">
+    <section class="workspace-panel" data-tab-panel="needs-work">
       <section class="section-block">
-        <div class="section-label">Most Urgent Lines To Learn</div>
-        <div id="urgentList" class="stack empty">Urgent lines will show up here.</div>
+        <div class="section-label">Due Today</div>
+        <div id="urgentList" class="stack empty">Due lines will show up here.</div>
       </section>
 
       <section class="section-block">
-        <div class="section-label">Rare Sidelines</div>
-        <div id="sidelineList" class="stack empty">Rare sidelines will show up here.</div>
+        <div class="section-label">New Later</div>
+        <div id="sidelineList" class="stack empty">Fresh lines will show up here.</div>
       </section>
 
       <section class="section-block">
-        <div class="section-label">Engine-Approved Repertoire Updates</div>
-        <div id="suggestionList" class="stack empty">Engine-approved repertoire updates will show up here.</div>
+        <div class="section-label">Suggested Upgrades</div>
+        <div id="suggestionList" class="stack empty">Suggested repertoire upgrades will show up here.</div>
       </section>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="review-mistakes">
+    <section class="workspace-panel" data-tab-panel="review">
       <section class="section-block">
-        <div class="section-label">Opening Mistakes</div>
-        <h2 class="section-title">Only the positions that are still costing you points</h2>
+        <div class="section-label">Review</div>
+        <h2 class="section-title">Repeated positions that still need correction</h2>
         <div id="mistakeList" class="stack empty">Opening mistakes will show up here.</div>
       </section>
     </section>
@@ -213,6 +213,7 @@
           </div>
 
           <div class="board-wrap">
+            <svg id="boardArrows" class="board-arrows" aria-hidden="true"></svg>
             <div id="rankLabels" class="rank-labels"></div>
             <div id="board" class="board-grid"></div>
             <div id="fileLabels" class="file-labels"></div>
@@ -220,6 +221,7 @@
 
           <div id="trainerCoach" class="trainer-feedback empty">Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.</div>
           <div id="trainerDecision" class="trainer-decision empty">No decision point loaded yet.</div>
+          <div id="trainerInsight" class="trainer-feedback empty">Blue arrows show the top MultiPV engine moves for the current position.</div>
           <div id="boardLine" class="board-line empty">No line loaded yet.</div>
           <div id="trainerFeedback" class="trainer-feedback empty">Choose a due line from the queue or launch one from a repertoire card.</div>
         </section>
