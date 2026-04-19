@@ -534,6 +534,18 @@ input:focus {
   z-index: 3;
 }
 
+.board-arrow {
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.18));
+}
+
+.engine-arrow {
+  mix-blend-mode: screen;
+}
+
+.threat-arrow {
+  mix-blend-mode: multiply;
+}
+
 .square {
   position: relative;
   display: flex;

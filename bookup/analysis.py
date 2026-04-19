@@ -466,6 +466,46 @@ def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, pla
     return candidate_lines, database_moves
 
 
+def _threat_lines_for_board(
+    board: chess.Board,
+    candidate_lines: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    threats: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, line in enumerate(candidate_lines[:5]):
+        continuation = list(line.get("line_uci") or [])
+        if len(continuation) < 2:
+            continue
+        reply_uci = continuation[1]
+        if not reply_uci or reply_uci in seen:
+            continue
+        try:
+            reply_move = chess.Move.from_uci(reply_uci)
+        except ValueError:
+            continue
+        reply_board = board.copy(stack=False)
+        first_uci = str(line.get("uci") or "")
+        try:
+            first_move = chess.Move.from_uci(first_uci)
+        except ValueError:
+            continue
+        if first_move not in reply_board.legal_moves:
+            continue
+        reply_board.push(first_move)
+        if reply_move not in reply_board.legal_moves:
+            continue
+        threats.append(
+            {
+                "move": reply_board.san(reply_move),
+                "uci": reply_uci,
+                "source": "threat",
+                "weight": max(0, 100 - index * 18),
+            }
+        )
+        seen.add(reply_uci)
+    return threats
+
+
 def _build_coach_explanation(
     board: chess.Board,
     *,
@@ -521,6 +561,7 @@ def build_position_insight(
     if best_line is None:
         return {
             "candidate_lines": [],
+            "threat_lines": [],
             "database_moves": database_moves,
             "recommended_move": "",
             "recommended_move_uci": "",
@@ -529,6 +570,7 @@ def build_position_insight(
         }
     return {
         "candidate_lines": candidate_lines,
+        "threat_lines": _threat_lines_for_board(board, candidate_lines),
         "database_moves": database_moves,
         "recommended_move": best_line["move"],
         "recommended_move_uci": best_line["uci"],

@@ -220,7 +220,6 @@ def position_insight() -> tuple:
 
     config = load_config()
     settings = build_engine_settings(config)
-    settings.depth = min(settings.depth, 16)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     your_move_uci = str(payload.get("your_move_uci", "")).strip()
     your_move_san = str(payload.get("your_move_san", "")).strip()

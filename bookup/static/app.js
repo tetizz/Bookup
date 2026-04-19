@@ -100,6 +100,8 @@ const state = {
   previewLessonId: "",
   previewInsight: null,
   currentInsight: null,
+  positionInsightCache: {},
+  insightRequestId: 0,
   manualNeedsWork: [],
   reviewStats: {},
   games: [],
@@ -198,6 +200,7 @@ function applyBoardState(payload) {
   rebuildLegalByFrom();
   state.lastMove = payload?.last_move || null;
   state.lastMoveSan = String(payload?.played_san || state.lastMoveSan || "");
+  state.currentInsight = null;
   if (state.selectedSquare && !(state.legalByFrom[state.selectedSquare] || []).length) {
     state.selectedSquare = "";
   }
@@ -321,46 +324,71 @@ function squareCenter(squareName) {
   };
 }
 
-function renderArrows(lines = []) {
+function arrowPath(from, to, bodyWidth, headWidth, headLength) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.hypot(dx, dy);
+  if (!distance) return "";
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const px = -uy;
+  const py = ux;
+  const startInset = 14;
+  const endInset = 18;
+  const shaftStartX = from.x + ux * startInset;
+  const shaftStartY = from.y + uy * startInset;
+  const arrowTipX = to.x - ux * endInset;
+  const arrowTipY = to.y - uy * endInset;
+  const headBaseX = arrowTipX - ux * headLength;
+  const headBaseY = arrowTipY - uy * headLength;
+  const tailLeftX = shaftStartX + px * (bodyWidth / 2);
+  const tailLeftY = shaftStartY + py * (bodyWidth / 2);
+  const tailRightX = shaftStartX - px * (bodyWidth / 2);
+  const tailRightY = shaftStartY - py * (bodyWidth / 2);
+  const headLeftX = headBaseX + px * (headWidth / 2);
+  const headLeftY = headBaseY + py * (headWidth / 2);
+  const headRightX = headBaseX - px * (headWidth / 2);
+  const headRightY = headBaseY - py * (headWidth / 2);
+  return [
+    `M ${tailLeftX} ${tailLeftY}`,
+    `L ${headLeftX} ${headLeftY}`,
+    `L ${arrowTipX} ${arrowTipY}`,
+    `L ${headRightX} ${headRightY}`,
+    `L ${tailRightX} ${tailRightY}`,
+    "Z",
+  ].join(" ");
+}
+
+function renderArrowGroup(lines = [], color = "rgba(84, 139, 255, 0.68)", role = "engine") {
+  return lines.map((line, index) => {
+    const uci = String(line?.uci || "");
+    if (uci.length < 4) return "";
+    const from = squareCenter(uci.slice(0, 2));
+    const to = squareCenter(uci.slice(2, 4));
+    if (!from || !to) return "";
+    const emphasis = Math.max(0.3, 1 - index * 0.16);
+    const bodyWidth = role === "threat" ? Math.max(22 - index * 2.5, 12) : Math.max(20 - index * 2.4, 11);
+    const headWidth = role === "threat" ? Math.max(34 - index * 3, 18) : Math.max(30 - index * 2.6, 17);
+    const headLength = role === "threat" ? Math.max(34 - index * 2.8, 20) : Math.max(28 - index * 2.4, 18);
+    const pathD = arrowPath(from, to, bodyWidth, headWidth, headLength);
+    if (!pathD) return "";
+    return `<path class="board-arrow ${role}-arrow" d="${pathD}" fill="${color}" opacity="${emphasis}"></path>`;
+  }).join("");
+}
+
+function renderArrows(insight = null) {
   if (!el.boardArrows || !el.boardWrap) return;
   const width = el.board.clientWidth || 0;
   const height = el.board.clientHeight || 0;
   el.boardArrows.setAttribute("viewBox", `0 0 ${width} ${height}`);
   el.boardArrows.innerHTML = "";
-  if (!lines.length) return;
-  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-  const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
-  marker.setAttribute("id", "engine-arrow-head");
-  marker.setAttribute("markerWidth", "12");
-  marker.setAttribute("markerHeight", "12");
-  marker.setAttribute("refX", "10");
-  marker.setAttribute("refY", "6");
-  marker.setAttribute("orient", "auto");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M0,0 L12,6 L0,12 Z");
-  path.setAttribute("fill", "rgba(84, 139, 255, 0.72)");
-  marker.appendChild(path);
-  defs.appendChild(marker);
-  el.boardArrows.appendChild(defs);
-
-  lines.slice(0, 5).forEach((line, index) => {
-    const uci = String(line.uci || "");
-    if (uci.length < 4) return;
-    const from = squareCenter(uci.slice(0, 2));
-    const to = squareCenter(uci.slice(2, 4));
-    if (!from || !to) return;
-    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    arrow.setAttribute("x1", String(from.x));
-    arrow.setAttribute("y1", String(from.y));
-    arrow.setAttribute("x2", String(to.x));
-    arrow.setAttribute("y2", String(to.y));
-    arrow.setAttribute("stroke", "rgba(84, 139, 255, 0.78)");
-    arrow.setAttribute("stroke-width", String(Math.max(5 - index * 0.65, 2.2)));
-    arrow.setAttribute("stroke-linecap", "round");
-    arrow.setAttribute("marker-end", "url(#engine-arrow-head)");
-    arrow.setAttribute("class", "engine-arrow");
-    el.boardArrows.appendChild(arrow);
-  });
+  const engineLines = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines.slice(0, 5) : [];
+  const threatLines = Array.isArray(insight?.threat_lines) ? insight.threat_lines.slice(0, 3) : [];
+  if (!engineLines.length && !threatLines.length) return;
+  el.boardArrows.innerHTML = [
+    renderArrowGroup(threatLines, "rgba(219, 83, 83, 0.56)", "threat"),
+    renderArrowGroup(engineLines, "rgba(102, 164, 255, 0.52)", "engine"),
+  ].join("");
 }
 
 function clearDragState() {
@@ -742,6 +770,7 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
 function buildLessonInsight(lesson) {
   return {
     candidate_lines: Array.isArray(lesson?.candidate_lines) ? lesson.candidate_lines : [],
+    threat_lines: Array.isArray(lesson?.threat_lines) ? lesson.threat_lines : [],
     database_moves: Array.isArray(lesson?.database_moves) ? lesson.database_moves : [],
     recommended_move: lesson?.best_reply || "",
     recommended_move_uci: lesson?.best_reply_uci || "",
@@ -907,6 +936,26 @@ function currentLesson() {
   return state.lessonMap[state.activeLessonId] || null;
 }
 
+function insightCacheKey(lesson) {
+  const line = lesson ? lessonTrainingLine(lesson).slice(0, state.trainingCursor) : [];
+  return `${normalizeFen(state.boardFen)}|${line.join(",")}|${state.activeLessonId}|${state.trainingCursor}`;
+}
+
+function currentInsightYourMove(lesson) {
+  if (!lesson || state.branchLocked || state.trainingCursor !== lessonRootCursor(lesson)) {
+    return { uci: "", san: "", count: 0 };
+  }
+  const repeated = (lesson.discovery_nodes || [])
+    .filter((item) => item && item.uci && item.count)
+    .sort((a, b) => (b.count || 0) - (a.count || 0))[0];
+  if (!repeated) return { uci: "", san: "", count: 0 };
+  return {
+    uci: repeated.uci || "",
+    san: repeated.san || "",
+    count: repeated.count || 0,
+  };
+}
+
 function renderTrainerDecision(lesson) {
   if (!lesson) {
     el.trainerDecision.textContent = "No decision point loaded yet.";
@@ -1024,7 +1073,7 @@ async function syncTrainerToPlayableTurn() {
       state.trainingCursor += 1;
     }
     updateTrainerCopy();
-    updateCurrentInsight();
+    await updateCurrentInsight();
     return;
   }
   while (state.trainingCursor < line.length && !trainerUserTurn(lesson)) {
@@ -1033,7 +1082,7 @@ async function syncTrainerToPlayableTurn() {
     state.trainingCursor += 1;
   }
   updateTrainerCopy();
-  updateCurrentInsight();
+  await updateCurrentInsight();
 }
 
 async function loadLessonById(lessonId) {
@@ -1054,6 +1103,7 @@ async function loadLessonById(lessonId) {
   state.lastMove = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
+  state.currentInsight = null;
   el.trainerFeedback.textContent = lesson.line_status === "known"
     ? "You already know this line. Bookup will still run it from the beginning as maintenance."
     : "Bookup is starting from the beginning of the line. When you reach the branch, play what you would normally play there.";
@@ -1062,7 +1112,7 @@ async function loadLessonById(lessonId) {
   await refreshLegalMoves(state.boardFen);
   renderCoords();
   renderBoard(state.boardFen);
-  updateCurrentInsight();
+  await updateCurrentInsight();
   await syncTrainerToPlayableTurn();
   renderQueue();
   setActiveTab("trainer");
@@ -1106,11 +1156,13 @@ function clearTrainer() {
   state.activeTrainingLineSan = [];
   state.branchLocked = false;
   state.currentInsight = null;
+  state.positionInsightCache = {};
+  state.insightRequestId = 0;
   el.trainerCoach.textContent = "Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.";
   el.trainerCoach.classList.remove("empty");
   el.trainerDecision.textContent = "No decision point loaded yet.";
   el.trainerDecision.classList.add("empty");
-  el.trainerInsight.textContent = "Blue arrows show the top MultiPV engine moves for the current position.";
+  el.trainerInsight.textContent = "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
   el.trainerInsight.classList.remove("empty");
   renderCoords();
   renderBoard(START_FEN);
@@ -1134,23 +1186,44 @@ function renderCoords() {
   el.fileLabels.innerHTML = fileOrder.map((file) => `<span>${file}</span>`).join("");
 }
 
-function updateCurrentInsight() {
+async function updateCurrentInsight() {
   const lesson = currentLesson();
   if (!lesson || !state.boardFen) {
     state.currentInsight = null;
-    renderArrows([]);
-    el.trainerInsight.textContent = "Blue arrows show the top MultiPV engine moves for the current position.";
+    renderArrows(null);
+    el.trainerInsight.textContent = "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
     return;
   }
-  if (!state.branchLocked && state.trainingCursor === lessonRootCursor(lesson)) {
-    const insight = buildLessonInsight(lesson);
+  const requestId = ++state.insightRequestId;
+  const cacheKey = insightCacheKey(lesson);
+  if (state.positionInsightCache[cacheKey]) {
+    state.currentInsight = state.positionInsightCache[cacheKey];
+    renderArrows(state.currentInsight);
+    el.trainerInsight.textContent = state.currentInsight.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
+    el.trainerInsight.classList.remove("empty");
+    return;
+  }
+  const yourMove = currentInsightYourMove(lesson);
+  const playPrefix = lessonTrainingLine(lesson).slice(0, state.trainingCursor);
+  try {
+    const insight = await fetchPositionInsight(
+      state.boardFen,
+      playPrefix,
+      yourMove.uci,
+      yourMove.san,
+      yourMove.count
+    );
+    if (requestId !== state.insightRequestId || normalizeFen(state.boardFen) !== cacheKey.split("|")[0]) {
+      return;
+    }
+    state.positionInsightCache[cacheKey] = insight;
     state.currentInsight = insight;
-    renderArrows(insight.candidate_lines || []);
-    el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top MultiPV engine moves for this repertoire choice.";
-  } else {
+    renderArrows(insight);
+    el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
+  } catch (error) {
     state.currentInsight = null;
-    renderArrows([]);
-    el.trainerInsight.textContent = "Bookup is following the branch now. The arrows come back at the next repertoire choice.";
+    renderArrows(null);
+    el.trainerInsight.textContent = "Live arrows are unavailable right now. Blue arrows show top engine moves and red arrows show threats when the current position insight loads.";
   }
   el.trainerInsight.classList.remove("empty");
 }
@@ -1209,7 +1282,7 @@ function renderBoard(fen) {
   });
   animateLastMove(previousPieces);
   state.previousRenderedPieces = pieceMapFromFen(state.boardFen);
-  renderArrows(state.currentInsight?.candidate_lines || []);
+  renderArrows(state.currentInsight);
 }
 
 async function handleGlobalPointerUp(event) {
