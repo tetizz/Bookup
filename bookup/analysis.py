@@ -35,6 +35,8 @@ PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
+GREAT_KEEP_ADVANTAGE_THRESHOLD = 0.53
+GREAT_KEEP_ADVANTAGE_CP = 20
 MOVE_CLASSIFICATION_LABELS = {
     "best": "Best",
     "excellent": "Excellent",
@@ -184,6 +186,10 @@ def _classification_payload(key: str, *, loss: float, reason: str, expected_poin
     }
 
 
+def _keeps_advantage(expected_points: float, score_cp: int = 0) -> bool:
+    return float(expected_points) >= GREAT_KEEP_ADVANTAGE_THRESHOLD or int(score_cp) >= GREAT_KEEP_ADVANTAGE_CP
+
+
 def _base_classification_key(loss: float, *, is_best_move: bool) -> str:
     if is_best_move or loss <= 0.0005:
         return "best"
@@ -213,6 +219,7 @@ def _classify_move_record(
     best_record: dict[str, Any],
     *,
     second_loss: float = 0.0,
+    great_keeps_advantage_count: int = 0,
     is_player_move: bool = False,
 ) -> dict[str, Any]:
     best_move_san = best_record.get("move", "")
@@ -242,10 +249,17 @@ def _classify_move_record(
                 reason = (
                     f"{move_san} is best or nearly best and gives up real material while keeping the position sound."
                 )
-            elif second_loss >= 0.10:
+            elif (
+                great_keeps_advantage_count == 1
+                and _keeps_advantage(
+                    best_record.get("expected_points", 0.0),
+                    int(best_record.get("score_cp", 0)),
+                )
+                and second_loss >= 0.08
+            ):
                 key = "great"
                 reason = (
-                    f"{move_san} is clearly the critical move here. The next-best option already gives away a lot."
+                    f"{move_san} is the only move that keeps the advantage. The other moves let the edge slip away."
                 )
     elif is_player_move and float(best_record.get("expected_points", 0.0)) >= 0.75 and 0.05 <= loss <= 0.20:
         key = "miss"
@@ -269,6 +283,14 @@ def _annotate_candidate_classifications(board: chess.Board, candidate_lines: lis
     second_loss = 0.0
     if len(candidate_lines) > 1:
         second_loss = max(0.0, best_expected - float(candidate_lines[1].get("expected_points", 0.0)))
+    great_keeps_advantage_count = sum(
+        1
+        for line in candidate_lines
+        if _keeps_advantage(
+            float(line.get("expected_points", 0.0)),
+            int(line.get("score_cp", 0)),
+        )
+    )
     for line in candidate_lines:
         line["expected_points_loss"] = round(max(0.0, best_expected - float(line.get("expected_points", 0.0))), 4)
     for line in candidate_lines:
@@ -277,6 +299,7 @@ def _annotate_candidate_classifications(board: chess.Board, candidate_lines: lis
             line,
             best_record,
             second_loss=second_loss,
+            great_keeps_advantage_count=great_keeps_advantage_count,
         )
         line["classification_label"] = line["classification"]["label"]
         line["classification_icon"] = line["classification"]["icon"]
