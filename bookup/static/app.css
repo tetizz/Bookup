@@ -553,6 +553,8 @@ input:focus {
 }
 
 .board-grid {
+  position: relative;
+  z-index: 2;
   display: grid;
   grid-template-columns: repeat(8, 80px);
   grid-template-rows: repeat(8, 80px);
@@ -573,12 +575,13 @@ input:focus {
   left: 22px;
   top: 0;
   pointer-events: none;
-  z-index: 3;
+  z-index: 1;
   overflow: hidden;
 }
 
 .board-arrow {
   position: absolute;
+  pointer-events: none;
   left: 0;
   top: 0;
   width: var(--arrow-length, 0px);
@@ -621,13 +624,13 @@ input:focus {
 }
 
 .engine-arrow {
-  --arrow-color: rgba(114, 177, 255, 0.58);
-  mix-blend-mode: screen;
+  --arrow-color: rgba(114, 177, 255, 0.52);
+  mix-blend-mode: normal;
 }
 
 .threat-arrow {
-  --arrow-color: rgba(226, 84, 84, 0.58);
-  mix-blend-mode: multiply;
+  --arrow-color: rgba(226, 84, 84, 0.56);
+  mix-blend-mode: normal;
 }
 
 .square {
@@ -687,7 +690,7 @@ input:focus {
   touch-action: none;
   -webkit-user-drag: none;
   cursor: grab;
-  transition: opacity 0.18s ease;
+  transition: none;
 }
 
 .piece:active {
@@ -695,7 +698,8 @@ input:focus {
 }
 
 .piece-arriving {
-  opacity: 0.18;
+  visibility: hidden;
+  opacity: 1;
 }
 
 .piece-ghost {
@@ -703,9 +707,8 @@ input:focus {
   z-index: 30;
   pointer-events: none;
   transform: translate(0, 0);
-  transition:
-    transform 1.05s cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 1.05s ease;
+  opacity: 1;
+  transition: transform 1.05s cubic-bezier(0.2, 0.8, 0.2, 1);
   will-change: transform, opacity;
 }
 

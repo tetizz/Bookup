@@ -340,9 +340,8 @@ function animateLastMove(previousPieces) {
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      ghost.style.transitionDuration = `${durationMs}ms, ${durationMs}ms`;
+      ghost.style.transitionDuration = `${durationMs}ms`;
       ghost.style.transform = `translate(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px)`;
-      ghost.style.opacity = "0";
     });
   });
 
@@ -391,9 +390,9 @@ function renderArrowGroup(lines = [], role = "engine") {
     const from = squareCenter(uci.slice(0, 2));
     const to = squareCenter(uci.slice(2, 4));
     if (!from || !to) return "";
-    const emphasis = Math.max(0.3, 1 - index * 0.16);
-    const thickness = role === "threat" ? Math.max(30 - index * 3.2, 16) : Math.max(26 - index * 2.8, 14);
-    const head = role === "threat" ? Math.max(48 - index * 4.2, 24) : Math.max(42 - index * 3.6, 22);
+    const emphasis = role === "threat" ? Math.max(0.46, 0.7 - index * 0.08) : Math.max(0.34, 0.6 - index * 0.06);
+    const thickness = role === "threat" ? 22 : 18;
+    const head = role === "threat" ? 34 : 30;
     const metrics = arrowMetrics(from, to);
     if (!metrics) return "";
     return `
@@ -1083,11 +1082,12 @@ function updateTrainerCopy() {
   }
   if (trainerUserTurn(lesson)) {
     const targetText = expectedEntry?.san || lesson.best_reply;
-    el.boardSummary.textContent = `Play the repertoire move here: ${targetText}. Step ${progress}.`;
+    el.boardSummary.textContent = `Play ${targetText} here. Step ${progress}.`;
+    el.trainerCoach.textContent = `This position is about finding ${targetText}. Play it on the board.`;
   } else {
     el.boardSummary.textContent = `Bookup is playing the line for the other side. Step ${progress}.`;
+    el.trainerCoach.textContent = "Watch the practical reply, then answer with your move when the board comes back to you.";
   }
-  el.trainerCoach.textContent = `Bookup is now training the branch you reached from this position.`;
   el.trainerCoach.classList.remove("empty");
   el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
@@ -1362,7 +1362,7 @@ async function handleGlobalPointerUp(event) {
 }
 
 function handleSquareClick(squareName) {
-  if (state.lessonIndex < 0) return;
+  if (!state.activeLessonId) return;
   if (!state.selectedSquare) {
     if ((state.legalByFrom[squareName] || []).length) {
       state.selectedSquare = squareName;
@@ -1469,7 +1469,7 @@ async function submitTrainerMove(from, to) {
   const successExplanation =
     state.trainingCursor - 1 === (lesson.target_ply_index || 0)
       ? lesson.explanation
-      : `That keeps the line on track inside ${lesson.opening_name}.`;
+      : "That keeps the repertoire line on track.";
   el.trainerFeedback.textContent = lineFinished
     ? `Line complete. ${successExplanation}`
     : `Correct. ${successExplanation}`;
