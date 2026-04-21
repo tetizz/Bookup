@@ -365,17 +365,15 @@ function squareCenter(squareName) {
   };
 }
 
-function arrowMetrics(from, to, startInset, endInset) {
+function arrowMetrics(from, to) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const distance = Math.hypot(dx, dy);
   if (!distance) return null;
-  const ux = dx / distance;
-  const uy = dy / distance;
-  const startX = from.x + ux * startInset;
-  const startY = from.y + uy * startInset;
-  const endX = to.x - ux * endInset;
-  const endY = to.y - uy * endInset;
+  const startX = from.x;
+  const startY = from.y;
+  const endX = to.x;
+  const endY = to.y;
   const length = Math.hypot(endX - startX, endY - startY);
   if (length < 8) return null;
   return {
@@ -396,7 +394,7 @@ function renderArrowGroup(lines = [], role = "engine") {
     const emphasis = Math.max(0.3, 1 - index * 0.16);
     const thickness = role === "threat" ? Math.max(30 - index * 3.2, 16) : Math.max(26 - index * 2.8, 14);
     const head = role === "threat" ? Math.max(48 - index * 4.2, 24) : Math.max(42 - index * 3.6, 22);
-    const metrics = arrowMetrics(from, to, thickness * 0.55, head * 0.48);
+    const metrics = arrowMetrics(from, to);
     if (!metrics) return "";
     return `
       <div
