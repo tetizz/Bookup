@@ -153,6 +153,11 @@ async function init() {
   document.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    const workLine = target.dataset.workLine;
+    if (workLine) {
+      loadLessonById(workLine);
+      return;
+    }
     const lessonId = target.dataset.lessonLaunch;
     if (lessonId) {
       loadLessonById(lessonId);
@@ -629,11 +634,7 @@ function renderProfile(payload) {
   renderQueue();
   clearPreview();
 
-  if (state.queueDue.length || state.queueNew.length) {
-    previewLessonById((state.queueDue[0] || state.queueNew[0]).lesson_id);
-  } else {
-    clearTrainer();
-  }
+  clearTrainer();
   setActiveTab("repertoire-map");
 }
 
@@ -718,7 +719,7 @@ function renderRepertoireMapColumn(node, items, emptyText) {
         </div>
         <div class="line-note">${escapeHtml(item.coach_explanation || "")}</div>
         <div class="chip-row">
-          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Preview line</button>
+          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
@@ -735,7 +736,7 @@ function clearPreview() {
   state.previewLessonId = "";
   state.previewInsight = null;
   el.previewPanel.classList.add("empty");
-  el.previewPanel.textContent = "Click a repertoire position to preview the line, blue engine arrows, database moves, and coaching before adding it to Needs Work or starting training.";
+  el.previewPanel.textContent = "Use Work on line on any repertoire card to open that exact branch in the Trainer.";
 }
 
 async function previewLessonById(lessonId) {
@@ -818,7 +819,7 @@ function renderImproveList(node, items, emptyText) {
         <div class="line-preview">${escapeHtml(item.continuation_san)}</div>
         <div class="line-note">${escapeHtml(item.explanation)}</div>
         <div class="chip-row">
-          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Preview line</button>
+          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
@@ -841,7 +842,7 @@ function renderSuggestions(items) {
         <div class="line-note">${escapeHtml(item.detail)}</div>
         ${item.line ? `<div class="line-preview">${escapeHtml(item.line)}</div>` : ""}
         <div class="chip-row">
-          ${item.lesson_id ? `<button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Train this line</button>` : ""}
+          ${item.lesson_id ? `<button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>` : ""}
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
@@ -921,7 +922,7 @@ function renderMistakes(items) {
         <div class="line-note">${escapeHtml(item.explanation)}</div>
         <div class="line-preview">${escapeHtml(item.continuation_san || "")}</div>
         <div class="chip-row">
-          <button class="launch-btn" type="button" data-lesson-launch="${escapeHtml(item.lesson_id)}">Preview position</button>
+          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
