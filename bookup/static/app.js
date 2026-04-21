@@ -106,6 +106,9 @@ const state = {
   dragFrom: "",
   lastMove: null,
   lastMoveSan: "",
+  pendingMoveAnimationKey: "",
+  renderedMoveAnimationKey: "",
+  moveAnimationTimer: 0,
   previousRenderedPieces: {},
   activeTrainingLine: [],
   activeTrainingLineSan: [],
@@ -171,7 +174,7 @@ async function init() {
 
   syncImportScope();
   renderCoords();
-  renderBoard(START_FEN);
+  renderBoard(START_FEN, { animate: false });
   setActiveTab("setup");
   await bootstrapLocalState();
 }
@@ -213,6 +216,9 @@ function applyBoardState(payload) {
   rebuildLegalByFrom();
   state.lastMove = payload?.last_move || null;
   state.lastMoveSan = String(payload?.played_san || state.lastMoveSan || "");
+  state.pendingMoveAnimationKey = state.lastMove
+    ? `${state.boardFen}|${state.lastMove.from}|${state.lastMove.to}|${state.lastMoveSan}`
+    : "";
   state.currentInsight = null;
   if (state.selectedSquare && !(state.legalByFrom[state.selectedSquare] || []).length) {
     state.selectedSquare = "";
@@ -280,11 +286,30 @@ function playMoveSound(san, options = {}) {
   playTone({ frequency: 480, frequencyEnd: 520, duration: 0.07, type: "sine", volume: 0.025 });
 }
 
+function clearMoveAnimation() {
+  if (state.moveAnimationTimer) {
+    window.clearTimeout(state.moveAnimationTimer);
+    state.moveAnimationTimer = 0;
+  }
+  if (el.boardWrap) {
+    el.boardWrap.querySelectorAll(".piece-ghost").forEach((node) => node.remove());
+  }
+  if (el.board) {
+    el.board.querySelectorAll(".piece-arriving").forEach((node) => {
+      if (node instanceof HTMLElement) {
+        node.classList.remove("piece-arriving");
+        node.style.removeProperty("transition-duration");
+      }
+    });
+  }
+}
+
 function animateLastMove(previousPieces) {
   if (!state.lastMove || !el.boardWrap) return;
   const { from, to } = state.lastMove;
   const movedPiece = previousPieces[from];
   if (!movedPiece) return;
+  clearMoveAnimation();
   const notation = String(state.lastMoveSan || "");
   const durationMs = notation.includes("#") || notation.includes("+")
     ? 1450
@@ -314,17 +339,20 @@ function animateLastMove(previousPieces) {
   }
 
   requestAnimationFrame(() => {
-    ghost.style.transitionDuration = `${durationMs}ms, ${durationMs}ms`;
-    ghost.style.transform = `translate(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px)`;
-    ghost.style.opacity = "0";
+    requestAnimationFrame(() => {
+      ghost.style.transitionDuration = `${durationMs}ms, ${durationMs}ms`;
+      ghost.style.transform = `translate(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px)`;
+      ghost.style.opacity = "0";
+    });
   });
 
-  window.setTimeout(() => {
+  state.moveAnimationTimer = window.setTimeout(() => {
     if (arrivingPiece instanceof HTMLElement) {
       arrivingPiece.classList.remove("piece-arriving");
       arrivingPiece.style.removeProperty("transition-duration");
     }
     ghost.remove();
+    state.moveAnimationTimer = 0;
   }, durationMs + 40);
 }
 
@@ -337,42 +365,28 @@ function squareCenter(squareName) {
   };
 }
 
-function arrowPath(from, to, bodyWidth, headWidth, headLength) {
+function arrowMetrics(from, to, startInset, endInset) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const distance = Math.hypot(dx, dy);
-  if (!distance) return "";
+  if (!distance) return null;
   const ux = dx / distance;
   const uy = dy / distance;
-  const px = -uy;
-  const py = ux;
-  const startInset = 14;
-  const endInset = 18;
-  const shaftStartX = from.x + ux * startInset;
-  const shaftStartY = from.y + uy * startInset;
-  const arrowTipX = to.x - ux * endInset;
-  const arrowTipY = to.y - uy * endInset;
-  const headBaseX = arrowTipX - ux * headLength;
-  const headBaseY = arrowTipY - uy * headLength;
-  const tailLeftX = shaftStartX + px * (bodyWidth / 2);
-  const tailLeftY = shaftStartY + py * (bodyWidth / 2);
-  const tailRightX = shaftStartX - px * (bodyWidth / 2);
-  const tailRightY = shaftStartY - py * (bodyWidth / 2);
-  const headLeftX = headBaseX + px * (headWidth / 2);
-  const headLeftY = headBaseY + py * (headWidth / 2);
-  const headRightX = headBaseX - px * (headWidth / 2);
-  const headRightY = headBaseY - py * (headWidth / 2);
-  return [
-    `M ${tailLeftX} ${tailLeftY}`,
-    `L ${headLeftX} ${headLeftY}`,
-    `L ${arrowTipX} ${arrowTipY}`,
-    `L ${headRightX} ${headRightY}`,
-    `L ${tailRightX} ${tailRightY}`,
-    "Z",
-  ].join(" ");
+  const startX = from.x + ux * startInset;
+  const startY = from.y + uy * startInset;
+  const endX = to.x - ux * endInset;
+  const endY = to.y - uy * endInset;
+  const length = Math.hypot(endX - startX, endY - startY);
+  if (length < 8) return null;
+  return {
+    x: startX,
+    y: startY,
+    length,
+    angle: `${Math.atan2(dy, dx) * 180 / Math.PI}deg`,
+  };
 }
 
-function renderArrowGroup(lines = [], color = "rgba(84, 139, 255, 0.68)", role = "engine") {
+function renderArrowGroup(lines = [], role = "engine") {
   return lines.map((line, index) => {
     const uci = String(line?.uci || "");
     if (uci.length < 4) return "";
@@ -380,27 +394,36 @@ function renderArrowGroup(lines = [], color = "rgba(84, 139, 255, 0.68)", role =
     const to = squareCenter(uci.slice(2, 4));
     if (!from || !to) return "";
     const emphasis = Math.max(0.3, 1 - index * 0.16);
-    const bodyWidth = role === "threat" ? Math.max(22 - index * 2.5, 12) : Math.max(20 - index * 2.4, 11);
-    const headWidth = role === "threat" ? Math.max(34 - index * 3, 18) : Math.max(30 - index * 2.6, 17);
-    const headLength = role === "threat" ? Math.max(34 - index * 2.8, 20) : Math.max(28 - index * 2.4, 18);
-    const pathD = arrowPath(from, to, bodyWidth, headWidth, headLength);
-    if (!pathD) return "";
-    return `<path class="board-arrow ${role}-arrow" d="${pathD}" fill="${color}" opacity="${emphasis}"></path>`;
+    const thickness = role === "threat" ? Math.max(30 - index * 3.2, 16) : Math.max(26 - index * 2.8, 14);
+    const head = role === "threat" ? Math.max(48 - index * 4.2, 24) : Math.max(42 - index * 3.6, 22);
+    const metrics = arrowMetrics(from, to, thickness * 0.55, head * 0.48);
+    if (!metrics) return "";
+    return `
+      <div
+        class="board-arrow ${role}-arrow"
+        style="
+          --arrow-x: ${metrics.x}px;
+          --arrow-y: ${metrics.y}px;
+          --arrow-length: ${metrics.length}px;
+          --arrow-angle: ${metrics.angle};
+          --arrow-thickness: ${thickness}px;
+          --arrow-head: ${head}px;
+          --arrow-opacity: ${emphasis};
+        "
+      ></div>
+    `;
   }).join("");
 }
 
 function renderArrows(insight = null) {
   if (!el.boardArrows || !el.boardWrap) return;
-  const width = el.board.clientWidth || 0;
-  const height = el.board.clientHeight || 0;
-  el.boardArrows.setAttribute("viewBox", `0 0 ${width} ${height}`);
   el.boardArrows.innerHTML = "";
   const engineLines = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines.slice(0, 5) : [];
   const threatLines = Array.isArray(insight?.threat_lines) ? insight.threat_lines.slice(0, 3) : [];
   if (!engineLines.length && !threatLines.length) return;
   el.boardArrows.innerHTML = [
-    renderArrowGroup(threatLines, "rgba(219, 83, 83, 0.56)", "threat"),
-    renderArrowGroup(engineLines, "rgba(102, 164, 255, 0.52)", "engine"),
+    renderArrowGroup(threatLines, "threat"),
+    renderArrowGroup(engineLines, "engine"),
   ].join("");
 }
 
@@ -1082,7 +1105,7 @@ async function applyMoveToBoard(moveUci) {
   if (!response.ok) throw new Error(payload.error || "Could not apply move.");
   playMoveSound(payload.played_san);
   applyBoardState(payload);
-  renderBoard(state.boardFen);
+  renderBoard(state.boardFen, { animate: true });
   return payload;
 }
 
@@ -1137,7 +1160,7 @@ async function loadLessonById(lessonId) {
 
   await refreshLegalMoves(state.boardFen);
   renderCoords();
-  renderBoard(state.boardFen);
+  renderBoard(state.boardFen, { animate: false });
   await updateCurrentInsight();
   await syncTrainerToPlayableTurn();
   renderQueue();
@@ -1191,7 +1214,7 @@ function clearTrainer() {
   el.trainerInsight.textContent = "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
   el.trainerInsight.classList.remove("empty");
   renderCoords();
-  renderBoard(START_FEN);
+  renderBoard(START_FEN, { animate: false });
 }
 
 async function refreshLegalMoves(fen = state.boardFen) {
@@ -1254,7 +1277,8 @@ async function updateCurrentInsight() {
   el.trainerInsight.classList.remove("empty");
 }
 
-function renderBoard(fen) {
+function renderBoard(fen, options = {}) {
+  const { animate = false } = options;
   state.boardFen = fen || state.boardFen;
   const previousPieces = state.previousRenderedPieces || {};
   const squares = parseFenBoard(state.boardFen);
@@ -1306,7 +1330,17 @@ function renderBoard(fen) {
     el.board.appendChild(square);
     });
   });
-  animateLastMove(previousPieces);
+  const shouldAnimate = Boolean(
+    animate
+    && state.pendingMoveAnimationKey
+    && state.pendingMoveAnimationKey !== state.renderedMoveAnimationKey
+  );
+  if (shouldAnimate) {
+    animateLastMove(previousPieces);
+    state.renderedMoveAnimationKey = state.pendingMoveAnimationKey;
+  } else {
+    clearMoveAnimation();
+  }
   state.previousRenderedPieces = pieceMapFromFen(state.boardFen);
   renderArrows(state.currentInsight);
 }
@@ -1318,12 +1352,12 @@ async function handleGlobalPointerUp(event) {
   const from = state.dragFrom;
   state.dragFrom = "";
   if (!(square instanceof HTMLElement)) {
-    renderBoard(state.boardFen);
+    renderBoard(state.boardFen, { animate: false });
     return;
   }
   const to = square.dataset.square || "";
   if (!to) {
-    renderBoard(state.boardFen);
+    renderBoard(state.boardFen, { animate: false });
     return;
   }
   await submitTrainerMove(from, to);
@@ -1334,13 +1368,13 @@ function handleSquareClick(squareName) {
   if (!state.selectedSquare) {
     if ((state.legalByFrom[squareName] || []).length) {
       state.selectedSquare = squareName;
-      renderBoard(state.boardFen);
+      renderBoard(state.boardFen, { animate: false });
     }
     return;
   }
   if (state.selectedSquare === squareName) {
     state.selectedSquare = "";
-    renderBoard(state.boardFen);
+    renderBoard(state.boardFen, { animate: false });
     return;
   }
   submitTrainerMove(state.selectedSquare, squareName);
@@ -1349,7 +1383,7 @@ function handleSquareClick(squareName) {
 async function submitTrainerMove(from, to) {
   const move = (state.legalByFrom[from] || []).find((item) => item.to === to);
   state.selectedSquare = "";
-  renderBoard(state.boardFen);
+  renderBoard(state.boardFen, { animate: false });
   if (!move) return;
 
   const lesson = currentLesson();

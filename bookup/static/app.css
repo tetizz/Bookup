@@ -574,17 +574,59 @@ input:focus {
   top: 0;
   pointer-events: none;
   z-index: 3;
+  overflow: hidden;
 }
 
 .board-arrow {
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.18));
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--arrow-length, 0px);
+  height: var(--arrow-thickness, 24px);
+  transform:
+    translate(var(--arrow-x, 0px), var(--arrow-y, 0px))
+    translateY(calc(var(--arrow-thickness, 24px) * -0.5))
+    rotate(var(--arrow-angle, 0deg));
+  transform-origin: 0 50%;
+  opacity: var(--arrow-opacity, 0.6);
+  filter: drop-shadow(0 5px 10px rgba(0, 0, 0, 0.2));
+  will-change: transform;
+}
+
+.board-arrow::before,
+.board-arrow::after {
+  content: "";
+  position: absolute;
+  display: block;
+}
+
+.board-arrow::before {
+  left: 0;
+  top: 50%;
+  width: calc(max(0px, var(--arrow-length, 0px) - var(--arrow-head, 34px)));
+  height: calc(var(--arrow-thickness, 24px) * 0.48);
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--arrow-color, rgba(102, 164, 255, 0.52));
+}
+
+.board-arrow::after {
+  right: 0;
+  top: 50%;
+  width: var(--arrow-head, 34px);
+  height: calc(var(--arrow-thickness, 24px) * 1.28);
+  transform: translateY(-50%);
+  background: var(--arrow-color, rgba(102, 164, 255, 0.52));
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
 }
 
 .engine-arrow {
+  --arrow-color: rgba(114, 177, 255, 0.58);
   mix-blend-mode: screen;
 }
 
 .threat-arrow {
+  --arrow-color: rgba(226, 84, 84, 0.58);
   mix-blend-mode: multiply;
 }
 
@@ -662,8 +704,8 @@ input:focus {
   pointer-events: none;
   transform: translate(0, 0);
   transition:
-    transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 0.2s ease;
+    transform 1.05s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 1.05s ease;
   will-change: transform, opacity;
 }
 
