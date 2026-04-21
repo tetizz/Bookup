@@ -1073,15 +1073,71 @@ function currentInsightYourMove(lesson) {
   };
 }
 
+function currentPlayPrefix(lesson, cursor = state.trainingCursor) {
+  return lesson ? lessonTrainingLine(lesson).slice(0, cursor).filter(Boolean) : [];
+}
+
+function moveColorLabel(colorCode) {
+  return colorCode === "b" ? "Black" : "White";
+}
+
+async function classifyMoveAtCurrentPosition(lesson, moveUci, moveSan, repeatedCount = 0) {
+  if (!lesson || !moveUci) {
+    return {
+      insight: null,
+      classification: null,
+      recommendedClassification: null,
+      recommendedMove: "",
+    };
+  }
+  const insight = await fetchPositionInsight(
+    state.boardFen,
+    currentPlayPrefix(lesson),
+    moveUci,
+    moveSan,
+    repeatedCount,
+  ).catch(() => null);
+  return {
+    insight,
+    classification: insight?.your_move_classification || null,
+    recommendedClassification: insight?.recommended_classification || null,
+    recommendedMove: insight?.recommended_move || lesson.best_reply || moveSan || moveUci,
+  };
+}
+
+function renderAutoMoveSummary(autoMoves = []) {
+  if (!autoMoves.length) return "";
+  return autoMoves
+    .map((entry) => `${escapeHtml(entry.color)} played <strong>${escapeHtml(entry.san)}</strong>${classificationBadge(entry.classification, "inline")}.`)
+    .join(" ");
+}
+
 function renderTrainerDecision(lesson) {
   if (!lesson) {
     el.trainerDecision.textContent = "No decision point loaded yet.";
     el.trainerDecision.classList.add("empty");
     return;
   }
-  if (state.branchLocked || state.trainingCursor !== lessonRootCursor(lesson)) {
-    el.trainerDecision.textContent = "Bookup is inside a locked repertoire branch now.";
+  const line = lessonTrainingLine(lesson);
+  const rootCursor = lessonRootCursor(lesson);
+  if (state.trainingCursor >= line.length) {
+    el.trainerDecision.textContent = "Line complete.";
     el.trainerDecision.classList.add("empty");
+    return;
+  }
+  if (state.trainingCursor < rootCursor) {
+    el.trainerDecision.textContent = "Bookup is stepping through the lead-in to your next real decision point.";
+    el.trainerDecision.classList.remove("empty");
+    return;
+  }
+  if (state.branchLocked) {
+    el.trainerDecision.textContent = "Following your chosen line now. Keep playing the moves Bookup asks for until the line is complete.";
+    el.trainerDecision.classList.remove("empty");
+    return;
+  }
+  if (state.trainingCursor !== rootCursor) {
+    el.trainerDecision.textContent = "Trainer is syncing to the next decision point.";
+    el.trainerDecision.classList.remove("empty");
     return;
   }
 
@@ -1120,15 +1176,18 @@ function liveExpectedMoveUci(lesson, cursor = state.trainingCursor) {
   if (expected && (state.legalMoves || []).some((move) => move.uci === expected)) {
     return expected;
   }
-  const insightRecommended = String(state.currentInsight?.recommended_move_uci || "").trim();
-  if (insightRecommended && (state.legalMoves || []).some((move) => move.uci === insightRecommended)) {
-    return insightRecommended;
+  if (state.branchLocked) {
+    return expected || "";
   }
-  if (!state.branchLocked && cursor === lessonRootCursor(lesson)) {
+  if (cursor === lessonRootCursor(lesson)) {
     const preferred = String(lesson?.preferred_branch_uci || "").trim();
     if (preferred && (state.legalMoves || []).some((move) => move.uci === preferred)) {
       return preferred;
     }
+  }
+  const insightRecommended = String(state.currentInsight?.recommended_move_uci || "").trim();
+  if (insightRecommended && (state.legalMoves || []).some((move) => move.uci === insightRecommended)) {
+    return insightRecommended;
   }
   return expected || insightRecommended;
 }
@@ -1161,27 +1220,26 @@ function updateTrainerCopy() {
   const expectedEntry = (state.legalMoves || []).find((move) => move.uci === expectedUci);
   const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
   const openingLabel = lesson.line_label || lesson.opening_name;
-  el.boardTitle.textContent = openingLabel;
+  const expectedText = expectedEntry?.san || state.currentInsight?.recommended_move || lesson.best_reply || "";
   if (!state.branchLocked && state.trainingCursor === lessonRootCursor(lesson)) {
     const discoveryPreview = (lesson.discovery_nodes || [])
       .slice(0, 4)
       .map((item) => `${item.san} ${item.count}x`)
       .join(" | ");
+    el.boardTitle.textContent = expectedText ? `Play ${expectedText}` : openingLabel;
     el.boardSummary.textContent = `What would you play here? Bookup will follow your branch if it stays inside your repertoire.`;
     el.trainerCoach.textContent = discoveryPreview
       ? `Your repeated moves in this position: ${discoveryPreview}. Preferred move: ${lesson.best_reply}.`
       : `Preferred move here: ${lesson.best_reply}.`;
     el.trainerCoach.classList.remove("empty");
     renderTrainerDecision(lesson);
-    el.trainerFeedback.textContent = "Your repertoire check: what would you play here?";
-    el.trainerFeedback.classList.remove("empty");
     el.boardLine.textContent = lesson.intro_line_san || "No lead-in moves loaded.";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
     return;
   }
-  el.trainerDecision.textContent = "Bookup is inside a locked repertoire branch now.";
-  el.trainerDecision.classList.add("empty");
+  renderTrainerDecision(lesson);
   if (state.trainingCursor >= line.length) {
+    el.boardTitle.textContent = `${openingLabel} complete`;
     el.boardSummary.textContent = "Line complete. Reset it or move on to the next due line.";
     el.trainerCoach.textContent = `Bookup locked this line after ${lesson.trigger_move} and ran the continuation to the end.`;
     el.trainerCoach.classList.remove("empty");
@@ -1190,11 +1248,12 @@ function updateTrainerCopy() {
     return;
   }
   if (trainerUserTurn(lesson)) {
-    const targetText = expectedEntry?.san || state.currentInsight?.recommended_move || lesson.best_reply;
     const label = state.currentInsight?.recommended_classification?.label || lesson.recommended_classification?.label || "Best";
-    el.boardSummary.textContent = `Play ${targetText} here. Step ${progress}.`;
-    el.trainerCoach.textContent = `${targetText} is the ${label.toLowerCase()} move here. Play it on the board.`;
+    el.boardTitle.textContent = expectedText ? `Play ${expectedText}` : openingLabel;
+    el.boardSummary.textContent = `${openingLabel}. Step ${progress}.`;
+    el.trainerCoach.textContent = `${expectedText || lesson.best_reply} is the ${label.toLowerCase()} move here. Play it on the board.`;
   } else {
+    el.boardTitle.textContent = "Follow the line";
     el.boardSummary.textContent = `Bookup is playing the line for the other side. Step ${progress}.`;
     el.trainerCoach.textContent = "Watch the practical reply, then answer with your move when the board comes back to you.";
   }
@@ -1219,33 +1278,54 @@ async function applyMoveToBoard(moveUci) {
 
 async function syncTrainerToPlayableTurn() {
   const lesson = currentLesson();
-  if (!lesson) return;
+  if (!lesson) return { autoMoves: [] };
   const line = lessonTrainingLine(lesson);
   const rootCursor = lessonRootCursor(lesson);
+  const autoMoves = [];
   if (!state.branchLocked) {
     while (state.trainingCursor < rootCursor) {
       const setupMove = line[state.trainingCursor];
       if (!setupMove) break;
+      const movingColor = moveColorLabel(sideToMove(state.boardFen));
+      const moveEntry = (state.legalMoves || []).find((item) => item.uci === setupMove);
+      const moveSan = moveEntry?.san || setupMove;
+      const moveMeta = await classifyMoveAtCurrentPosition(lesson, setupMove, moveSan, 0);
       await applyMoveToBoard(setupMove);
       state.trainingCursor += 1;
+      autoMoves.push({
+        color: movingColor,
+        san: state.lastMoveSan || moveSan,
+        classification: moveMeta.classification || moveMeta.recommendedClassification || null,
+      });
     }
     updateTrainerCopy();
     await updateCurrentInsight();
-    return;
+    return { autoMoves };
   }
   while (state.trainingCursor < line.length && !trainerUserTurn(lesson)) {
     const expectedUci = line[state.trainingCursor];
+    const movingColor = moveColorLabel(sideToMove(state.boardFen));
+    const expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+    const expectedSan = expectedEntry?.san || expectedUci;
+    const moveMeta = await classifyMoveAtCurrentPosition(lesson, expectedUci, expectedSan, 0);
     await applyMoveToBoard(expectedUci);
     state.trainingCursor += 1;
+    autoMoves.push({
+      color: movingColor,
+      san: state.lastMoveSan || expectedSan,
+      classification: moveMeta.classification || moveMeta.recommendedClassification || null,
+    });
   }
   updateTrainerCopy();
   await updateCurrentInsight();
+  return { autoMoves };
 }
 
 async function loadLessonById(lessonId) {
   const lesson = state.lessonMap[lessonId];
   if (!lesson) return;
-  state.lessonIndex = state.queueDue.findIndex((item) => item.lesson_id === lessonId);
+  const combinedQueue = [...state.queueDue, ...state.queueNew];
+  state.lessonIndex = combinedQueue.findIndex((item) => item.lesson_id === lessonId);
   state.activeLessonId = lesson.lesson_id;
   state.boardOrientation = lesson.color === "black" ? "black" : "white";
   state.startFen = normalizeFen(lesson.line_start_fen);
@@ -1270,7 +1350,11 @@ async function loadLessonById(lessonId) {
   renderCoords();
   renderBoard(state.boardFen, { animate: false });
   await updateCurrentInsight();
-  await syncTrainerToPlayableTurn();
+  const syncResult = await syncTrainerToPlayableTurn();
+  if (syncResult?.autoMoves?.length) {
+    el.trainerFeedback.innerHTML = `Bookup played the lead-in to your decision point. ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+    el.trainerFeedback.classList.remove("empty");
+  }
   renderQueue();
   setActiveTab("trainer");
 }
@@ -1528,20 +1612,20 @@ async function submitTrainerMove(from, to) {
   const lesson = currentLesson();
   if (!lesson) return;
   const rootCursor = lessonRootCursor(lesson);
-  const moveInsight = await fetchPositionInsight(
-    state.boardFen,
-    [],
+  const moveMeta = await classifyMoveAtCurrentPosition(
+    lesson,
     move.uci,
     move.san,
     move.uci === lesson.your_repeated_move_uci ? Number(lesson.your_top_move_count || 0) : 0,
-  ).catch(() => null);
-  const playedClassification = moveInsight?.your_move_classification || null;
+  );
+  const moveInsight = moveMeta.insight;
+  const playedClassification = moveMeta.classification || null;
   const recommendedClassification =
-    moveInsight?.recommended_classification
+    moveMeta.recommendedClassification
     || state.currentInsight?.recommended_classification
     || lesson.recommended_classification
     || null;
-  const recommendedMoveLabel = moveInsight?.recommended_move || lesson.best_reply;
+  const recommendedMoveLabel = moveMeta.recommendedMove || lesson.best_reply;
 
   if (!state.branchLocked && state.trainingCursor === rootCursor) {
     const preferredBranch = findBranchLine(lesson, lesson.preferred_branch_uci);
@@ -1559,7 +1643,10 @@ async function submitTrainerMove(from, to) {
         el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} is ${escapeHtml(sourceLabel)}. Bookup will follow it, but the preferred move here is <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
       }
       el.trainerFeedback.classList.remove("empty");
-      await syncTrainerToPlayableTurn();
+      const syncResult = await syncTrainerToPlayableTurn();
+      if (syncResult?.autoMoves?.length) {
+        el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+      }
       renderQueue();
       return;
     }
@@ -1575,7 +1662,10 @@ async function submitTrainerMove(from, to) {
       state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, preferredBranch.line_san);
       await applyMoveToBoard(lesson.preferred_branch_uci);
       state.trainingCursor = rootCursor + 1;
-      await syncTrainerToPlayableTurn();
+      const syncResult = await syncTrainerToPlayableTurn();
+      if (syncResult?.autoMoves?.length) {
+        el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+      }
       rebuildQueue();
       renderQueue();
     }
@@ -1601,7 +1691,10 @@ async function submitTrainerMove(from, to) {
     state.lastMove = null;
     await applyMoveToBoard(expectedUci);
     state.trainingCursor += 1;
-    await syncTrainerToPlayableTurn();
+    const syncResult = await syncTrainerToPlayableTurn();
+    if (syncResult?.autoMoves?.length) {
+      el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+    }
     rebuildQueue();
     renderQueue();
     return;
@@ -1609,7 +1702,7 @@ async function submitTrainerMove(from, to) {
 
   await applyMoveToBoard(move.uci);
   state.trainingCursor += 1;
-  await syncTrainerToPlayableTurn();
+  const syncResult = await syncTrainerToPlayableTurn();
 
   const lineFinished = state.trainingCursor >= lessonTrainingLine(lesson).length;
   if (lineFinished) {
@@ -1628,6 +1721,9 @@ async function submitTrainerMove(from, to) {
   el.trainerFeedback.innerHTML = lineFinished
     ? `Line complete. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`
     : `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`;
+  if (syncResult?.autoMoves?.length) {
+    el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+  }
   el.trainerFeedback.classList.remove("empty");
   el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);

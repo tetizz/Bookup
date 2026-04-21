@@ -779,7 +779,7 @@ input:focus {
 
 .piece-arriving {
   visibility: visible;
-  opacity: 0.18;
+  opacity: 1;
 }
 
 .piece-ghost {
