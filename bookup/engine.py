@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 import sys
 
 import chess
@@ -31,6 +32,19 @@ def default_engine_path() -> str:
     return ""
 
 
+def hidden_engine_popen_args() -> dict:
+    if sys.platform != "win32":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+        "startupinfo": startupinfo,
+    }
+
+
 @dataclass(slots=True)
 class EngineSettings:
     path: str
@@ -55,7 +69,10 @@ class EngineSession:
     def open(self) -> None:
         if self._engine is not None:
             return
-        self._engine = chess.engine.SimpleEngine.popen_uci(self.settings.path)
+        self._engine = chess.engine.SimpleEngine.popen_uci(
+            self.settings.path,
+            **hidden_engine_popen_args(),
+        )
         self._engine.configure(
             {
                 "Threads": max(1, int(self.settings.threads)),
