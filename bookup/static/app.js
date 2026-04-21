@@ -982,6 +982,18 @@ function currentLesson() {
   return state.lessonMap[state.activeLessonId] || null;
 }
 
+function squareClassificationMarkup(record) {
+  const key = classificationKey(record);
+  const label = String(record?.label || "").trim();
+  const icon = MOVE_CLASSIFICATION_ICONS[key];
+  if (!key || !label || !icon) return "";
+  return `
+    <div class="square-classification-badge ${escapeHtml(key)}" title="${escapeHtml(record?.reason || label)}" aria-label="${escapeHtml(label)}">
+      <img src="${icon}" alt="${escapeHtml(label)}" />
+    </div>
+  `;
+}
+
 function insightCacheKey(lesson) {
   const line = lesson ? lessonTrainingLine(lesson).slice(0, state.trainingCursor) : [];
   return `${normalizeFen(state.boardFen)}|${line.join(",")}|${state.activeLessonId}|${state.trainingCursor}`;
@@ -1044,11 +1056,49 @@ function expectedMoveAtCursor(lesson, cursor = state.trainingCursor) {
   return lessonTrainingLine(lesson)[cursor] || "";
 }
 
+function liveExpectedMoveUci(lesson, cursor = state.trainingCursor) {
+  const expected = expectedMoveAtCursor(lesson, cursor);
+  if (expected && (state.legalMoves || []).some((move) => move.uci === expected)) {
+    return expected;
+  }
+  const insightRecommended = String(state.currentInsight?.recommended_move_uci || "").trim();
+  if (insightRecommended && (state.legalMoves || []).some((move) => move.uci === insightRecommended)) {
+    return insightRecommended;
+  }
+  if (!state.branchLocked && cursor === lessonRootCursor(lesson)) {
+    const preferred = String(lesson?.preferred_branch_uci || "").trim();
+    if (preferred && (state.legalMoves || []).some((move) => move.uci === preferred)) {
+      return preferred;
+    }
+  }
+  return expected || insightRecommended;
+}
+
+function currentBoardHint() {
+  const lesson = currentLesson();
+  if (!lesson || !state.boardFen) return null;
+  const expectedUci = liveExpectedMoveUci(lesson);
+  if (!expectedUci || expectedUci.length < 4) return null;
+  const candidate = (state.currentInsight?.candidate_lines || []).find((line) => line.uci === expectedUci);
+  const classification =
+    candidate?.classification
+    || (expectedUci === lesson.best_reply_uci ? (state.currentInsight?.recommended_classification || lesson.recommended_classification) : null)
+    || null;
+  const key = classificationKey(classification);
+  if (!key) return null;
+  return {
+    from: expectedUci.slice(0, 2),
+    to: expectedUci.slice(2, 4),
+    classification,
+    key,
+  };
+}
+
 function updateTrainerCopy() {
   const lesson = currentLesson();
   if (!lesson) return;
   const line = lessonTrainingLine(lesson);
-  const expectedUci = expectedMoveAtCursor(lesson);
+  const expectedUci = liveExpectedMoveUci(lesson);
   const expectedEntry = (state.legalMoves || []).find((move) => move.uci === expectedUci);
   const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
   const openingLabel = lesson.line_label || lesson.opening_name;
@@ -1081,9 +1131,10 @@ function updateTrainerCopy() {
     return;
   }
   if (trainerUserTurn(lesson)) {
-    const targetText = expectedEntry?.san || lesson.best_reply;
+    const targetText = expectedEntry?.san || state.currentInsight?.recommended_move || lesson.best_reply;
+    const label = state.currentInsight?.recommended_classification?.label || lesson.recommended_classification?.label || "Best";
     el.boardSummary.textContent = `Play ${targetText} here. Step ${progress}.`;
-    el.trainerCoach.textContent = `This position is about finding ${targetText}. Play it on the board.`;
+    el.trainerCoach.textContent = `${targetText} is the ${label.toLowerCase()} move here. Play it on the board.`;
   } else {
     el.boardSummary.textContent = `Bookup is playing the line for the other side. Step ${progress}.`;
     el.trainerCoach.textContent = "Watch the practical reply, then answer with your move when the board comes back to you.";
@@ -1280,6 +1331,7 @@ function renderBoard(fen, options = {}) {
   state.boardFen = fen || state.boardFen;
   const previousPieces = state.previousRenderedPieces || {};
   const squares = parseFenBoard(state.boardFen);
+  const moveHint = currentBoardHint();
   const displayFiles = state.boardOrientation === "black" ? [...files].reverse() : files;
   const displayRanks = state.boardOrientation === "black" ? [...ranks].reverse() : ranks;
   el.board.innerHTML = "";
@@ -1295,6 +1347,13 @@ function renderBoard(fen, options = {}) {
     if (state.selectedSquare === squareName) square.classList.add("selected");
     if (state.lastMove?.from === squareName) square.classList.add("last-from");
     if (state.lastMove?.to === squareName) square.classList.add("last-to");
+    if (moveHint?.to === squareName) {
+      square.classList.add("classified-target", `classification-${moveHint.key}`);
+      const overlay = document.createElement("div");
+      overlay.className = "square-classification-overlay";
+      square.appendChild(overlay);
+      square.insertAdjacentHTML("beforeend", squareClassificationMarkup(moveHint.classification));
+    }
 
     const legalTargets = state.selectedSquare ? state.legalByFrom[state.selectedSquare] || [] : [];
     const targetMove = legalTargets.find((item) => item.to === squareName);
@@ -1427,7 +1486,7 @@ async function submitTrainerMove(from, to) {
     return;
   }
 
-  const expectedUci = expectedMoveAtCursor(lesson);
+  const expectedUci = liveExpectedMoveUci(lesson);
   const expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
   if (!expectedUci) return;
   if (move.uci !== expectedUci) {
