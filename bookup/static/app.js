@@ -1528,6 +1528,20 @@ async function submitTrainerMove(from, to) {
   const lesson = currentLesson();
   if (!lesson) return;
   const rootCursor = lessonRootCursor(lesson);
+  const moveInsight = await fetchPositionInsight(
+    state.boardFen,
+    [],
+    move.uci,
+    move.san,
+    move.uci === lesson.your_repeated_move_uci ? Number(lesson.your_top_move_count || 0) : 0,
+  ).catch(() => null);
+  const playedClassification = moveInsight?.your_move_classification || null;
+  const recommendedClassification =
+    moveInsight?.recommended_classification
+    || state.currentInsight?.recommended_classification
+    || lesson.recommended_classification
+    || null;
+  const recommendedMoveLabel = moveInsight?.recommended_move || lesson.best_reply;
 
   if (!state.branchLocked && state.trainingCursor === rootCursor) {
     const preferredBranch = findBranchLine(lesson, lesson.preferred_branch_uci);
@@ -1539,10 +1553,10 @@ async function submitTrainerMove(from, to) {
       await applyMoveToBoard(move.uci);
       state.trainingCursor = rootCursor + 1;
       if (move.uci === lesson.preferred_branch_uci) {
-        el.trainerFeedback.textContent = `Correct. ${lesson.explanation}`;
+        el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} ${escapeHtml(lesson.explanation)}`;
       } else {
         const sourceLabel = chosenBranch.source === "repertoire" ? "your repeated repertoire branch" : "a known branch in this position";
-        el.trainerFeedback.textContent = `${move.san} is ${sourceLabel}. Bookup will follow it, but the preferred move here is ${lesson.best_reply}.`;
+        el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} is ${escapeHtml(sourceLabel)}. Bookup will follow it, but the preferred move here is <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
       }
       el.trainerFeedback.classList.remove("empty");
       await syncTrainerToPlayableTurn();
@@ -1553,7 +1567,7 @@ async function submitTrainerMove(from, to) {
     state.lessonMistakes += 1;
     recordReview(lesson.lesson_id, false);
     playMoveSound("", { error: true });
-    el.trainerFeedback.textContent = `${move.san} leaves your known repertoire here. Bookup recommends ${lesson.best_reply} and will switch back to that branch.`;
+    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} leaves your known repertoire here. Bookup recommends <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")} and will switch back to that branch.`;
     el.trainerFeedback.classList.remove("empty");
     if (preferredBranch) {
       state.branchLocked = true;
@@ -1580,7 +1594,7 @@ async function submitTrainerMove(from, to) {
       state.trainingCursor === (lesson.target_ply_index || 0)
         ? lesson.explanation
         : `To stay inside this repertoire line, Bookup wants ${expectedSan} here before moving on.`;
-    el.trainerFeedback.textContent = `${move.san} misses the line here. ${explanation} Best move: ${expectedSan}.`;
+    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} misses the line here. ${escapeHtml(explanation)} Best move: <strong>${escapeHtml(expectedSan)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
     el.trainerFeedback.classList.remove("empty");
     el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
@@ -1611,9 +1625,9 @@ async function submitTrainerMove(from, to) {
     state.trainingCursor - 1 === (lesson.target_ply_index || 0)
       ? lesson.explanation
       : "That keeps the repertoire line on track.";
-  el.trainerFeedback.textContent = lineFinished
-    ? `Line complete. ${successExplanation}`
-    : `Correct. ${successExplanation}`;
+  el.trainerFeedback.innerHTML = lineFinished
+    ? `Line complete. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`
+    : `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`;
   el.trainerFeedback.classList.remove("empty");
   el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
