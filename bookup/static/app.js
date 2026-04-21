@@ -104,6 +104,13 @@ const state = {
   legalByFrom: {},
   selectedSquare: "",
   dragFrom: "",
+  dragPiece: "",
+  dragGhost: null,
+  dragPointerId: null,
+  dragMoved: false,
+  dragStartX: 0,
+  dragStartY: 0,
+  suppressNextClick: false,
   lastMove: null,
   lastMoveSan: "",
   pendingMoveAnimationKey: "",
@@ -169,6 +176,7 @@ async function init() {
     }
   });
   document.addEventListener("pointerdown", unlockAudio);
+  document.addEventListener("pointermove", handleGlobalPointerMove);
   document.addEventListener("pointerup", handleGlobalPointerUp);
   document.addEventListener("pointercancel", clearDragState);
 
@@ -390,9 +398,9 @@ function renderArrowGroup(lines = [], role = "engine") {
     const from = squareCenter(uci.slice(0, 2));
     const to = squareCenter(uci.slice(2, 4));
     if (!from || !to) return "";
-    const emphasis = role === "threat" ? Math.max(0.46, 0.7 - index * 0.08) : Math.max(0.34, 0.6 - index * 0.06);
-    const thickness = role === "threat" ? 22 : 18;
-    const head = role === "threat" ? 34 : 30;
+    const emphasis = role === "threat" ? Math.max(0.48, 0.72 - index * 0.08) : Math.max(0.36, 0.62 - index * 0.06);
+    const thickness = 20;
+    const head = 34;
     const metrics = arrowMetrics(from, to);
     if (!metrics) return "";
     return `
@@ -425,8 +433,58 @@ function renderArrows(insight = null) {
 }
 
 function clearDragState() {
-  if (!state.dragFrom) return;
+  if (state.dragGhost instanceof HTMLElement) {
+    state.dragGhost.remove();
+  }
   state.dragFrom = "";
+  state.dragPiece = "";
+  state.dragGhost = null;
+  state.dragPointerId = null;
+  state.dragMoved = false;
+  state.dragStartX = 0;
+  state.dragStartY = 0;
+}
+
+function updateDragGhostPosition(clientX, clientY) {
+  if (!(state.dragGhost instanceof HTMLElement)) return;
+  state.dragGhost.style.left = `${clientX}px`;
+  state.dragGhost.style.top = `${clientY}px`;
+}
+
+function beginPieceDrag(squareName, piece, event) {
+  if (!state.activeLessonId) return;
+  if (pieceSide(piece) !== sideToMove(state.boardFen)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.dragFrom = squareName;
+  state.dragPiece = piece;
+  state.dragPointerId = event.pointerId ?? null;
+  state.dragMoved = false;
+  state.dragStartX = event.clientX;
+  state.dragStartY = event.clientY;
+  state.selectedSquare = squareName;
+  if (state.dragGhost instanceof HTMLElement) {
+    state.dragGhost.remove();
+  }
+  const ghost = document.createElement("img");
+  ghost.className = "piece-drag-ghost";
+  ghost.src = PIECE_ASSETS[piece] || "";
+  ghost.alt = piece;
+  state.dragGhost = ghost;
+  el.boardWrap?.appendChild(ghost);
+  updateDragGhostPosition(event.clientX, event.clientY);
+  renderBoard(state.boardFen, { animate: false });
+}
+
+function handleGlobalPointerMove(event) {
+  if (!state.dragFrom) return;
+  if (state.dragPointerId !== null && event.pointerId !== state.dragPointerId) return;
+  updateDragGhostPosition(event.clientX, event.clientY);
+  const deltaX = event.clientX - state.dragStartX;
+  const deltaY = event.clientY - state.dragStartY;
+  if (Math.hypot(deltaX, deltaY) > 6) {
+    state.dragMoved = true;
+  }
 }
 
 function syncImportScope() {
@@ -1345,6 +1403,7 @@ function renderBoard(fen, options = {}) {
     square.className = `square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"} selectable`;
     square.dataset.square = squareName;
     if (state.selectedSquare === squareName) square.classList.add("selected");
+    if (state.dragFrom === squareName) square.classList.add("drag-source");
     if (state.lastMove?.from === squareName) square.classList.add("last-from");
     if (state.lastMove?.to === squareName) square.classList.add("last-to");
     if (moveHint?.to === squareName) {
@@ -1365,22 +1424,17 @@ function renderBoard(fen, options = {}) {
     }
 
     square.addEventListener("click", () => handleSquareClick(squareName));
-    square.addEventListener("pointerdown", (event) => {
-      if (!piece || pieceSide(piece) !== sideToMove(state.boardFen)) return;
-      event.preventDefault();
-      state.dragFrom = squareName;
-      state.selectedSquare = squareName;
-    });
     if (piece) {
       const img = document.createElement("img");
       img.className = "piece";
       img.src = PIECE_ASSETS[piece];
       img.alt = piece;
+      if (state.selectedSquare === squareName) img.classList.add("piece-selected");
+      if (state.dragFrom === squareName && state.dragGhost instanceof HTMLElement) {
+        img.classList.add("piece-dragging-source");
+      }
       img.addEventListener("pointerdown", (event) => {
-        if (pieceSide(piece) !== sideToMove(state.boardFen)) return;
-        event.preventDefault();
-        state.dragFrom = squareName;
-        state.selectedSquare = squareName;
+        beginPieceDrag(squareName, piece, event);
       });
       square.appendChild(img);
     }
@@ -1404,24 +1458,41 @@ function renderBoard(fen, options = {}) {
 
 async function handleGlobalPointerUp(event) {
   if (!state.dragFrom) return;
+  if (state.dragPointerId !== null && event.pointerId !== state.dragPointerId) return;
   const target = document.elementFromPoint(event.clientX, event.clientY);
   const square = target instanceof Element ? target.closest(".square") : null;
   const from = state.dragFrom;
-  state.dragFrom = "";
+  const moved = state.dragMoved;
+  clearDragState();
   if (!(square instanceof HTMLElement)) {
+    state.selectedSquare = from;
+    state.suppressNextClick = true;
     renderBoard(state.boardFen, { animate: false });
     return;
   }
   const to = square.dataset.square || "";
   if (!to) {
+    state.selectedSquare = from;
+    state.suppressNextClick = true;
     renderBoard(state.boardFen, { animate: false });
     return;
   }
+  if (!moved || from === to) {
+    state.selectedSquare = from;
+    state.suppressNextClick = true;
+    renderBoard(state.boardFen, { animate: false });
+    return;
+  }
+  state.suppressNextClick = true;
   await submitTrainerMove(from, to);
 }
 
 function handleSquareClick(squareName) {
   if (!state.activeLessonId) return;
+  if (state.suppressNextClick) {
+    state.suppressNextClick = false;
+    return;
+  }
   if (!state.selectedSquare) {
     if ((state.legalByFrom[squareName] || []).length) {
       state.selectedSquare = squareName;
@@ -1434,14 +1505,24 @@ function handleSquareClick(squareName) {
     renderBoard(state.boardFen, { animate: false });
     return;
   }
+  const activeTargets = state.legalByFrom[state.selectedSquare] || [];
+  if (!activeTargets.some((item) => item.to === squareName) && (state.legalByFrom[squareName] || []).length) {
+    state.selectedSquare = squareName;
+    renderBoard(state.boardFen, { animate: false });
+    return;
+  }
   submitTrainerMove(state.selectedSquare, squareName);
 }
 
 async function submitTrainerMove(from, to) {
   const move = (state.legalByFrom[from] || []).find((item) => item.to === to);
+  if (!move) {
+    state.selectedSquare = from;
+    renderBoard(state.boardFen, { animate: false });
+    return;
+  }
   state.selectedSquare = "";
   renderBoard(state.boardFen, { animate: false });
-  if (!move) return;
 
   const lesson = currentLesson();
   if (!lesson) return;
