@@ -112,6 +112,7 @@ const state = {
   dragStartY: 0,
   suppressNextClick: false,
   lastMove: null,
+  lastMoveClassification: null,
   lastMoveSan: "",
   pendingMoveAnimationKey: "",
   renderedMoveAnimationKey: "",
@@ -223,11 +224,13 @@ function rebuildLegalByFrom() {
   });
 }
 
-function applyBoardState(payload) {
+function applyBoardState(payload, options = {}) {
+  const { classification = null } = options;
   state.boardFen = normalizeFen(payload?.fen || state.boardFen);
   state.legalMoves = Array.isArray(payload?.legal_moves) ? payload.legal_moves : [];
   rebuildLegalByFrom();
   state.lastMove = payload?.last_move || null;
+  state.lastMoveClassification = classification;
   state.lastMoveSan = String(payload?.played_san || state.lastMoveSan || "");
   state.pendingMoveAnimationKey = state.lastMove
     ? `${state.boardFen}|${state.lastMove.from}|${state.lastMove.to}|${state.lastMoveSan}`
@@ -1195,6 +1198,18 @@ function liveExpectedMoveUci(lesson, cursor = state.trainingCursor) {
 function currentBoardHint() {
   const lesson = currentLesson();
   if (!lesson || !state.boardFen) return null;
+  if (state.lastMove?.to && state.lastMoveClassification) {
+    const key = classificationKey(state.lastMoveClassification);
+    if (key) {
+      return {
+        from: state.lastMove.from,
+        to: state.lastMove.to,
+        classification: state.lastMoveClassification,
+        key,
+        source: "played",
+      };
+    }
+  }
   const expectedUci = liveExpectedMoveUci(lesson);
   if (!expectedUci || expectedUci.length < 4) return null;
   const candidate = (state.currentInsight?.candidate_lines || []).find((line) => line.uci === expectedUci);
@@ -1209,6 +1224,7 @@ function currentBoardHint() {
     to: expectedUci.slice(2, 4),
     classification,
     key,
+    source: "hint",
   };
 }
 
@@ -1262,7 +1278,7 @@ function updateTrainerCopy() {
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
 }
 
-async function applyMoveToBoard(moveUci) {
+async function applyMoveToBoard(moveUci, classification = null) {
   const response = await fetch("/api/apply-move", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1271,7 +1287,7 @@ async function applyMoveToBoard(moveUci) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not apply move.");
   playMoveSound(payload.played_san);
-  applyBoardState(payload);
+  applyBoardState(payload, { classification });
   renderBoard(state.boardFen, { animate: true });
   return payload;
 }
@@ -1290,7 +1306,7 @@ async function syncTrainerToPlayableTurn() {
       const moveEntry = (state.legalMoves || []).find((item) => item.uci === setupMove);
       const moveSan = moveEntry?.san || setupMove;
       const moveMeta = await classifyMoveAtCurrentPosition(lesson, setupMove, moveSan, 0);
-      await applyMoveToBoard(setupMove);
+      await applyMoveToBoard(setupMove, moveMeta.classification || moveMeta.recommendedClassification || null);
       state.trainingCursor += 1;
       autoMoves.push({
         color: movingColor,
@@ -1308,7 +1324,7 @@ async function syncTrainerToPlayableTurn() {
     const expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
     const expectedSan = expectedEntry?.san || expectedUci;
     const moveMeta = await classifyMoveAtCurrentPosition(lesson, expectedUci, expectedSan, 0);
-    await applyMoveToBoard(expectedUci);
+    await applyMoveToBoard(expectedUci, moveMeta.classification || moveMeta.recommendedClassification || null);
     state.trainingCursor += 1;
     autoMoves.push({
       color: movingColor,
@@ -1338,6 +1354,7 @@ async function loadLessonById(lessonId) {
   state.selectedSquare = "";
   state.dragFrom = "";
   state.lastMove = null;
+  state.lastMoveClassification = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
   state.currentInsight = null;
@@ -1391,6 +1408,7 @@ function clearTrainer() {
   state.selectedSquare = "";
   state.dragFrom = "";
   state.lastMove = null;
+  state.lastMoveClassification = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
   state.activeTrainingLine = [];
@@ -1634,7 +1652,7 @@ async function submitTrainerMove(from, to) {
       state.branchLocked = true;
       state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(chosenBranch.line_uci || [])];
       state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, chosenBranch.line_san);
-      await applyMoveToBoard(move.uci);
+      await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
       state.trainingCursor = rootCursor + 1;
       if (move.uci === lesson.preferred_branch_uci) {
         el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} ${escapeHtml(lesson.explanation)}`;
@@ -1660,7 +1678,7 @@ async function submitTrainerMove(from, to) {
       state.branchLocked = true;
       state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(preferredBranch.line_uci || [])];
       state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, preferredBranch.line_san);
-      await applyMoveToBoard(lesson.preferred_branch_uci);
+        await applyMoveToBoard(lesson.preferred_branch_uci, recommendedClassification || null);
       state.trainingCursor = rootCursor + 1;
       const syncResult = await syncTrainerToPlayableTurn();
       if (syncResult?.autoMoves?.length) {
@@ -1688,8 +1706,9 @@ async function submitTrainerMove(from, to) {
     el.trainerFeedback.classList.remove("empty");
     el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
-    state.lastMove = null;
-    await applyMoveToBoard(expectedUci);
+      state.lastMove = null;
+      state.lastMoveClassification = null;
+      await applyMoveToBoard(expectedUci, recommendedClassification || null);
     state.trainingCursor += 1;
     const syncResult = await syncTrainerToPlayableTurn();
     if (syncResult?.autoMoves?.length) {
@@ -1700,7 +1719,7 @@ async function submitTrainerMove(from, to) {
     return;
   }
 
-  await applyMoveToBoard(move.uci);
+  await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
   state.trainingCursor += 1;
   const syncResult = await syncTrainerToPlayableTurn();
 
