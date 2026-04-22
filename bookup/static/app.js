@@ -1501,18 +1501,19 @@ function renderBoard(fen, options = {}) {
     const file = files.indexOf(fileLabel);
     const rank = 8 - Number(rankLabel);
     const squareName = `${fileLabel}${rankLabel}`;
-    const piece = squares[(rank * 8) + file];
-    const square = document.createElement("div");
-    square.className = `square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"} selectable`;
-    square.dataset.square = squareName;
-    if (state.selectedSquare === squareName) square.classList.add("selected");
-    if (state.dragFrom === squareName) square.classList.add("drag-source");
-    if (state.lastMove?.from === squareName) square.classList.add("last-from");
-    if (state.lastMove?.to === squareName) square.classList.add("last-to");
-    if (moveHint?.to === squareName) {
-      square.classList.add("classified-target", `classification-${moveHint.key}`);
-      const overlay = document.createElement("div");
-      overlay.className = "square-classification-overlay";
+      const piece = squares[(rank * 8) + file];
+      const square = document.createElement("div");
+      square.className = `square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"} selectable`;
+      square.dataset.square = squareName;
+      const classifiedPlayedMove = moveHint?.source === "played" && !!moveHint?.classification;
+      if (state.selectedSquare === squareName) square.classList.add("selected");
+      if (state.dragFrom === squareName) square.classList.add("drag-source");
+      if (state.lastMove?.from === squareName && !classifiedPlayedMove) square.classList.add("last-from");
+      if (state.lastMove?.to === squareName) square.classList.add("last-to");
+      if (moveHint?.to === squareName) {
+        square.classList.add("classified-target", `classification-${moveHint.key}`);
+        const overlay = document.createElement("div");
+        overlay.className = "square-classification-overlay";
       square.appendChild(overlay);
       square.insertAdjacentHTML("beforeend", squareClassificationMarkup(moveHint.classification));
     }
