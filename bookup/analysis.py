@@ -18,8 +18,8 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from .chesscom import ImportedGame
 from .classifications import (
     annotate_candidate_classifications,
-    book_classification_payload,
     classify_move_record,
+    maybe_book_classification,
 )
 from .engine import EngineSession
 from .opening_names import lookup_by_board, lookup_by_eco
@@ -461,6 +461,11 @@ def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, pla
 
     root_lines = engine.analyse(board, multipv=max(limit, engine.settings.multipv))
     database_moves = _database_moves(board, play_uci, limit=limit + 1)
+    popularity_by_uci = {
+        str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
+        for item in database_moves
+        if item.get("uci")
+    }
     candidate_lines: list[dict[str, Any]] = []
     for line in root_lines[:limit]:
         pv = line.get("pv") or []
@@ -484,7 +489,12 @@ def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, pla
                 "popularity": next((item["popularity"] for item in database_moves if item.get("uci") == first_move.uci()), 0.0),
             }
         )
-    candidate_lines = annotate_candidate_classifications(board, candidate_lines)
+    candidate_lines = annotate_candidate_classifications(
+        board,
+        candidate_lines,
+        opening_phase=len(play_uci) < OPENING_PLIES,
+        popularity_by_uci=popularity_by_uci,
+    )
 
     POSITION_INSIGHT_CACHE[cache_key] = {
         "candidate_lines": list(candidate_lines),
@@ -618,6 +628,12 @@ def build_position_insight(
                 best_line,
                 second_loss=second_loss,
                 is_player_move=True,
+            )
+            your_move_classification = maybe_book_classification(
+                your_move_classification,
+                opening_phase=len(play_uci or []) < OPENING_PLIES,
+                repeated_count=your_move_count,
+                popularity=next((item["popularity"] for item in database_moves if item.get("uci") == your_move_uci), 0.0),
             )
     return {
         "candidate_lines": candidate_lines,
@@ -777,6 +793,13 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         root,
         second_loss=second_loss,
     )
+    recommended_classification = maybe_book_classification(
+        recommended_classification,
+        opening_phase=node.ply_index < OPENING_PLIES,
+        repeated_count=best_repeat_count,
+        popularity=next((item["popularity"] for item in database_moves if item.get("uci") == best_move_uci), 0.0),
+        line_status=line_status,
+    )
     your_branch = branch_by_uci.get(top_played_uci) or next((line for line in candidate_lines if line["uci"] == top_played_uci), None)
     your_move_classification = None
     if your_branch:
@@ -787,13 +810,13 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             second_loss=second_loss,
             is_player_move=True,
         )
-
-    if line_status == "known" and top_played_uci == best_move_uci and top_played_count >= REPEATED_MISTAKE_THRESHOLD:
-        recommended_classification = book_classification_payload(
-            float(root.get("expected_points", 0.0)),
-            reason="repertoire/database move",
+        your_move_classification = maybe_book_classification(
+            your_move_classification,
+            opening_phase=node.ply_index < OPENING_PLIES,
+            repeated_count=top_played_count,
+            popularity=next((item["popularity"] for item in database_moves if item.get("uci") == top_played_uci), 0.0),
+            line_status=line_status,
         )
-        your_move_classification = recommended_classification
 
     locked_training_line_uci = [*node.play_uci, *preferred_branch["line_uci"]]
     locked_training_line_san = _uci_line_sans_from_start(locked_training_line_uci)

@@ -27,6 +27,9 @@ EXPECTED_POINTS_BANDS = (
     ("blunder", 1.00),
 )
 
+BOOK_POPULARITY_THRESHOLD = 3.0
+BOOK_REPEAT_THRESHOLD = 2
+BOOK_ALLOWED_BASE_KEYS = {"best", "excellent", "good"}
 GREAT_KEEP_ADVANTAGE_THRESHOLD = 0.53
 GREAT_KEEP_ADVANTAGE_CP = 20
 BRILLIANT_MATERIAL_DROP = 200
@@ -71,6 +74,29 @@ def classification_payload(
 
 def book_classification_payload(expected_points: float, *, reason: str = "repertoire/database move") -> dict[str, Any]:
     return classification_payload("book", loss=0.0, reason=reason, expected_points=expected_points)
+
+
+def maybe_book_classification(
+    existing: dict[str, Any] | None,
+    *,
+    opening_phase: bool,
+    repeated_count: int = 0,
+    popularity: float = 0.0,
+    line_status: str = "",
+) -> dict[str, Any] | None:
+    if not existing:
+        return existing
+    if not opening_phase or line_status == "needs_work":
+        return existing
+    key = str(existing.get("key", "") or "").strip().lower()
+    if key not in BOOK_ALLOWED_BASE_KEYS:
+        return existing
+    if repeated_count < BOOK_REPEAT_THRESHOLD and float(popularity or 0.0) < BOOK_POPULARITY_THRESHOLD:
+        return existing
+    return book_classification_payload(
+        float(existing.get("expected_points", 0.0)),
+        reason="conventional opening move",
+    )
 
 
 def keeps_advantage(expected_points: float, score_cp: int = 0) -> bool:
@@ -214,9 +240,19 @@ def classify_move_record(
     )
 
 
-def annotate_candidate_classifications(board: chess.Board, candidate_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def annotate_candidate_classifications(
+    board: chess.Board,
+    candidate_lines: list[dict[str, Any]],
+    *,
+    opening_phase: bool = False,
+    repeated_counts: dict[str, int] | None = None,
+    popularity_by_uci: dict[str, float] | None = None,
+    line_status: str = "",
+) -> list[dict[str, Any]]:
     if not candidate_lines:
         return candidate_lines
+    repeated_counts = repeated_counts or {}
+    popularity_by_uci = popularity_by_uci or {}
     best_record = candidate_lines[0]
     best_expected = float(best_record.get("expected_points", 0.0))
     second_loss = 0.0
@@ -239,6 +275,13 @@ def annotate_candidate_classifications(board: chess.Board, candidate_lines: list
             best_record,
             second_loss=second_loss,
             great_keeps_advantage_count=great_keeps_advantage_count,
+        )
+        line["classification"] = maybe_book_classification(
+            line["classification"],
+            opening_phase=opening_phase,
+            repeated_count=int(repeated_counts.get(str(line.get("uci", "")), 0) or 0),
+            popularity=float(popularity_by_uci.get(str(line.get("uci", "")), 0.0) or 0.0),
+            line_status=line_status,
         )
         line["classification_label"] = line["classification"]["label"]
         line["classification_icon"] = line["classification"]["icon"]
