@@ -670,43 +670,53 @@ input:focus {
 .square.dark { background: #b58863; }
 .square.selectable { cursor: pointer; }
 
-.square.classified-target.classification-book .square-classification-overlay {
+.square.classified-target.classification-book .square-classification-overlay,
+.square.classified-source.classification-book .square-classification-overlay {
   background: rgba(221, 182, 145, 0.48);
 }
 
-.square.classified-target.classification-best .square-classification-overlay {
+.square.classified-target.classification-best .square-classification-overlay,
+.square.classified-source.classification-best .square-classification-overlay {
   background: rgba(151, 206, 102, 0.34);
 }
 
-.square.classified-target.classification-excellent .square-classification-overlay {
+.square.classified-target.classification-excellent .square-classification-overlay,
+.square.classified-source.classification-excellent .square-classification-overlay {
   background: rgba(117, 164, 205, 0.3);
 }
 
-.square.classified-target.classification-good .square-classification-overlay {
+.square.classified-target.classification-good .square-classification-overlay,
+.square.classified-source.classification-good .square-classification-overlay {
   background: rgba(142, 183, 101, 0.28);
 }
 
-.square.classified-target.classification-great .square-classification-overlay {
+.square.classified-target.classification-great .square-classification-overlay,
+.square.classified-source.classification-great .square-classification-overlay {
   background: rgba(137, 177, 217, 0.34);
 }
 
-.square.classified-target.classification-brilliant .square-classification-overlay {
+.square.classified-target.classification-brilliant .square-classification-overlay,
+.square.classified-source.classification-brilliant .square-classification-overlay {
   background: rgba(77, 214, 194, 0.4);
 }
 
-.square.classified-target.classification-inaccuracy .square-classification-overlay {
+.square.classified-target.classification-inaccuracy .square-classification-overlay,
+.square.classified-source.classification-inaccuracy .square-classification-overlay {
   background: rgba(244, 206, 94, 0.3);
 }
 
-.square.classified-target.classification-mistake .square-classification-overlay {
+.square.classified-target.classification-mistake .square-classification-overlay,
+.square.classified-source.classification-mistake .square-classification-overlay {
   background: rgba(255, 176, 101, 0.38);
 }
 
-.square.classified-target.classification-miss .square-classification-overlay {
+.square.classified-target.classification-miss .square-classification-overlay,
+.square.classified-source.classification-miss .square-classification-overlay {
   background: rgba(255, 143, 123, 0.34);
 }
 
-.square.classified-target.classification-blunder .square-classification-overlay {
+.square.classified-target.classification-blunder .square-classification-overlay,
+.square.classified-source.classification-blunder .square-classification-overlay {
   background: rgba(255, 83, 83, 0.42);
 }
 

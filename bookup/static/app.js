@@ -1510,11 +1510,17 @@ function renderBoard(fen, options = {}) {
       if (state.dragFrom === squareName) square.classList.add("drag-source");
       if (state.lastMove?.from === squareName && !classifiedPlayedMove) square.classList.add("last-from");
       if (state.lastMove?.to === squareName) square.classList.add("last-to");
+      if (moveHint?.from === squareName && classifiedPlayedMove) {
+        square.classList.add("classified-source", `classification-${moveHint.key}`);
+        const overlay = document.createElement("div");
+        overlay.className = "square-classification-overlay";
+        square.appendChild(overlay);
+      }
       if (moveHint?.to === squareName) {
         square.classList.add("classified-target", `classification-${moveHint.key}`);
         const overlay = document.createElement("div");
         overlay.className = "square-classification-overlay";
-      square.appendChild(overlay);
+        square.appendChild(overlay);
       square.insertAdjacentHTML("beforeend", squareClassificationMarkup(moveHint.classification));
     }
 
