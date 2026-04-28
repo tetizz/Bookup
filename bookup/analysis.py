@@ -30,6 +30,7 @@ ONLINE_OPENING_CACHE: dict[str, dict[str, str]] = {}
 EXPLORER_CACHE: dict[str, dict[str, Any]] = {}
 POSITION_INSIGHT_CACHE: dict[str, dict[str, Any]] = {}
 EXPLORER_AVAILABLE = True
+EXPLORER_LAST_ERROR = ""
 LICHESS_EXPLORER_URL = "https://explorer.lichess.ovh/lichess"
 EXPLORER_HEADERS = {
     "User-Agent": "Bookup/1.0 (local repertoire trainer)",
@@ -64,11 +65,14 @@ class PositionNode:
 
 
 def configure_lichess(token: str = "") -> None:
-    global EXPLORER_AVAILABLE
+    global EXPLORER_AVAILABLE, EXPLORER_LAST_ERROR
     normalized = token.strip()
+    if normalized.lower() in {"demo-token", "your-token", "lichess-token", "paste-token-here"}:
+        normalized = ""
     EXPLORER_HEADERS.clear()
     EXPLORER_HEADERS["User-Agent"] = "Bookup/1.0 (local repertoire trainer)"
-    EXPLORER_AVAILABLE = True
+    EXPLORER_AVAILABLE = bool(normalized)
+    EXPLORER_LAST_ERROR = "" if normalized else "Add a real Lichess API token to show live explorer database moves."
     if normalized:
         EXPLORER_HEADERS["Authorization"] = f"Bearer {normalized}"
     EXPLORER_CACHE.clear()
@@ -182,10 +186,12 @@ def _opening_library() -> ChessOpeningsLibrary | None:
 
 
 def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
+    global EXPLORER_LAST_ERROR
     cache_key = f"{board.epd()}|{play_key}"
     if cache_key in EXPLORER_CACHE:
         return EXPLORER_CACHE[cache_key]
     if not EXPLORER_AVAILABLE:
+        EXPLORER_LAST_ERROR = "Add a real Lichess API token to show live explorer database moves."
         return {}
     try:
         response = requests.get(
@@ -202,7 +208,9 @@ def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
         )
         response.raise_for_status()
         payload = response.json()
+        EXPLORER_LAST_ERROR = ""
     except Exception:
+        EXPLORER_LAST_ERROR = "Lichess explorer rejected the token or could not be reached."
         payload = {}
     EXPLORER_CACHE[cache_key] = payload
     return payload
@@ -632,6 +640,8 @@ def build_position_insight(
             "candidate_lines": [],
             "threat_lines": [],
             "database_moves": database_moves,
+            "database_error": EXPLORER_LAST_ERROR,
+            "database_source": "lichess" if database_moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
             "recommended_move": "",
             "recommended_move_uci": "",
             "recommended_classification": None,
@@ -669,6 +679,8 @@ def build_position_insight(
         "candidate_lines": candidate_lines,
         "threat_lines": _threat_lines_for_board(board, candidate_lines),
         "database_moves": database_moves,
+        "database_error": EXPLORER_LAST_ERROR,
+        "database_source": "lichess" if database_moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
         "recommended_move": best_line["move"],
         "recommended_move_uci": best_line["uci"],
         "recommended_classification": best_line.get("classification"),

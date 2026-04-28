@@ -275,7 +275,8 @@ function applyDefaultsToState(saved = {}) {
 }
 
 function currentLichessToken() {
-  return String(el.studyLichessToken?.value || el.lichessToken?.value || defaults.lichess_token || "").trim();
+  const token = String(el.studyLichessToken?.value || el.lichessToken?.value || defaults.lichess_token || "").trim();
+  return ["demo-token", "your-token", "lichess-token", "paste-token-here"].includes(token.toLowerCase()) ? "" : token;
 }
 
 function currentStudySettingsPayload() {
@@ -1434,6 +1435,7 @@ function renderStudyWorkspace() {
   const insight = currentLiveInsight(lesson);
   const candidateLines = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines : [];
   const databaseMoves = Array.isArray(insight?.database_moves) ? insight.database_moves : [];
+  const databaseError = String(insight?.database_error || "").trim();
   const evalCp = currentEvalCpForStudy(lesson, insight);
   const evalPercent = computeEvalPercent(evalCp);
   const explorerEnabled = Boolean(currentLichessToken());
@@ -1504,9 +1506,10 @@ function renderStudyWorkspace() {
         : "Loading fallback move context for this position...";
     } else if (!databaseMoves.length) {
       el.studyDatabaseMoves.className = "stack empty";
-      el.studyDatabaseMoves.textContent = explorerEnabled
-        ? "No database moves were returned for this exact position yet."
-        : "Add a Lichess token in Setup or Study Lines for richer database move coverage.";
+      el.studyDatabaseMoves.textContent = databaseError
+        || (explorerEnabled
+          ? "No database moves were returned for this exact position yet."
+          : "Add a Lichess token in Setup or Study Lines for richer database move coverage.");
     } else {
       el.studyDatabaseMoves.className = "stack";
       el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
@@ -1630,6 +1633,7 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       fen,
+      lichess_token: currentLichessToken(),
       play_uci: playUci,
       your_move_uci: yourMoveUci,
       your_move_san: yourMoveSan,
@@ -1646,6 +1650,8 @@ function buildLessonInsight(lesson) {
     candidate_lines: Array.isArray(lesson?.candidate_lines) ? lesson.candidate_lines : [],
     threat_lines: Array.isArray(lesson?.threat_lines) ? lesson.threat_lines : [],
     database_moves: Array.isArray(lesson?.database_moves) ? lesson.database_moves : [],
+    database_error: lesson?.database_error || "",
+    database_source: lesson?.database_source || "cached",
     recommended_move: lesson?.best_reply || "",
     recommended_move_uci: lesson?.best_reply_uci || "",
     recommended_classification: lesson?.recommended_classification || null,

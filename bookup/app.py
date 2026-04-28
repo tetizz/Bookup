@@ -463,7 +463,8 @@ def position_insight() -> tuple:
 
     config = load_config()
     settings = build_engine_settings(config)
-    configure_lichess(str(config.get("lichess_token", "")))
+    request_token = str(payload.get("lichess_token", config.get("lichess_token", ""))).strip()
+    configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     your_move_uci = str(payload.get("your_move_uci", "")).strip()
     your_move_san = str(payload.get("your_move_san", "")).strip()
