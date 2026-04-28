@@ -52,6 +52,7 @@ class EngineSettings:
     threads: int = 8
     hash_mb: int = 2048
     multipv: int = 5
+    think_time_sec: float = 5.0
 
 
 class EngineSession:
@@ -93,10 +94,21 @@ class EngineSession:
         assert self._engine is not None
         return self._engine
 
-    def analyse(self, board: chess.Board, depth: int | None = None, multipv: int | None = None) -> list[dict]:
+    def analyse(
+        self,
+        board: chess.Board,
+        depth: int | None = None,
+        multipv: int | None = None,
+        time_sec: float | None = None,
+    ) -> list[dict]:
+        limit_kwargs: dict[str, float | int] = {
+            "depth": depth or self.settings.depth,
+        }
+        if time_sec is not None and float(time_sec) > 0:
+            limit_kwargs["time"] = float(time_sec)
         info = self.engine.analyse(
             board,
-            chess.engine.Limit(depth=depth or self.settings.depth),
+            chess.engine.Limit(**limit_kwargs),
             multipv=max(1, int(multipv or self.settings.multipv)),
             info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
         )

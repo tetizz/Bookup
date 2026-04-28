@@ -1,7 +1,8 @@
-const defaults = window.APP_DEFAULTS || {};
+﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 2;
+const PROFILE_SCHEMA_VERSION = 7;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
 const PIECE_ASSETS = {
   P: "/static/pieces/cburnett/wP.svg",
@@ -18,21 +19,23 @@ const PIECE_ASSETS = {
   k: "/static/pieces/cburnett/bK.svg",
 };
 const MOVE_CLASSIFICATION_ICONS = {
-  brilliant: "/static/move-classifications/brilliant.png",
-  great: "/static/move-classifications/great.png",
-  best: "/static/move-classifications/best.png",
-  excellent: "/static/move-classifications/excellent.png",
-  good: "/static/move-classifications/good.png",
-  book: "/static/move-classifications/book.svg",
-  inaccuracy: "/static/move-classifications/inaccuracy.png",
-  mistake: "/static/move-classifications/mistake.png",
-  blunder: "/static/move-classifications/blunder.png",
-  miss: "/static/move-classifications/miss.png",
+  brilliant: `/static/move-classifications/brilliant.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  great: `/static/move-classifications/great.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  best: `/static/move-classifications/best.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  forced: `/static/move-classifications/best.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  excellent: `/static/move-classifications/excellent.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  good: `/static/move-classifications/good.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  book: `/static/move-classifications/book.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  inaccuracy: `/static/move-classifications/inaccuracy.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  mistake: `/static/move-classifications/mistake.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  blunder: `/static/move-classifications/blunder.png?v=${CLASSIFICATION_ASSET_VERSION}`,
+  miss: `/static/move-classifications/miss.png?v=${CLASSIFICATION_ASSET_VERSION}`,
 };
 window.BOOKUP_MOVE_CLASSIFICATION_ICONS = MOVE_CLASSIFICATION_ICONS;
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 const REVIEW_INTERVALS = [0, 1, 3, 7, 14];
+const INALTERABLE_CLASSIFICATION_KEYS = new Set(["best", "great", "brilliant", "book", "forced"]);
 
 const el = {
   username: document.getElementById("usernameInput"),
@@ -42,11 +45,15 @@ const el = {
   lichessToken: document.getElementById("lichessTokenInput"),
   enginePath: document.getElementById("enginePathInput"),
   depth: document.getElementById("depthInput"),
+  thinkTime: document.getElementById("thinkTimeInput"),
   multiPv: document.getElementById("multiPvInput"),
   threads: document.getElementById("threadsInput"),
   hash: document.getElementById("hashInput"),
   analyze: document.getElementById("analyzeBtn"),
   status: document.getElementById("status"),
+  progressTrack: document.getElementById("progressTrack"),
+  progressFill: document.getElementById("progressFill"),
+  progressLabel: document.getElementById("progressLabel"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
   summaryPositions: document.getElementById("summaryPositions"),
@@ -75,6 +82,27 @@ const el = {
   fileLabels: document.getElementById("fileLabels"),
   boardTitle: document.getElementById("boardTitle"),
   boardSummary: document.getElementById("boardSummary"),
+  studyEvalScore: document.getElementById("studyEvalScore"),
+  studyEvalFill: document.getElementById("studyEvalFill"),
+  studyEvalCaption: document.getElementById("studyEvalCaption"),
+  studyOpeningMeta: document.getElementById("studyOpeningMeta"),
+  studyPositionLinks: document.getElementById("studyPositionLinks"),
+  studyAnalysisMeta: document.getElementById("studyAnalysisMeta"),
+  studyDatabaseMeta: document.getElementById("studyDatabaseMeta"),
+  studyMoveMeta: document.getElementById("studyMoveMeta"),
+  studyEngineLines: document.getElementById("studyEngineLines"),
+  studyDatabaseMoves: document.getElementById("studyDatabaseMoves"),
+  studyMoveClassifications: document.getElementById("studyMoveClassifications"),
+  studyMoveTrail: document.getElementById("studyMoveTrail"),
+  studyLichessToken: document.getElementById("studyLichessTokenInput"),
+  studyEnginePath: document.getElementById("studyEnginePathInput"),
+  studyDepth: document.getElementById("studyDepthInput"),
+  studyThinkTime: document.getElementById("studyThinkTimeInput"),
+  studyMultiPv: document.getElementById("studyMultiPvInput"),
+  studyThreads: document.getElementById("studyThreadsInput"),
+  studyHash: document.getElementById("studyHashInput"),
+  studyApplySettings: document.getElementById("studyApplySettingsBtn"),
+  studySettingsStatus: document.getElementById("studySettingsStatus"),
   trainerCoach: document.getElementById("trainerCoach"),
   trainerDecision: document.getElementById("trainerDecision"),
   trainerInsight: document.getElementById("trainerInsight"),
@@ -102,6 +130,7 @@ const state = {
   startFen: START_FEN,
   legalMoves: [],
   legalByFrom: {},
+  boardPieceMap: {},
   selectedSquare: "",
   dragFrom: "",
   dragPiece: "",
@@ -120,15 +149,23 @@ const state = {
   previousRenderedPieces: {},
   activeTrainingLine: [],
   activeTrainingLineSan: [],
+  playedTrainingLine: [],
+  playedTrainingLineSan: [],
   branchLocked: false,
+  trainerPhase: "completed",
   previewLessonId: "",
   previewInsight: null,
   currentInsight: null,
+  currentInsightKey: "",
+  insightLoading: false,
+  lastEvalCp: null,
   positionInsightCache: {},
   insightRequestId: 0,
+  lessonLoadId: 0,
   manualNeedsWork: [],
   reviewStats: {},
   games: [],
+  analysisProgressTimer: 0,
 };
 
 async function init() {
@@ -139,14 +176,21 @@ async function init() {
   el.lichessToken.value = defaults.lichess_token || "";
   el.enginePath.value = defaults.engine_path || "";
   el.depth.value = defaults.depth || 24;
+  if (el.thinkTime) el.thinkTime.value = String(defaults.think_time_sec ?? 5);
   el.multiPv.value = defaults.multipv || 5;
   el.threads.value = defaults.threads || 8;
   el.hash.value = defaults.hash_mb || 2048;
+  syncStudySettingsFromSetup();
 
   el.analyze.addEventListener("click", runAnalysis);
   el.importAllGames?.addEventListener("change", syncImportScope);
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
+  el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
+  [el.lichessToken, el.enginePath, el.depth, el.multiPv, el.threads, el.hash].forEach((input) => {
+    input?.addEventListener("change", syncStudySettingsFromSetup);
+  });
+  el.thinkTime?.addEventListener("change", syncStudySettingsFromSetup);
   el.tabButtons.forEach((button) => {
     button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "setup"));
   });
@@ -154,27 +198,32 @@ async function init() {
   document.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    const workLine = target.dataset.workLine;
+    const workLineButton = target.closest("[data-work-line]");
+    const workLine = workLineButton instanceof HTMLElement ? workLineButton.dataset.workLine : "";
     if (workLine) {
       loadLessonById(workLine);
       return;
     }
-    const lessonId = target.dataset.lessonLaunch;
+    const lessonLaunchButton = target.closest("[data-lesson-launch]");
+    const lessonId = lessonLaunchButton instanceof HTMLElement ? lessonLaunchButton.dataset.lessonLaunch : "";
     if (lessonId) {
       loadLessonById(lessonId);
       return;
     }
-    const previewTrain = target.dataset.previewTrain;
+    const previewTrainButton = target.closest("[data-preview-train]");
+    const previewTrain = previewTrainButton instanceof HTMLElement ? previewTrainButton.dataset.previewTrain : "";
     if (previewTrain) {
       loadLessonById(previewTrain);
       return;
     }
-    const previewAdd = target.dataset.previewAddNeeds;
+    const previewAddButton = target.closest("[data-preview-add-needs]");
+    const previewAdd = previewAddButton instanceof HTMLElement ? previewAddButton.dataset.previewAddNeeds : "";
     if (previewAdd) {
       addLessonToNeedsWork(previewAdd);
       return;
     }
-    const trainerMove = target.dataset.trainerMove;
+    const trainerMoveButton = target.closest("[data-trainer-move]");
+    const trainerMove = trainerMoveButton instanceof HTMLElement ? trainerMoveButton.dataset.trainerMove : "";
     if (trainerMove) {
       const from = trainerMove.slice(0, 2);
       const to = trainerMove.slice(2, 4);
@@ -190,11 +239,93 @@ async function init() {
   renderCoords();
   renderBoard(START_FEN, { animate: false });
   setActiveTab("setup");
+  renderStudyWorkspace();
   await bootstrapLocalState();
 }
 
 function normalizeFen(fen) {
   return String(fen || "").trim() || START_FEN;
+}
+
+function syncStudySettingsFromSetup() {
+  if (el.studyLichessToken) el.studyLichessToken.value = el.lichessToken?.value || defaults.lichess_token || "";
+  if (el.studyEnginePath) el.studyEnginePath.value = el.enginePath?.value || "";
+  if (el.studyDepth) el.studyDepth.value = el.depth?.value || defaults.depth || 24;
+  if (el.studyThinkTime) el.studyThinkTime.value = String(el.thinkTime?.value || defaults.think_time_sec || 5);
+  if (el.studyMultiPv) el.studyMultiPv.value = el.multiPv?.value || defaults.multipv || 5;
+  if (el.studyThreads) el.studyThreads.value = el.threads?.value || defaults.threads || 8;
+  if (el.studyHash) el.studyHash.value = el.hash?.value || defaults.hash_mb || 2048;
+}
+
+function applyStudySettingsToSetup(saved = {}) {
+  if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token")) el.lichessToken.value = saved.lichess_token || "";
+  if (el.enginePath && Object.prototype.hasOwnProperty.call(saved, "engine_path")) el.enginePath.value = saved.engine_path || "";
+  if (el.depth && Object.prototype.hasOwnProperty.call(saved, "depth")) el.depth.value = saved.depth;
+  if (el.thinkTime && Object.prototype.hasOwnProperty.call(saved, "think_time_sec")) el.thinkTime.value = String(saved.think_time_sec);
+  if (el.multiPv && Object.prototype.hasOwnProperty.call(saved, "multipv")) el.multiPv.value = saved.multipv;
+  if (el.threads && Object.prototype.hasOwnProperty.call(saved, "threads")) el.threads.value = saved.threads;
+  if (el.hash && Object.prototype.hasOwnProperty.call(saved, "hash_mb")) el.hash.value = saved.hash_mb;
+  syncStudySettingsFromSetup();
+}
+
+function applyDefaultsToState(saved = {}) {
+  Object.entries(saved || {}).forEach(([key, value]) => {
+    defaults[key] = value;
+  });
+}
+
+function currentLichessToken() {
+  return String(el.studyLichessToken?.value || el.lichessToken?.value || defaults.lichess_token || "").trim();
+}
+
+function currentStudySettingsPayload() {
+  return {
+    lichess_token: currentLichessToken(),
+    engine_path: String(el.studyEnginePath?.value || el.enginePath?.value || "").trim(),
+    depth: Number(el.studyDepth?.value || el.depth?.value || defaults.depth || 24),
+    think_time_sec: Number(el.studyThinkTime?.value || el.thinkTime?.value || defaults.think_time_sec || 5),
+    multipv: Number(el.studyMultiPv?.value || el.multiPv?.value || defaults.multipv || 5),
+    threads: Number(el.studyThreads?.value || el.threads?.value || defaults.threads || 8),
+    hash_mb: Number(el.studyHash?.value || el.hash?.value || defaults.hash_mb || 2048),
+  };
+}
+
+async function saveStudySettings() {
+  if (!el.studyApplySettings) return;
+  const payload = currentStudySettingsPayload();
+  el.studyApplySettings.disabled = true;
+  if (el.studySettingsStatus) {
+    el.studySettingsStatus.textContent = "Saving Stockfish settings for live study...";
+  }
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Could not save study settings.");
+    }
+    applyDefaultsToState(data.defaults || {});
+    applyStudySettingsToSetup(data.defaults || {});
+    state.positionInsightCache = {};
+    state.currentInsight = null;
+    if (el.studySettingsStatus) {
+      el.studySettingsStatus.textContent = "Saved. Live analysis now uses the new Stockfish settings.";
+    }
+    if (state.activeLessonId) {
+      await updateCurrentInsight();
+    } else {
+      renderStudyWorkspace();
+    }
+  } catch (error) {
+    if (el.studySettingsStatus) {
+      el.studySettingsStatus.textContent = error.message || "Could not save study settings.";
+    }
+  } finally {
+    el.studyApplySettings.disabled = false;
+  }
 }
 
 function pieceMapFromFen(fen) {
@@ -216,6 +347,14 @@ function pieceMapFromFen(fen) {
   return map;
 }
 
+function currentPieceMap(fen = state.boardFen) {
+  const normalized = normalizeFen(fen);
+  if (normalized === normalizeFen(state.boardFen) && state.boardPieceMap && Object.keys(state.boardPieceMap).length) {
+    return state.boardPieceMap;
+  }
+  return pieceMapFromFen(normalized);
+}
+
 function rebuildLegalByFrom() {
   state.legalByFrom = {};
   state.legalMoves.forEach((move) => {
@@ -227,17 +366,33 @@ function rebuildLegalByFrom() {
 function applyBoardState(payload, options = {}) {
   const { classification = null } = options;
   state.boardFen = normalizeFen(payload?.fen || state.boardFen);
+  state.boardPieceMap = pieceMapFromFen(state.boardFen);
   state.legalMoves = Array.isArray(payload?.legal_moves) ? payload.legal_moves : [];
   rebuildLegalByFrom();
-  state.lastMove = payload?.last_move || null;
-  state.lastMoveClassification = classification;
-  state.lastMoveSan = String(payload?.played_san || state.lastMoveSan || "");
-  state.pendingMoveAnimationKey = state.lastMove
-    ? `${state.boardFen}|${state.lastMove.from}|${state.lastMove.to}|${state.lastMoveSan}`
-    : "";
-  state.currentInsight = null;
-  if (state.selectedSquare && !(state.legalByFrom[state.selectedSquare] || []).length) {
+  if (!state.activeLessonId) {
+    state.currentInsight = null;
+    state.currentInsightKey = "";
+    state.insightLoading = false;
+  }
+  const hasLastMove = Boolean(payload) && Object.prototype.hasOwnProperty.call(payload, "last_move");
+  const hasPlayedSan = Boolean(payload) && Object.prototype.hasOwnProperty.call(payload, "played_san");
+  if (hasLastMove) {
+    state.lastMove = payload?.last_move || null;
+    state.lastMoveClassification = classification;
+    if (hasPlayedSan) {
+      state.lastMoveSan = String(payload?.played_san || "");
+    }
+    state.pendingMoveAnimationKey = state.lastMove
+      ? `${state.boardFen}|${state.lastMove.from}|${state.lastMove.to}|${state.lastMoveSan}`
+      : "";
+  } else if (classification) {
+    state.lastMoveClassification = classification;
+  }
+  if (state.selectedSquare && !isSquareMovableByUser(state.selectedSquare, currentLesson(), state.boardFen)) {
     state.selectedSquare = "";
+  }
+  if (state.activeLessonId) {
+    syncTrainerPhase(currentLesson());
   }
 }
 
@@ -326,12 +481,7 @@ function animateLastMove(previousPieces) {
   const movedPiece = previousPieces[from];
   if (!movedPiece) return;
   clearMoveAnimation();
-  const notation = String(state.lastMoveSan || "");
-  const durationMs = notation.includes("#") || notation.includes("+")
-    ? 1450
-    : notation.includes("x") || notation.startsWith("O-O")
-      ? 1250
-      : 1050;
+  const durationMs = 1350;
   const boardRect = el.boardWrap.getBoundingClientRect();
   const fromSquare = el.board.querySelector(`[data-square="${from}"]`);
   const toSquare = el.board.querySelector(`[data-square="${to}"]`);
@@ -351,7 +501,6 @@ function animateLastMove(previousPieces) {
   const arrivingPiece = toSquare.querySelector(".piece");
   if (arrivingPiece instanceof HTMLElement) {
     arrivingPiece.classList.add("piece-arriving");
-    arrivingPiece.style.transitionDuration = `${durationMs}ms`;
   }
 
   requestAnimationFrame(() => {
@@ -364,7 +513,6 @@ function animateLastMove(previousPieces) {
   state.moveAnimationTimer = window.setTimeout(() => {
     if (arrivingPiece instanceof HTMLElement) {
       arrivingPiece.classList.remove("piece-arriving");
-      arrivingPiece.style.removeProperty("transition-duration");
     }
     ghost.remove();
     state.moveAnimationTimer = 0;
@@ -460,8 +608,9 @@ function updateDragGhostPosition(clientX, clientY) {
 }
 
 function beginPieceDrag(squareName, piece, event) {
-  if (!state.activeLessonId) return;
-  if (pieceSide(piece) !== sideToMove(state.boardFen)) return;
+  const lesson = currentLesson();
+  if (!lesson || !canUserInteract(lesson)) return;
+  if (!isSquareMovableByUser(squareName, lesson)) return;
   event.preventDefault();
   event.stopPropagation();
   state.dragFrom = squareName;
@@ -510,6 +659,71 @@ function setStatus(message) {
   el.status.textContent = message;
 }
 
+function setProgress(value, message = "", options = {}) {
+  const bounded = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const indeterminate = Boolean(options.indeterminate);
+  if (el.progressFill) {
+    el.progressFill.classList.toggle("indeterminate", indeterminate);
+    if (!indeterminate) {
+      el.progressFill.style.width = `${bounded}%`;
+    }
+  }
+  if (message) {
+    setStatus(message);
+  }
+  if (el.progressLabel) {
+    el.progressLabel.textContent = indeterminate ? "Working" : `${bounded}%`;
+  }
+}
+
+function stopAnalysisProgress() {
+  if (state.analysisProgressTimer) {
+    window.clearInterval(state.analysisProgressTimer);
+    state.analysisProgressTimer = 0;
+  }
+}
+
+function startAnalysisProgress() {
+  stopAnalysisProgress();
+  const startedAt = Date.now();
+  setProgress(4, "Preparing import...");
+  state.analysisProgressTimer = window.setInterval(() => {
+    const elapsed = Date.now() - startedAt;
+    let target = 12;
+    let message = "Checking saved games...";
+    if (elapsed >= 1200) {
+      target = 24;
+      message = "Reusing saved games or importing archives...";
+    }
+    if (elapsed >= 3000) {
+      target = 38;
+      message = "Importing games from Chess.com...";
+    }
+    if (elapsed >= 6500) {
+      target = 56;
+      message = "Building your repertoire map...";
+    }
+    if (elapsed >= 12000) {
+      target = 72;
+      message = "Analyzing repeated positions with Stockfish...";
+    }
+    if (elapsed >= 20000) {
+      target = 84;
+      message = "Finalizing trainer lines...";
+    }
+    if (elapsed >= 32000) {
+      target = 92;
+      message = "Wrapping up cached lessons and queues...";
+    }
+    const current = parseInt((el.progressFill?.style.width || "0").replace("%", ""), 10) || 0;
+    if (current < target) {
+      setProgress(current + 1, message);
+    } else {
+      setStatus(message);
+    }
+  }, 220);
+}
+
 function setActiveTab(name) {
   el.tabButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.tabTarget === name);
@@ -517,10 +731,13 @@ function setActiveTab(name) {
   el.tabPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.tabPanel === name);
   });
+  if (name === "trainer") {
+    renderStudyWorkspace();
+  }
 }
 
 async function runAnalysis() {
-  setStatus("Importing games and building your repertoire tree...");
+  startAnalysisProgress();
   el.analyze.disabled = true;
   try {
     const payload = await fetchProfilePayload(el.username.value.trim());
@@ -528,14 +745,32 @@ async function runAnalysis() {
     state.reviewStats = payload.training_progress || loadReviewStats(payload.username);
     state.games = payload.games || [];
     renderProfile(payload);
-    setStatus(
-      payload.explorer_enabled
-        ? `Imported ${payload.games_imported} games. Lichess database is active.`
-        : `Imported ${payload.games_imported} games. Add a Lichess token for richer database branching.`
-    );
+    if (payload.cached) {
+      setProgress(
+        100,
+        payload.explorer_enabled
+          ? `Loaded cached repertoire for ${payload.username}. ${payload.games_imported} games are already indexed, and Lichess database is active.`
+          : `Loaded cached repertoire for ${payload.username}. ${payload.games_imported} games are already indexed. Add a Lichess token for richer database branching.`
+      );
+    } else if (payload.reused_games) {
+      setProgress(
+        100,
+        payload.explorer_enabled
+          ? `Reused ${payload.games_imported} saved games and refreshed the analysis. Lichess database is active.`
+          : `Reused ${payload.games_imported} saved games and refreshed the analysis. Add a Lichess token for richer database branching.`
+      );
+    } else {
+      setProgress(
+        100,
+        payload.explorer_enabled
+          ? `Imported ${payload.games_imported} games. Lichess database is active.`
+          : `Imported ${payload.games_imported} games. Add a Lichess token for richer database branching.`
+      );
+    }
   } catch (error) {
-    setStatus(error.message || "Bookup could not build your repertoire.");
+    setProgress(0, error.message || "Bookup could not build your repertoire.");
   } finally {
+    stopAnalysisProgress();
     el.analyze.disabled = false;
   }
 }
@@ -548,9 +783,10 @@ async function fetchProfilePayload(username) {
       username,
       time_classes: el.timeClasses.value.trim(),
       max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
-      lichess_token: el.lichessToken.value.trim(),
+      lichess_token: currentLichessToken(),
       engine_path: el.enginePath.value.trim(),
       depth: Number(el.depth.value),
+      think_time_sec: Number(el.thinkTime?.value || defaults.think_time_sec || 5),
       multipv: Number(el.multiPv.value),
       threads: Number(el.threads.value),
       hash_mb: Number(el.hash.value),
@@ -582,19 +818,22 @@ async function bootstrapLocalState() {
       state.manualNeedsWork = payload.training_summary?.manual_needs_work || [];
       state.games = payload.games || [];
       renderProfile(state.payload);
-      setStatus(
+      setProgress(
+        100,
         payload.saved_at
           ? `Loaded your saved Bookup workspace for ${payload.username}.`
           : `Loaded local Bookup data for ${payload.username}.`
       );
     } else if (payload.profile) {
       state.reviewStats = payload.training_progress || {};
-      setStatus("Saved data is from an older Bookup version. Rebuild your repertoire to refresh it.");
+      setProgress(0, "Saved data is from an older Bookup version. Rebuild your repertoire to refresh it.");
     } else {
       state.reviewStats = loadReviewStats(username);
+      setProgress(0, "Ready.");
     }
   } catch {
     state.reviewStats = loadReviewStats(el.username.value.trim() || "trixize1234");
+    setProgress(0, "Ready.");
   }
 }
 
@@ -638,6 +877,7 @@ function renderProfile(payload) {
   clearPreview();
 
   clearTrainer();
+  renderStudyWorkspace();
   setActiveTab("repertoire-map");
 }
 
@@ -780,11 +1020,542 @@ function renderPreview(lesson, insight) {
     <div class="line-preview">${escapeHtml(lesson.continuation_san || lesson.training_line_san || "")}</div>
     <div class="line-note">${escapeHtml(insight.coach_explanation || lesson.coach_explanation || lesson.explanation || "")}</div>
     <div class="chip-row">
-      <button class="launch-btn" type="button" data-previewAddNeeds="${escapeHtml(lesson.lesson_id)}">Add to Needs Work</button>
-      <button class="launch-btn" type="button" data-previewTrain="${escapeHtml(lesson.lesson_id)}">Start training</button>
+      <button class="launch-btn" type="button" data-preview-add-needs="${escapeHtml(lesson.lesson_id)}">Add to Needs Work</button>
+      <button class="launch-btn" type="button" data-preview-train="${escapeHtml(lesson.lesson_id)}">Start training</button>
       ${lesson.position_identifier ? `<a class="launch-btn" href="${lesson.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(lesson.position_identifier_label || "Lichess analysis")}</a>` : ""}
     </div>
   `;
+}
+
+function computeEvalPercent(evalCp) {
+  const score = Number(evalCp || 0);
+  const logistic = 1 / (1 + Math.exp(-score / 180));
+  return Math.max(6, Math.min(94, Math.round(logistic * 100)));
+}
+
+function evalCaption(evalCp) {
+  const score = Number(evalCp || 0);
+  if (Math.abs(score) < 25) return "Equal";
+  if (score > 0) return "White edge";
+  return "Black edge";
+}
+
+function renderStudyEngineLine(line, index) {
+  const title = `${index + 1}. ${escapeHtml(line?.move || "")}`;
+  const classification = classificationBadge(line?.classification, "compact");
+  const evalText = formatEval(line?.score_cp_white ?? line?.score_cp ?? 0);
+  const detail = escapeHtml(line?.purpose || "");
+  const preview = escapeHtml(line?.line_san || "");
+  return `
+    <article class="study-engine-line">
+      <div class="study-engine-head">
+        <div>
+          <div class="study-engine-title">${title} ${classification}</div>
+          <div class="study-engine-meta">${evalText} | ${escapeHtml(line?.source || "engine")}</div>
+        </div>
+        <div class="line-badge">${Math.round(Number(line?.popularity || 0))}%</div>
+      </div>
+      <div class="study-engine-preview">${detail}</div>
+      <div class="study-engine-preview">${preview || "No continuation loaded yet."}</div>
+    </article>
+  `;
+}
+
+function renderStudyDatabaseMove(line, candidateMap = {}) {
+  const san = escapeHtml(line?.san || line?.uci || "");
+  const count = Number(line?.games || 0);
+  const popularity = Number(line?.popularity || 0);
+  const candidate = candidateMap[String(line?.uci || "")] || null;
+  const badge = classificationBadge(candidate?.classification, "compact");
+  return `
+    <article class="study-database-row">
+      <div class="study-database-head">
+        <div>
+          <div class="study-database-title">${san} ${badge}</div>
+          <div class="study-database-meta">${count} games | ${popularity}% popularity</div>
+        </div>
+        ${candidate?.move ? `<div class="line-badge">${escapeHtml(candidate.move)}</div>` : ""}
+      </div>
+      <div class="study-database-preview">${candidate?.line_san ? escapeHtml(candidate.line_san) : "Practical move from the Lichess database."}</div>
+    </article>
+  `;
+}
+
+function renderStudyMoveCard(title, san, classification, copy) {
+  return `
+    <article class="study-move-card">
+      <div class="study-move-card-head">
+        <div>
+          <div class="study-move-card-title">${escapeHtml(title)}</div>
+          <div class="study-move-card-meta">${escapeHtml(san || "No move yet")}</div>
+        </div>
+        ${classificationBadge(classification, "compact")}
+      </div>
+      <div class="study-move-copy">${escapeHtml(copy || "")}</div>
+    </article>
+  `;
+}
+
+function renderStudyReviewMarkup(lesson, playedMoveSan, playedClassification, recommendedMove, recommendedClassification, coachText = "") {
+  if (!playedMoveSan) {
+    const fallbackMove = recommendedMove || lesson?.best_reply || "No move yet";
+    const fallbackCopy = coachText || "Bookup will classify the move you play here, then compare it with the current engine recommendation.";
+    return renderStudyMoveCard("Recommended move", fallbackMove, recommendedClassification, fallbackCopy);
+  }
+  const key = classificationKey(playedClassification);
+  const icon = String(playedClassification?.icon || MOVE_CLASSIFICATION_ICONS[key] || "").trim();
+  const headline = classificationDisplayMessage(playedMoveSan, playedClassification) || `${playedMoveSan} was played`;
+  const detail = String(playedClassification?.reason || coachText || "Bookup classified the move from the live position.").trim();
+  const bestAlternative = (
+    recommendedMove
+    && recommendedMove !== playedMoveSan
+    && !INALTERABLE_CLASSIFICATION_KEYS.has(key)
+  ) ? `Best was ${recommendedMove}.` : "";
+  const openingFooter = lesson?.opening_name ? `<div class="study-review-opening">${escapeHtml(lesson.opening_name)}</div>` : "";
+  return `
+    <article class="study-classified-card ${key ? `classification-${escapeHtml(key)}` : ""}">
+      <div class="study-classified-main">
+        ${icon ? `<img class="study-classified-icon" src="${icon}" alt="${escapeHtml(playedClassification?.label || "")}" />` : ""}
+        <div class="study-classified-copy">
+          <div class="study-classified-title">${escapeHtml(headline)}</div>
+          <div class="study-classified-detail">${escapeHtml(detail)}</div>
+          ${bestAlternative ? `<div class="study-classified-alt">Best was <strong>${escapeHtml(recommendedMove)}</strong>${classificationBadge(recommendedClassification, "compact")}</div>` : ""}
+        </div>
+      </div>
+      ${openingFooter}
+    </article>
+  `;
+}
+
+function renderStudyMoveTrailMarkup() {
+  const tokens = currentPlayedLineSan();
+  if (!tokens.length) {
+    return "No played line yet.";
+  }
+  const startFen = normalizeFen(state.startFen || START_FEN);
+  const fenParts = startFen.split(/\s+/);
+  let moveNumber = Number(fenParts[5] || 1);
+  let side = sideToMove(startFen);
+  const rows = [];
+  let currentRow = null;
+  tokens.forEach((token, index) => {
+    const isCurrent = index === tokens.length - 1;
+    if (side === "w") {
+      currentRow = {
+        moveNumber,
+        white: token,
+        whiteCurrent: isCurrent,
+      };
+      side = "b";
+      return;
+    }
+    if (!currentRow) currentRow = { moveNumber };
+    currentRow.black = token;
+    currentRow.blackCurrent = isCurrent;
+    rows.push(currentRow);
+    currentRow = null;
+    moveNumber += 1;
+    side = "w";
+  });
+  if (currentRow) rows.push(currentRow);
+  const renderPlyToken = (token, isCurrent) => {
+    if (!token) return `<span class="study-ply-token empty">...</span>`;
+    return `<span class="study-ply-token ${isCurrent ? "current" : ""}">${escapeHtml(token)}${isCurrent ? classificationBadge(state.lastMoveClassification, "compact") : ""}</span>`;
+  };
+  return rows.map((row) => `
+    <div class="study-ply-row">
+      <span class="study-ply-number">${row.moveNumber}.</span>
+      ${renderPlyToken(row.white, row.whiteCurrent)}
+      ${renderPlyToken(row.black, row.blackCurrent)}
+    </div>
+  `).join("");
+}
+
+function currentLiveInsight(lesson = currentLesson()) {
+  if (!lesson) return null;
+  const expectedKey = insightCacheKey(lesson);
+  if (state.positionInsightCache[expectedKey]) {
+    return state.positionInsightCache[expectedKey];
+  }
+  if (!state.currentInsight) return null;
+  return state.currentInsightKey === expectedKey ? state.currentInsight : null;
+}
+
+function isCurrentInsightRequest(lesson, cacheKey, requestId, loadId = state.lessonLoadId) {
+  return Boolean(
+    lesson
+    && loadId === state.lessonLoadId
+    && requestId === state.insightRequestId
+    && state.activeLessonId === lesson.lesson_id
+    && cacheKey === insightCacheKey(lesson)
+  );
+}
+
+function rootRecommendedEntry(lesson) {
+  if (!lesson || state.trainingCursor !== lessonRootCursor(lesson)) return null;
+  const preferred = String(lesson.preferred_branch_uci || "").trim();
+  if (!preferred) return null;
+  return (state.legalMoves || []).find((move) => move.uci === preferred) || null;
+}
+
+function currentRecommendedMoveData(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
+  if (!lesson) {
+    return { san: "", uci: "", classification: null };
+  }
+  const expectedUci = liveExpectedMoveUci(lesson);
+  const expectedEntry = expectedUci
+    ? (state.legalMoves || []).find((move) => move.uci === expectedUci) || null
+    : null;
+  if (expectedEntry) {
+    return {
+      san: String(expectedEntry.san || ""),
+      uci: String(expectedEntry.uci || ""),
+      classification: insight?.recommended_classification || null,
+    };
+  }
+  if (insight?.recommended_move || insight?.recommended_move_uci) {
+    return {
+      san: String(insight.recommended_move || ""),
+      uci: String(insight.recommended_move_uci || ""),
+      classification: insight.recommended_classification || null,
+    };
+  }
+  const preferredEntry = rootRecommendedEntry(lesson);
+  if (preferredEntry) {
+    return {
+      san: String(preferredEntry.san || ""),
+      uci: String(preferredEntry.uci || ""),
+      classification: lesson.recommended_classification || null,
+    };
+  }
+  return { san: "", uci: "", classification: null };
+}
+
+function currentAnalysisRecommendation(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
+  if (!lesson) {
+    return { san: "", uci: "", classification: null };
+  }
+  if (insight?.recommended_move || insight?.recommended_move_uci) {
+    return {
+      san: String(insight.recommended_move || ""),
+      uci: String(insight.recommended_move_uci || ""),
+      classification: insight.recommended_classification || null,
+    };
+  }
+  const candidate = Array.isArray(insight?.candidate_lines) && insight.candidate_lines.length
+    ? insight.candidate_lines[0]
+    : null;
+  if (candidate?.move || candidate?.uci) {
+    return {
+      san: String(candidate.move || ""),
+      uci: String(candidate.uci || ""),
+      classification: candidate.classification || null,
+    };
+  }
+  return {
+    san: String(lesson.best_reply || ""),
+    uci: String(lesson.best_reply_uci || ""),
+    classification: lesson.recommended_classification || null,
+  };
+}
+
+function currentThinkTimeLabel() {
+  const thinkTimeValue = Number(el.studyThinkTime?.value || el.thinkTime?.value || defaults.think_time_sec || 5);
+  return thinkTimeValue > 0 ? `${thinkTimeValue} sec` : "Unlimited";
+}
+
+function lessonRunToken(lesson = currentLesson()) {
+  return `${state.lessonLoadId}:${lesson?.lesson_id || ""}`;
+}
+
+function isLessonRunCurrent(token, lessonId = state.activeLessonId) {
+  return token === `${state.lessonLoadId}:${lessonId || ""}`;
+}
+
+function classificationDisplayMessage(san, classification) {
+  const label = String(classification?.label || "").trim();
+  if (!san || !label) return "";
+  const article = /^[aeiou]/i.test(label) ? "an" : "a";
+  return `${san} is ${article} ${label.toLowerCase()} move`;
+}
+
+function lichessExplorerUrlForFen(fen = state.boardFen) {
+  const analysisUrl = lichessAnalysisUrlForFen(fen);
+  return analysisUrl ? `${analysisUrl}#explorer` : "";
+}
+
+function joinMetaParts(parts = []) {
+  return parts.filter(Boolean).join(" · ");
+}
+
+function lichessAnalysisUrlForFen(fen = state.boardFen) {
+  const normalizedFen = normalizeFen(fen);
+  if (!normalizedFen) return "";
+  return `https://lichess.org/analysis/standard/${encodeURIComponent(normalizedFen.replace(/ /g, "_")).replace(/%2F/g, "/")}`;
+}
+
+function currentStudyPositionLink(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
+  const liveBoardHref = lichessAnalysisUrlForFen(state.boardFen);
+  const href = String(
+    insight?.position_identifier
+    || liveBoardHref
+    || lesson?.position_identifier
+    || ""
+  ).trim();
+  if (!href) return null;
+  return {
+    href,
+    label: String(
+      insight?.position_identifier_label
+      || lesson?.position_identifier_label
+      || "Lichess analysis"
+    ).trim() || "Lichess analysis",
+  };
+}
+
+function currentStudyLinks(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
+  const analysis = currentStudyPositionLink(lesson, insight);
+  const explorerHref = lichessExplorerUrlForFen(state.boardFen);
+  const links = [];
+  if (analysis?.href) {
+    links.push({
+      href: analysis.href,
+      label: analysis.label || "Lichess analysis",
+    });
+  }
+  if (explorerHref) {
+    links.push({
+      href: explorerHref,
+      label: "Lichess explorer",
+    });
+  }
+  return links;
+}
+
+function renderStudyLinksMarkup(links = []) {
+  if (!links.length) {
+    return `<span class="line-note">Open a line to jump into Lichess analysis or explorer for the current position.</span>`;
+  }
+  return links.map((link) => `
+    <a class="launch-btn study-link-btn" href="${escapeHtml(link.href)}" target="_blank" rel="noopener noreferrer">
+      ${escapeHtml(link.label)}
+    </a>
+  `).join("");
+}
+
+function currentEvalCpForStudy(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
+  const bestLine = Array.isArray(insight?.candidate_lines) && insight.candidate_lines.length
+    ? insight.candidate_lines[0]
+    : null;
+  const lessonBestLine = Array.isArray(lesson?.candidate_lines) && lesson.candidate_lines.length
+    ? lesson.candidate_lines[0]
+    : null;
+  return Number(
+    insight?.eval_cp_white
+      ?? state.lastEvalCp
+      ?? bestLine?.score_cp_white
+      ?? bestLine?.score_cp
+      ?? lessonBestLine?.score_cp_white
+      ?? lessonBestLine?.score_cp
+      ?? 0
+  );
+}
+
+function renderEmptyStudyWorkspace() {
+  state.lastEvalCp = null;
+  state.currentInsight = null;
+  state.currentInsightKey = "";
+  state.insightLoading = false;
+  state.insightRequestId = 0;
+  state.positionInsightCache = {};
+  state.legalMoves = [];
+  state.legalByFrom = {};
+  state.selectedSquare = "";
+  state.lastMove = null;
+  state.lastMoveClassification = null;
+  state.lastMoveSan = "";
+  state.boardOrientation = "white";
+  state.boardFen = START_FEN;
+  state.boardPieceMap = pieceMapFromFen(START_FEN);
+  state.pendingMoveAnimationKey = "";
+  state.renderedMoveAnimationKey = "";
+  clearMoveAnimation();
+  if (el.studyEvalFill) {
+    el.studyEvalFill.style.setProperty("--eval-percent", "50%");
+  }
+  if (el.studyEvalScore) {
+    el.studyEvalScore.textContent = "+0.00";
+  }
+  if (el.studyEvalCaption) {
+    el.studyEvalCaption.textContent = "Waiting for live analysis";
+  }
+  if (el.studyOpeningMeta) {
+    el.studyOpeningMeta.textContent = "Open a line to see its live engine and Lichess database context here.";
+  }
+  if (el.studyPositionLinks) {
+    el.studyPositionLinks.innerHTML = renderStudyLinksMarkup([]);
+  }
+  if (el.studyAnalysisMeta) {
+    el.studyAnalysisMeta.textContent = `Depth ${el.studyDepth?.value || el.depth?.value || "--"} | ${currentThinkTimeLabel()} | MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`;
+  }
+  if (el.studyDatabaseMeta) {
+    el.studyDatabaseMeta.textContent = "No position loaded";
+  }
+  if (el.studyMoveMeta) {
+    el.studyMoveMeta.textContent = "Waiting for a move";
+  }
+  if (el.studyEngineLines) {
+    el.studyEngineLines.className = "stack empty";
+    el.studyEngineLines.textContent = "Engine lines will show up here.";
+  }
+  if (el.studyDatabaseMoves) {
+    el.studyDatabaseMoves.className = "stack empty";
+    el.studyDatabaseMoves.textContent = "Database moves will show up here.";
+  }
+  if (el.studyMoveClassifications) {
+    el.studyMoveClassifications.className = "stack empty";
+    el.studyMoveClassifications.textContent = "Move classifications will show up here.";
+  }
+  if (el.studyMoveTrail) {
+    el.studyMoveTrail.classList.add("empty");
+    el.studyMoveTrail.textContent = "No played line yet.";
+  }
+  renderArrows(null);
+  renderCoords();
+  renderBoard(START_FEN, { animate: false });
+}
+
+function renderStudyWorkspace() {
+  const lesson = currentLesson();
+  if (!lesson) {
+    renderEmptyStudyWorkspace();
+    return;
+  }
+  const insight = currentLiveInsight(lesson);
+  const candidateLines = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines : [];
+  const databaseMoves = Array.isArray(insight?.database_moves) ? insight.database_moves : [];
+  const evalCp = currentEvalCpForStudy(lesson, insight);
+  const evalPercent = computeEvalPercent(evalCp);
+  const explorerEnabled = Boolean(currentLichessToken());
+  const candidateMap = Object.fromEntries(candidateLines.map((line) => [String(line?.uci || ""), line]));
+  const playedMoveClassification = state.lastMoveClassification || null;
+  const playedMoveSan = String(state.lastMoveSan || "");
+  const recommended = currentAnalysisRecommendation(lesson, insight);
+  const recommendedClassification = recommended.classification || insight?.recommended_classification || lesson?.recommended_classification || null;
+  const recommendedMove = recommended.san || lesson?.best_reply || "";
+  const coachText = String(insight?.coach_explanation || lesson?.coach_explanation || lesson?.explanation || "").trim();
+  const positionLinks = currentStudyLinks(lesson, insight);
+  const openingMeta = joinMetaParts([
+    lesson.opening_name || "Unnamed line",
+    lesson.line_label || "",
+    explorerEnabled ? "Lichess database ready" : "Database fallback mode",
+  ]);
+
+  if (el.studyEvalFill) {
+    el.studyEvalFill.style.setProperty("--eval-percent", `${evalPercent}%`);
+  }
+  if (el.studyEvalScore) {
+    el.studyEvalScore.textContent = formatEval(evalCp);
+  }
+  if (el.studyEvalCaption) {
+    el.studyEvalCaption.textContent = lesson
+      ? (state.insightLoading && !insight && state.lastEvalCp !== null
+        ? `${evalCaption(evalCp)} · updating`
+        : evalCaption(evalCp))
+      : "Waiting for live analysis";
+  }
+
+  if (el.studyOpeningMeta) {
+    el.studyOpeningMeta.textContent = openingMeta;
+  }
+
+  if (el.studyPositionLinks) {
+    el.studyPositionLinks.innerHTML = renderStudyLinksMarkup(positionLinks);
+  }
+
+  if (el.studyAnalysisMeta) {
+    el.studyAnalysisMeta.textContent = `Depth ${el.studyDepth?.value || el.depth?.value || "--"} | ${currentThinkTimeLabel()} | MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`;
+  }
+
+  if (el.studyDatabaseMeta) {
+    el.studyDatabaseMeta.textContent = explorerEnabled
+      ? "Lichess practical replies"
+      : "Fallback / cached moves";
+  }
+
+  if (el.studyEngineLines) {
+    if (state.insightLoading && !candidateLines.length) {
+      el.studyEngineLines.className = "stack empty";
+      el.studyEngineLines.textContent = "Loading live Stockfish lines for this position...";
+    } else if (!candidateLines.length) {
+      el.studyEngineLines.className = "stack empty";
+      el.studyEngineLines.textContent = "Engine lines are unavailable for this position right now.";
+    } else {
+      el.studyEngineLines.className = "stack";
+      el.studyEngineLines.innerHTML = candidateLines.slice(0, 5).map(renderStudyEngineLine).join("");
+    }
+  }
+
+  if (el.studyDatabaseMoves) {
+    if (state.insightLoading && !databaseMoves.length) {
+      el.studyDatabaseMoves.className = "stack empty";
+      el.studyDatabaseMoves.textContent = explorerEnabled
+        ? "Loading database moves for this position..."
+        : "Loading fallback move context for this position...";
+    } else if (!databaseMoves.length) {
+      el.studyDatabaseMoves.className = "stack empty";
+      el.studyDatabaseMoves.textContent = explorerEnabled
+        ? "No database moves were returned for this exact position yet."
+        : "Add a Lichess token in Setup or Study Lines for richer database move coverage.";
+    } else {
+      el.studyDatabaseMoves.className = "stack";
+      el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
+    }
+  }
+
+  if (el.studyMoveMeta) {
+    el.studyMoveMeta.textContent = playedMoveSan
+      ? `Last move: ${playedMoveSan}`
+      : (state.insightLoading ? "Analyzing current position..." : "Waiting for your next move");
+  }
+
+  if (el.studyMoveClassifications) {
+    const cards = [];
+    const mainReviewMarkup = renderStudyReviewMarkup(
+      lesson,
+      playedMoveSan,
+      playedMoveClassification,
+      recommendedMove,
+      recommendedClassification,
+      coachText,
+    );
+    if (mainReviewMarkup) {
+      cards.push(mainReviewMarkup);
+    }
+    if (playedMoveSan && recommendedMove) {
+      cards.push(renderStudyMoveCard(
+        "Recommended move",
+        recommendedMove,
+        recommendedClassification,
+        recommendedClassification?.reason || "Bookup's current Stockfish recommendation from this position.",
+      ));
+    }
+    if (!cards.length) {
+      el.studyMoveClassifications.className = "stack empty";
+      el.studyMoveClassifications.textContent = state.insightLoading
+        ? "Loading live move review for this position..."
+        : "Make a move to see live classifications here.";
+    } else {
+      el.studyMoveClassifications.className = "stack";
+      el.studyMoveClassifications.innerHTML = cards.join("");
+    }
+  }
+
+  if (el.studyMoveTrail) {
+    const markup = renderStudyMoveTrailMarkup();
+    el.studyMoveTrail.classList.toggle("empty", markup === "No played line yet.");
+    el.studyMoveTrail.innerHTML = markup;
+  }
 }
 
 function renderImproveList(node, items, emptyText) {
@@ -1022,6 +1793,19 @@ function lessonTrainingLineSan(lesson) {
   return String(lesson?.training_line_san || "").trim().split(/\s+/).filter(Boolean);
 }
 
+function currentPlayedLine() {
+  return state.playedTrainingLine.filter(Boolean);
+}
+
+function currentPlayedLineSan() {
+  return state.playedTrainingLineSan.filter(Boolean);
+}
+
+function appendPlayedMove(moveUci, moveSan) {
+  if (moveUci) state.playedTrainingLine.push(moveUci);
+  if (moveSan) state.playedTrainingLineSan.push(moveSan);
+}
+
 function combineSanSegments(...segments) {
   return segments
     .map((segment) => String(segment || "").trim())
@@ -1040,14 +1824,46 @@ function findBranchLine(lesson, moveUci) {
   return (lesson?.branch_lines || []).find((item) => item.uci === moveUci) || null;
 }
 
+function findBranchLineByFen(lesson, fen) {
+  const targetFen = normalizeFen(fen);
+  return (lesson?.branch_lines || []).find((item) => normalizeFen(item.resulting_fen) === targetFen) || null;
+}
+
 function currentLesson() {
   return state.lessonMap[state.activeLessonId] || null;
+}
+
+function pieceAtSquare(squareName, fen = state.boardFen) {
+  return currentPieceMap(fen)[squareName] || "";
+}
+
+function allowedUserMoves(lesson = currentLesson(), fen = state.boardFen) {
+  if (!lesson || !canUserInteract(lesson)) return [];
+  const currentSide = sideToMove(fen);
+  const pieceMap = currentPieceMap(fen);
+  const sideLegalMoves = (state.legalMoves || []).filter((move) => {
+    const piece = pieceMap[move.from] || "";
+    return piece && pieceSide(piece) === currentSide;
+  });
+  return sideLegalMoves;
+}
+
+function allowedTargetsForSquare(squareName, lesson = currentLesson(), fen = state.boardFen) {
+  return allowedUserMoves(lesson, fen).filter((move) => move.from === squareName);
+}
+
+function isSquareMovableByUser(squareName, lesson = currentLesson(), fen = state.boardFen) {
+  if (!lesson || !canUserInteract(lesson)) return false;
+  const piece = pieceAtSquare(squareName, fen);
+  if (!piece) return false;
+  if (pieceSide(piece) !== sideToMove(fen)) return false;
+  return Boolean(allowedTargetsForSquare(squareName, lesson, fen).length);
 }
 
 function squareClassificationMarkup(record) {
   const key = classificationKey(record);
   const label = String(record?.label || "").trim();
-  const icon = MOVE_CLASSIFICATION_ICONS[key];
+  const icon = String(record?.icon || MOVE_CLASSIFICATION_ICONS[key] || "").trim();
   if (!key || !label || !icon) return "";
   return `
     <div class="square-classification-badge ${escapeHtml(key)}" title="${escapeHtml(record?.reason || label)}" aria-label="${escapeHtml(label)}">
@@ -1057,8 +1873,8 @@ function squareClassificationMarkup(record) {
 }
 
 function insightCacheKey(lesson) {
-  const line = lesson ? lessonTrainingLine(lesson).slice(0, state.trainingCursor) : [];
-  return `${normalizeFen(state.boardFen)}|${line.join(",")}|${state.activeLessonId}|${state.trainingCursor}`;
+  const line = lesson ? currentPlayPrefix(lesson, state.trainingCursor) : [];
+  return `${normalizeFen(state.boardFen)}|${line.join(",")}|${state.activeLessonId}`;
 }
 
 function currentInsightYourMove(lesson) {
@@ -1077,11 +1893,60 @@ function currentInsightYourMove(lesson) {
 }
 
 function currentPlayPrefix(lesson, cursor = state.trainingCursor) {
-  return lesson ? lessonTrainingLine(lesson).slice(0, cursor).filter(Boolean) : [];
+  if (!lesson) return [];
+  const played = currentPlayedLine();
+  if (played.length) return played.filter(Boolean);
+  return lessonTrainingLine(lesson).slice(0, cursor).filter(Boolean);
 }
 
 function moveColorLabel(colorCode) {
   return colorCode === "b" ? "Black" : "White";
+}
+
+function userColorCode(lesson) {
+  return lesson?.color === "black" ? "b" : "w";
+}
+
+function isUsersTurn(lesson, fen = state.boardFen) {
+  return Boolean(lesson) && sideToMove(fen) === userColorCode(lesson);
+}
+
+function moveRepeatedCount(lesson, moveUci) {
+  if (!lesson || !moveUci) return 0;
+  if (moveUci === lesson.your_top_move_uci) {
+    return Number(lesson.your_top_move_count || 0);
+  }
+  const discoveryCount = (lesson.discovery_nodes || []).find((item) => item?.uci === moveUci)?.count;
+  if (discoveryCount) {
+    return Number(discoveryCount || 0);
+  }
+  const branchCount = (lesson.branch_lines || []).find((item) => item?.uci === moveUci)?.repeated_count;
+  if (branchCount) {
+    return Number(branchCount || 0);
+  }
+  return 0;
+}
+
+function computeTrainerPhase(lesson = currentLesson()) {
+  if (!lesson) return "completed";
+  const line = lessonTrainingLine(lesson);
+  const rootCursor = lessonRootCursor(lesson);
+  if (state.trainingCursor >= line.length) return "completed";
+  if (!state.branchLocked) {
+    if (state.trainingCursor < rootCursor) return "intro_autoplay";
+    return "decision_point";
+  }
+  return "locked_line";
+}
+
+function syncTrainerPhase(lesson = currentLesson()) {
+  state.trainerPhase = computeTrainerPhase(lesson);
+  return state.trainerPhase;
+}
+
+function canUserInteract(lesson = currentLesson()) {
+  const phase = computeTrainerPhase(lesson);
+  return Boolean(lesson) && isUsersTurn(lesson) && phase !== "intro_autoplay" && phase !== "completed";
 }
 
 async function classifyMoveAtCurrentPosition(lesson, moveUci, moveSan, repeatedCount = 0) {
@@ -1121,25 +1986,23 @@ function renderTrainerDecision(lesson) {
     el.trainerDecision.classList.add("empty");
     return;
   }
-  const line = lessonTrainingLine(lesson);
-  const rootCursor = lessonRootCursor(lesson);
-  if (state.trainingCursor >= line.length) {
+  const phase = syncTrainerPhase(lesson);
+  if (phase === "completed") {
     el.trainerDecision.textContent = "Line complete.";
     el.trainerDecision.classList.add("empty");
     return;
   }
-  if (state.trainingCursor < rootCursor) {
+  if (phase === "intro_autoplay") {
     el.trainerDecision.textContent = "Bookup is stepping through the lead-in to your next real decision point.";
     el.trainerDecision.classList.remove("empty");
     return;
   }
-  if (state.branchLocked) {
-    el.trainerDecision.textContent = "Following your chosen line now. Keep playing the moves Bookup asks for until the line is complete.";
-    el.trainerDecision.classList.remove("empty");
-    return;
-  }
-  if (state.trainingCursor !== rootCursor) {
-    el.trainerDecision.textContent = "Trainer is syncing to the next decision point.";
+  if (phase === "locked_line") {
+    const recommended = currentRecommendedMoveData(lesson);
+    const expectedText = recommended.san || lesson.best_reply || "";
+    el.trainerDecision.textContent = isUsersTurn(lesson)
+      ? (expectedText ? `Recommended move: ${expectedText}. You can play any legal move of your color.` : "You can play any legal move of your color here.")
+      : "Bookup is playing the practical reply now.";
     el.trainerDecision.classList.remove("empty");
     return;
   }
@@ -1167,7 +2030,7 @@ function renderTrainerDecision(lesson) {
 }
 
 function trainerUserTurn(lesson, cursor = state.trainingCursor) {
-  return (cursor % 2 === 0 && lesson?.color === "white") || (cursor % 2 === 1 && lesson?.color === "black");
+  return isUsersTurn(lesson);
 }
 
 function expectedMoveAtCursor(lesson, cursor = state.trainingCursor) {
@@ -1188,7 +2051,8 @@ function liveExpectedMoveUci(lesson, cursor = state.trainingCursor) {
       return preferred;
     }
   }
-  const insightRecommended = String(state.currentInsight?.recommended_move_uci || "").trim();
+  const liveInsight = currentLiveInsight(lesson);
+  const insightRecommended = String(liveInsight?.recommended_move_uci || "").trim();
   if (insightRecommended && (state.legalMoves || []).some((move) => move.uci === insightRecommended)) {
     return insightRecommended;
   }
@@ -1210,72 +2074,84 @@ function currentBoardHint() {
       };
     }
   }
-  const expectedUci = liveExpectedMoveUci(lesson);
-  if (!expectedUci || expectedUci.length < 4) return null;
-  const candidate = (state.currentInsight?.candidate_lines || []).find((line) => line.uci === expectedUci);
-  const classification =
-    candidate?.classification
-    || (expectedUci === lesson.best_reply_uci ? (state.currentInsight?.recommended_classification || lesson.recommended_classification) : null)
-    || null;
-  const key = classificationKey(classification);
-  if (!key) return null;
-  return {
-    from: expectedUci.slice(0, 2),
-    to: expectedUci.slice(2, 4),
-    classification,
-    key,
-    source: "hint",
-  };
+  return null;
 }
 
 function updateTrainerCopy() {
   const lesson = currentLesson();
   if (!lesson) return;
+  const phase = syncTrainerPhase(lesson);
   const line = lessonTrainingLine(lesson);
-  const expectedUci = liveExpectedMoveUci(lesson);
-  const expectedEntry = (state.legalMoves || []).find((move) => move.uci === expectedUci);
+  const liveInsight = currentLiveInsight(lesson);
+  const recommended = currentRecommendedMoveData(lesson, liveInsight);
+  const engineCoachText = String(liveInsight?.coach_explanation || "").trim();
+  const lineCoachText = String(lesson?.coach_explanation || lesson?.explanation || "").trim();
+  const coachText = engineCoachText && engineCoachText !== lineCoachText
+    ? engineCoachText
+    : (lineCoachText || engineCoachText);
+  const recommendedLabel = recommended.classification?.label || lesson?.recommended_classification?.label || "Best";
   const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
-  const openingLabel = lesson.line_label || lesson.opening_name;
-  const expectedText = expectedEntry?.san || state.currentInsight?.recommended_move || lesson.best_reply || "";
-  if (!state.branchLocked && state.trainingCursor === lessonRootCursor(lesson)) {
-    const discoveryPreview = (lesson.discovery_nodes || [])
-      .slice(0, 4)
-      .map((item) => `${item.san} ${item.count}x`)
-      .join(" | ");
-    el.boardTitle.textContent = expectedText ? `Play ${expectedText}` : openingLabel;
-    el.boardSummary.textContent = `What would you play here? Bookup will follow your branch if it stays inside your repertoire.`;
-    el.trainerCoach.textContent = discoveryPreview
-      ? `Your repeated moves in this position: ${discoveryPreview}. Preferred move: ${lesson.best_reply}.`
-      : `Preferred move here: ${lesson.best_reply}.`;
+  const expectedText = recommended.san || lesson.best_reply || "";
+  if (phase === "decision_point") {
+    const atRootDecision = state.trainingCursor === lessonRootCursor(lesson);
+    const discoveryPreview = atRootDecision
+      ? (lesson.discovery_nodes || [])
+        .slice(0, 4)
+        .map((item) => `${item.san} ${item.count}x`)
+        .join(" | ")
+      : "";
+    el.boardTitle.textContent = atRootDecision ? "What would you play here?" : "Your move here";
+    el.boardSummary.textContent = expectedText
+      ? `Choose any legal move for your color. Recommended move: ${expectedText}.`
+      : "Choose any legal move for your color. Bookup will follow repertoire branches and transpositions when they fit.";
+    if (discoveryPreview) {
+      el.trainerCoach.textContent = coachText
+        ? `Your repeated moves in this position: ${discoveryPreview}. ${coachText}`
+        : `Your repeated moves in this position: ${discoveryPreview}. Recommended move: ${expectedText || lesson.best_reply}.`;
+    } else {
+      el.trainerCoach.textContent = coachText || (expectedText
+        ? `Recommended move here: ${expectedText}. Bookup will classify any legal move you choose.`
+        : `Preferred move here: ${lesson.best_reply}.`);
+    }
     el.trainerCoach.classList.remove("empty");
     renderTrainerDecision(lesson);
-    el.boardLine.textContent = lesson.intro_line_san || "No lead-in moves loaded.";
+    el.boardLine.textContent = currentPlayedLineSan().join(" ") || lesson.intro_line_san || "No lead-in moves loaded.";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+    renderStudyWorkspace();
     return;
   }
   renderTrainerDecision(lesson);
-  if (state.trainingCursor >= line.length) {
-    el.boardTitle.textContent = `${openingLabel} complete`;
+  if (phase === "completed") {
+    el.boardTitle.textContent = "Line complete";
     el.boardSummary.textContent = "Line complete. Reset it or move on to the next due line.";
-    el.trainerCoach.textContent = `Bookup locked this line after ${lesson.trigger_move} and ran the continuation to the end.`;
+    el.trainerCoach.textContent = coachText || `Bookup ran the line through to the final planned position after ${lesson.trigger_move}.`;
     el.trainerCoach.classList.remove("empty");
-    el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
+    el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+    renderStudyWorkspace();
     return;
   }
-  if (trainerUserTurn(lesson)) {
-    const label = state.currentInsight?.recommended_classification?.label || lesson.recommended_classification?.label || "Best";
-    el.boardTitle.textContent = expectedText ? `Play ${expectedText}` : openingLabel;
-    el.boardSummary.textContent = `${openingLabel}. Step ${progress}.`;
-    el.trainerCoach.textContent = `${expectedText || lesson.best_reply} is the ${label.toLowerCase()} move here. Play it on the board.`;
+  if (phase === "intro_autoplay") {
+    el.boardTitle.textContent = "Follow the lead-in";
+    el.boardSummary.textContent = `Bookup is stepping through the practical setup. Step ${progress}.`;
+    el.trainerCoach.textContent = lineCoachText || engineCoachText || "Watch the lead-in until the board reaches your next real decision point.";
+  } else if (trainerUserTurn(lesson)) {
+    el.boardTitle.textContent = expectedText ? "Your move here" : "Choose your move";
+    el.boardSummary.textContent = expectedText
+      ? `Step ${progress}. Bookup recommends ${expectedText}, but you can play any legal move and it will classify it.`
+      : `Step ${progress}. Play any legal move of your color.`;
+    el.trainerCoach.textContent = coachText || (expectedText
+      ? `${expectedText} is Bookup's ${recommendedLabel.toLowerCase()} recommendation here. If you choose something else, Bookup will classify it and then continue the repertoire line.`
+      : "Choose your move. Bookup will classify it and continue from there.");
   } else {
     el.boardTitle.textContent = "Follow the line";
-    el.boardSummary.textContent = `Bookup is playing the line for the other side. Step ${progress}.`;
-    el.trainerCoach.textContent = "Watch the practical reply, then answer with your move when the board comes back to you.";
+    el.boardSummary.textContent = `Bookup is playing the practical reply now. Step ${progress}.`;
+    el.trainerCoach.textContent = coachText || "Watch the practical reply, then answer with your move when the board comes back to you.";
   }
   el.trainerCoach.classList.remove("empty");
-  el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
+  el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+  renderStudyWorkspace();
 }
 
 async function applyMoveToBoard(moveUci, classification = null) {
@@ -1292,54 +2168,71 @@ async function applyMoveToBoard(moveUci, classification = null) {
   return payload;
 }
 
+async function previewMoveOnBoard(moveUci) {
+  const response = await fetch("/api/apply-move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fen: state.boardFen, move_uci: moveUci }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not preview move.");
+  return payload;
+}
+
 async function syncTrainerToPlayableTurn() {
   const lesson = currentLesson();
   if (!lesson) return { autoMoves: [] };
+  const runToken = lessonRunToken(lesson);
   const line = lessonTrainingLine(lesson);
   const rootCursor = lessonRootCursor(lesson);
   const autoMoves = [];
-  if (!state.branchLocked) {
-    while (state.trainingCursor < rootCursor) {
-      const setupMove = line[state.trainingCursor];
-      if (!setupMove) break;
-      const movingColor = moveColorLabel(sideToMove(state.boardFen));
-      const moveEntry = (state.legalMoves || []).find((item) => item.uci === setupMove);
-      const moveSan = moveEntry?.san || setupMove;
-      const moveMeta = await classifyMoveAtCurrentPosition(lesson, setupMove, moveSan, 0);
-      await applyMoveToBoard(setupMove, moveMeta.classification || moveMeta.recommendedClassification || null);
-      state.trainingCursor += 1;
-      autoMoves.push({
-        color: movingColor,
-        san: state.lastMoveSan || moveSan,
-        classification: moveMeta.classification || moveMeta.recommendedClassification || null,
-      });
-    }
-    updateTrainerCopy();
-    await updateCurrentInsight();
-    return { autoMoves };
-  }
-  while (state.trainingCursor < line.length && !trainerUserTurn(lesson)) {
+  while (state.trainingCursor < line.length) {
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+    const phase = syncTrainerPhase(lesson);
+    if (phase === "completed") break;
+    if (!state.branchLocked && state.trainingCursor >= rootCursor) break;
+    if (state.branchLocked && isUsersTurn(lesson)) break;
     const expectedUci = line[state.trainingCursor];
+    if (!expectedUci) break;
     const movingColor = moveColorLabel(sideToMove(state.boardFen));
-    const expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+    let expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+    if (!expectedEntry) {
+      await refreshLegalMoves(state.boardFen);
+      if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+      expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+    }
+    if (!expectedEntry) break;
     const expectedSan = expectedEntry?.san || expectedUci;
-    const moveMeta = await classifyMoveAtCurrentPosition(lesson, expectedUci, expectedSan, 0);
+    const moveMeta = await classifyMoveAtCurrentPosition(
+      lesson,
+      expectedUci,
+      expectedSan,
+      moveRepeatedCount(lesson, expectedUci),
+    );
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
     await applyMoveToBoard(expectedUci, moveMeta.classification || moveMeta.recommendedClassification || null);
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
     state.trainingCursor += 1;
+    appendPlayedMove(expectedUci, state.lastMoveSan || expectedSan);
+    syncTrainerPhase(lesson);
     autoMoves.push({
       color: movingColor,
       san: state.lastMoveSan || expectedSan,
       classification: moveMeta.classification || moveMeta.recommendedClassification || null,
     });
+    updateTrainerCopy();
   }
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
   updateTrainerCopy();
   await updateCurrentInsight();
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
   return { autoMoves };
 }
 
 async function loadLessonById(lessonId) {
   const lesson = state.lessonMap[lessonId];
   if (!lesson) return;
+  const loadId = ++state.lessonLoadId;
   const combinedQueue = [...state.queueDue, ...state.queueNew];
   state.lessonIndex = combinedQueue.findIndex((item) => item.lesson_id === lessonId);
   state.activeLessonId = lesson.lesson_id;
@@ -1348,32 +2241,61 @@ async function loadLessonById(lessonId) {
   state.boardFen = state.startFen;
   state.trainingCursor = 0;
   state.lessonMistakes = 0;
-  state.activeTrainingLine = Array.isArray(lesson.intro_line_uci) ? [...lesson.intro_line_uci] : [];
-  state.activeTrainingLineSan = String(lesson.intro_line_san || "").trim().split(/\s+/).filter(Boolean);
+  state.activeTrainingLine = Array.isArray(lesson.training_line_uci) ? [...lesson.training_line_uci] : [];
+  state.activeTrainingLineSan = String(lesson.training_line_san || "").trim().split(/\s+/).filter(Boolean);
+  state.playedTrainingLine = [];
+  state.playedTrainingLineSan = [];
   state.branchLocked = false;
+  state.trainerPhase = "intro_autoplay";
   state.selectedSquare = "";
   state.dragFrom = "";
+  state.dragPiece = "";
+  clearDragState();
   state.lastMove = null;
   state.lastMoveClassification = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
   state.currentInsight = null;
+  state.currentInsightKey = "";
+  state.insightLoading = true;
+  state.lastEvalCp = Number(
+    lesson?.candidate_lines?.[0]?.score_cp_white
+      ?? lesson?.candidate_lines?.[0]?.score_cp
+      ?? 0
+  );
+  state.positionInsightCache = {};
+  state.pendingMoveAnimationKey = "";
+  state.renderedMoveAnimationKey = "";
+  el.boardTitle.textContent = "Loading line";
+  el.boardSummary.textContent = "Bookup is preparing the board, live analysis, and branch context for this lesson.";
   el.trainerFeedback.textContent = lesson.line_status === "known"
     ? "You already know this line. Bookup will still run it from the beginning as maintenance."
     : "Bookup is starting from the beginning of the line. When you reach the branch, play what you would normally play there.";
   el.trainerFeedback.classList.remove("empty");
+  setActiveTab("trainer");
+  renderStudyWorkspace();
 
-  await refreshLegalMoves(state.boardFen);
-  renderCoords();
-  renderBoard(state.boardFen, { animate: false });
-  await updateCurrentInsight();
-  const syncResult = await syncTrainerToPlayableTurn();
-  if (syncResult?.autoMoves?.length) {
-    el.trainerFeedback.innerHTML = `Bookup played the lead-in to your decision point. ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+  try {
+    await refreshLegalMoves(state.boardFen);
+    if (loadId !== state.lessonLoadId || state.activeLessonId !== lesson.lesson_id) return;
+    renderCoords();
+    renderBoard(state.boardFen, { animate: false });
+    updateTrainerCopy();
+    const syncResult = await syncTrainerToPlayableTurn();
+    if (loadId !== state.lessonLoadId || state.activeLessonId !== lesson.lesson_id) return;
+    if (syncResult?.autoMoves?.length) {
+      el.trainerFeedback.innerHTML = `Bookup played the lead-in to your decision point. ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+      el.trainerFeedback.classList.remove("empty");
+    }
+    renderQueue();
+    renderStudyWorkspace();
+  } catch (error) {
+    if (loadId !== state.lessonLoadId) return;
+    clearTrainer();
+    setActiveTab("trainer");
+    el.trainerFeedback.textContent = error?.message || "Bookup could not load that line.";
     el.trainerFeedback.classList.remove("empty");
   }
-  renderQueue();
-  setActiveTab("trainer");
 }
 
 function nextLesson() {
@@ -1390,6 +2312,7 @@ function resetTrainerLesson() {
 }
 
 function clearTrainer() {
+  state.lessonLoadId += 1;
   el.boardTitle.textContent = "No lesson loaded";
   el.boardSummary.textContent = "Build your repertoire, then train the next due line from your queue.";
   el.boardLine.textContent = "No line loaded yet.";
@@ -1407,16 +2330,27 @@ function clearTrainer() {
   state.legalByFrom = {};
   state.selectedSquare = "";
   state.dragFrom = "";
+  state.dragPiece = "";
+  clearDragState();
   state.lastMove = null;
   state.lastMoveClassification = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
   state.activeTrainingLine = [];
   state.activeTrainingLineSan = [];
+  state.playedTrainingLine = [];
+  state.playedTrainingLineSan = [];
   state.branchLocked = false;
+  state.trainerPhase = "completed";
   state.currentInsight = null;
+  state.currentInsightKey = "";
+  state.insightLoading = false;
+  state.lastEvalCp = null;
   state.positionInsightCache = {};
   state.insightRequestId = 0;
+  state.pendingMoveAnimationKey = "";
+  state.renderedMoveAnimationKey = "";
+  clearMoveAnimation();
   el.trainerCoach.textContent = "Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.";
   el.trainerCoach.classList.remove("empty");
   el.trainerDecision.textContent = "No decision point loaded yet.";
@@ -1425,6 +2359,8 @@ function clearTrainer() {
   el.trainerInsight.classList.remove("empty");
   renderCoords();
   renderBoard(START_FEN, { animate: false });
+  renderArrows(null);
+  renderStudyWorkspace();
 }
 
 async function refreshLegalMoves(fen = state.boardFen) {
@@ -1436,6 +2372,7 @@ async function refreshLegalMoves(fen = state.boardFen) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load legal moves.");
   applyBoardState(payload);
+  return payload;
 }
 
 function renderCoords() {
@@ -1447,23 +2384,44 @@ function renderCoords() {
 
 async function updateCurrentInsight() {
   const lesson = currentLesson();
+  const loadId = state.lessonLoadId;
   if (!lesson || !state.boardFen) {
     state.currentInsight = null;
+    state.currentInsightKey = "";
+    state.insightLoading = false;
+    state.lastEvalCp = null;
     renderArrows(null);
     el.trainerInsight.textContent = "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
+    renderStudyWorkspace();
     return;
   }
   const requestId = ++state.insightRequestId;
   const cacheKey = insightCacheKey(lesson);
-  if (state.positionInsightCache[cacheKey]) {
-    state.currentInsight = state.positionInsightCache[cacheKey];
-    renderArrows(state.currentInsight);
-    el.trainerInsight.textContent = state.currentInsight.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
+  state.insightLoading = true;
+  const cached = state.positionInsightCache[cacheKey] || null;
+  if (cached) {
+    state.currentInsight = cached;
+    state.currentInsightKey = cacheKey;
+    state.lastEvalCp = Number(
+      cached?.eval_cp_white
+        ?? cached?.candidate_lines?.[0]?.score_cp_white
+        ?? cached?.candidate_lines?.[0]?.score_cp
+        ?? state.lastEvalCp
+        ?? 0
+    );
+  }
+  renderStudyWorkspace();
+  if (cached) {
+    if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
+    state.insightLoading = false;
+    renderArrows(cached);
+    el.trainerInsight.textContent = cached.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
     el.trainerInsight.classList.remove("empty");
+    renderStudyWorkspace();
     return;
   }
   const yourMove = currentInsightYourMove(lesson);
-  const playPrefix = lessonTrainingLine(lesson).slice(0, state.trainingCursor);
+  const playPrefix = currentPlayPrefix(lesson, state.trainingCursor);
   try {
     const insight = await fetchPositionInsight(
       state.boardFen,
@@ -1472,19 +2430,29 @@ async function updateCurrentInsight() {
       yourMove.san,
       yourMove.count
     );
-    if (requestId !== state.insightRequestId || normalizeFen(state.boardFen) !== cacheKey.split("|")[0]) {
-      return;
-    }
+    if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
     state.positionInsightCache[cacheKey] = insight;
     state.currentInsight = insight;
+    state.currentInsightKey = cacheKey;
+    state.insightLoading = false;
+    state.lastEvalCp = Number(
+      insight?.eval_cp_white
+        ?? insight?.candidate_lines?.[0]?.score_cp_white
+        ?? insight?.candidate_lines?.[0]?.score_cp
+        ?? state.lastEvalCp
+        ?? 0
+    );
     renderArrows(insight);
     el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
   } catch (error) {
-    state.currentInsight = null;
-    renderArrows(null);
-    el.trainerInsight.textContent = "Live arrows are unavailable right now. Blue arrows show top engine moves and red arrows show threats when the current position insight loads.";
+    if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
+    state.insightLoading = false;
+    renderArrows(currentLiveInsight(lesson));
+    el.trainerInsight.textContent = state.currentInsight?.coach_explanation
+      || "Live arrows are unavailable right now. Blue arrows show top engine moves and red arrows show threats when the current position insight loads.";
   }
   el.trainerInsight.classList.remove("empty");
+  renderStudyWorkspace();
 }
 
 function renderBoard(fen, options = {}) {
@@ -1493,62 +2461,70 @@ function renderBoard(fen, options = {}) {
   const previousPieces = state.previousRenderedPieces || {};
   const squares = parseFenBoard(state.boardFen);
   const moveHint = currentBoardHint();
+  const lesson = currentLesson();
+  const currentTurn = sideToMove(state.boardFen);
+  const hasClassifiedMove = Boolean(moveHint?.classification && moveHint?.from && moveHint?.to);
   const displayFiles = state.boardOrientation === "black" ? [...files].reverse() : files;
   const displayRanks = state.boardOrientation === "black" ? [...ranks].reverse() : ranks;
   el.board.innerHTML = "";
   displayRanks.forEach((rankLabel, rowIndex) => {
     displayFiles.forEach((fileLabel, colIndex) => {
-    const file = files.indexOf(fileLabel);
-    const rank = 8 - Number(rankLabel);
-    const squareName = `${fileLabel}${rankLabel}`;
+      const file = files.indexOf(fileLabel);
+      const rank = 8 - Number(rankLabel);
+      const squareName = `${fileLabel}${rankLabel}`;
       const piece = squares[(rank * 8) + file];
       const square = document.createElement("div");
       square.className = `square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"} selectable`;
       square.dataset.square = squareName;
-      const classifiedPlayedMove = moveHint?.source === "played" && !!moveHint?.classification;
       if (state.selectedSquare === squareName) square.classList.add("selected");
       if (state.dragFrom === squareName) square.classList.add("drag-source");
-      if (state.lastMove?.from === squareName && !classifiedPlayedMove) square.classList.add("last-from");
-      if (state.lastMove?.to === squareName) square.classList.add("last-to");
-      if (moveHint?.from === squareName && classifiedPlayedMove) {
+      if (!hasClassifiedMove && state.lastMove?.from === squareName) square.classList.add("last-from");
+      if (!hasClassifiedMove && state.lastMove?.to === squareName) square.classList.add("last-to");
+      if (hasClassifiedMove && moveHint?.from === squareName) {
         square.classList.add("classified-source", `classification-${moveHint.key}`);
         const overlay = document.createElement("div");
         overlay.className = "square-classification-overlay";
         square.appendChild(overlay);
       }
-      if (moveHint?.to === squareName) {
+      if (hasClassifiedMove && moveHint?.to === squareName) {
         square.classList.add("classified-target", `classification-${moveHint.key}`);
         const overlay = document.createElement("div");
         overlay.className = "square-classification-overlay";
         square.appendChild(overlay);
-      square.insertAdjacentHTML("beforeend", squareClassificationMarkup(moveHint.classification));
-    }
-
-    const legalTargets = state.selectedSquare ? state.legalByFrom[state.selectedSquare] || [] : [];
-    const targetMove = legalTargets.find((item) => item.to === squareName);
-    if (targetMove) {
-      square.classList.add(targetMove.capture ? "legal-capture" : "legal-target");
-      const dot = document.createElement("div");
-      dot.className = "move-dot";
-      square.appendChild(dot);
-    }
-
-    square.addEventListener("click", () => handleSquareClick(squareName));
-    if (piece) {
-      const img = document.createElement("img");
-      img.className = "piece";
-      img.src = PIECE_ASSETS[piece];
-      img.alt = piece;
-      if (state.selectedSquare === squareName) img.classList.add("piece-selected");
-      if (state.dragFrom === squareName && state.dragGhost instanceof HTMLElement) {
-        img.classList.add("piece-dragging-source");
+        square.insertAdjacentHTML("beforeend", squareClassificationMarkup(moveHint.classification));
       }
-      img.addEventListener("pointerdown", (event) => {
-        beginPieceDrag(squareName, piece, event);
-      });
-      square.appendChild(img);
-    }
-    el.board.appendChild(square);
+
+        const legalTargets = state.selectedSquare
+          ? allowedTargetsForSquare(state.selectedSquare, lesson, state.boardFen)
+          : [];
+        const targetMove = legalTargets.find((item) => item.to === squareName);
+        if (targetMove) {
+          square.classList.add(targetMove.capture ? "legal-capture" : "legal-target");
+          const dot = document.createElement("div");
+          dot.className = "move-dot";
+        square.appendChild(dot);
+      }
+
+      square.addEventListener("click", () => handleSquareClick(squareName));
+      if (piece) {
+        const img = document.createElement("img");
+        img.className = "piece";
+        img.src = PIECE_ASSETS[piece];
+        img.alt = piece;
+        if (state.selectedSquare === squareName) img.classList.add("piece-selected");
+        if (state.dragFrom === squareName && state.dragGhost instanceof HTMLElement) {
+          img.classList.add("piece-dragging-source");
+        }
+        if (lesson && isSquareMovableByUser(squareName, lesson, state.boardFen)) {
+          img.classList.add("piece-movable");
+          square.classList.add("movable-piece-square");
+          img.addEventListener("pointerdown", (event) => {
+            beginPieceDrag(squareName, piece, event);
+          });
+        }
+        square.appendChild(img);
+      }
+      el.board.appendChild(square);
     });
   });
   const shouldAnimate = Boolean(
@@ -1563,7 +2539,7 @@ function renderBoard(fen, options = {}) {
     clearMoveAnimation();
   }
   state.previousRenderedPieces = pieceMapFromFen(state.boardFen);
-  renderArrows(state.currentInsight);
+  renderArrows(currentLiveInsight(lesson));
 }
 
 async function handleGlobalPointerUp(event) {
@@ -1598,13 +2574,15 @@ async function handleGlobalPointerUp(event) {
 }
 
 function handleSquareClick(squareName) {
-  if (!state.activeLessonId) return;
+  const lesson = currentLesson();
+  if (!lesson || !canUserInteract(lesson)) return;
   if (state.suppressNextClick) {
     state.suppressNextClick = false;
     return;
   }
+  const clickedMovable = isSquareMovableByUser(squareName, lesson);
   if (!state.selectedSquare) {
-    if ((state.legalByFrom[squareName] || []).length) {
+    if (clickedMovable) {
       state.selectedSquare = squareName;
       renderBoard(state.boardFen, { animate: false });
     }
@@ -1615,17 +2593,28 @@ function handleSquareClick(squareName) {
     renderBoard(state.boardFen, { animate: false });
     return;
   }
-  const activeTargets = state.legalByFrom[state.selectedSquare] || [];
-  if (!activeTargets.some((item) => item.to === squareName) && (state.legalByFrom[squareName] || []).length) {
-    state.selectedSquare = squareName;
-    renderBoard(state.boardFen, { animate: false });
+    const activeTargets = allowedTargetsForSquare(state.selectedSquare, lesson, state.boardFen);
+    if (!activeTargets.some((item) => item.to === squareName) && clickedMovable) {
+      state.selectedSquare = squareName;
+      renderBoard(state.boardFen, { animate: false });
+      return;
+    }
+  if (activeTargets.some((item) => item.to === squareName)) {
+    void submitTrainerMove(state.selectedSquare, squareName);
     return;
   }
-  submitTrainerMove(state.selectedSquare, squareName);
+  state.selectedSquare = "";
+  renderBoard(state.boardFen, { animate: false });
 }
 
 async function submitTrainerMove(from, to) {
-  const move = (state.legalByFrom[from] || []).find((item) => item.to === to);
+  const lesson = currentLesson();
+  if (!lesson || !canUserInteract(lesson)) {
+    state.selectedSquare = "";
+    renderBoard(state.boardFen, { animate: false });
+    return;
+  }
+    const move = allowedTargetsForSquare(from, lesson, state.boardFen).find((item) => item.to === to);
   if (!move) {
     state.selectedSquare = from;
     renderBoard(state.boardFen, { animate: false });
@@ -1634,41 +2623,51 @@ async function submitTrainerMove(from, to) {
   state.selectedSquare = "";
   renderBoard(state.boardFen, { animate: false });
 
-  const lesson = currentLesson();
-  if (!lesson) return;
+  const phase = syncTrainerPhase(lesson);
   const rootCursor = lessonRootCursor(lesson);
+  const runToken = lessonRunToken(lesson);
   const moveMeta = await classifyMoveAtCurrentPosition(
     lesson,
     move.uci,
     move.san,
-    move.uci === lesson.your_repeated_move_uci ? Number(lesson.your_top_move_count || 0) : 0,
+    moveRepeatedCount(lesson, move.uci),
   );
-  const moveInsight = moveMeta.insight;
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+  const moveInsight = moveMeta.insight || currentLiveInsight(lesson);
   const playedClassification = moveMeta.classification || null;
   const recommendedClassification =
     moveMeta.recommendedClassification
-    || state.currentInsight?.recommended_classification
+    || moveInsight?.recommended_classification
     || lesson.recommended_classification
     || null;
   const recommendedMoveLabel = moveMeta.recommendedMove || lesson.best_reply;
 
-  if (!state.branchLocked && state.trainingCursor === rootCursor) {
-    const preferredBranch = findBranchLine(lesson, lesson.preferred_branch_uci);
-    const chosenBranch = findBranchLine(lesson, move.uci);
+  if (phase === "decision_point") {
+    const previewPayload = await previewMoveOnBoard(move.uci);
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+    const chosenBranch = findBranchLine(lesson, move.uci) || findBranchLineByFen(lesson, previewPayload?.fen);
     if (chosenBranch) {
       state.branchLocked = true;
       state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(chosenBranch.line_uci || [])];
       state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, chosenBranch.line_san);
-      await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
+      state.trainerPhase = "locked_line";
+      playMoveSound(previewPayload.played_san);
+      applyBoardState(previewPayload, { classification: playedClassification || recommendedClassification || null });
+      appendPlayedMove(move.uci, previewPayload.played_san || move.san);
+      renderBoard(state.boardFen, { animate: true });
       state.trainingCursor = rootCursor + 1;
-      if (move.uci === lesson.preferred_branch_uci) {
+      syncTrainerPhase(lesson);
+      if (chosenBranch.uci === lesson.preferred_branch_uci) {
         el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} ${escapeHtml(lesson.explanation)}`;
       } else {
-        const sourceLabel = chosenBranch.source === "repertoire" ? "your repeated repertoire branch" : "a known branch in this position";
-        el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} is ${escapeHtml(sourceLabel)}. Bookup will follow it, but the preferred move here is <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
+        const sourceLabel = move.uci === chosenBranch.uci
+          ? (chosenBranch.source === "repertoire" ? "your repeated repertoire branch" : "a known branch in this position")
+          : "a transposition back into your repertoire";
+        el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} matches ${escapeHtml(sourceLabel)}. Bookup will follow it, but the preferred move here is <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
       }
       el.trainerFeedback.classList.remove("empty");
       const syncResult = await syncTrainerToPlayableTurn();
+      if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
       if (syncResult?.autoMoves?.length) {
         el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
       }
@@ -1679,26 +2678,31 @@ async function submitTrainerMove(from, to) {
     state.lessonMistakes += 1;
     recordReview(lesson.lesson_id, false);
     playMoveSound("", { error: true });
-    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} leaves your known repertoire here. Bookup recommends <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")} and will switch back to that branch.`;
+    playMoveSound(previewPayload.played_san || move.san);
+    applyBoardState(previewPayload, { classification: playedClassification || recommendedClassification || null });
+    appendPlayedMove(move.uci, previewPayload.played_san || move.san);
+    renderBoard(state.boardFen, { animate: true });
+    state.trainingCursor += 1;
+    state.branchLocked = false;
+    syncTrainerPhase(lesson);
+    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} leaves your known repertoire here. Recommended move: <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}. Play it if you want to continue this repertoire line, or choose another legal move.`;
     el.trainerFeedback.classList.remove("empty");
-    if (preferredBranch) {
-      state.branchLocked = true;
-      state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(preferredBranch.line_uci || [])];
-      state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, preferredBranch.line_san);
-        await applyMoveToBoard(lesson.preferred_branch_uci, recommendedClassification || null);
-      state.trainingCursor = rootCursor + 1;
-      const syncResult = await syncTrainerToPlayableTurn();
-      if (syncResult?.autoMoves?.length) {
-        el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
-      }
-      rebuildQueue();
-      renderQueue();
-    }
+    updateTrainerCopy();
+    await updateCurrentInsight();
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
     return;
   }
 
-  const expectedUci = liveExpectedMoveUci(lesson);
-  const expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+  if (phase === "intro_autoplay" || phase === "completed") return;
+
+  let expectedUci = liveExpectedMoveUci(lesson);
+  let expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+  if (expectedUci && !expectedEntry) {
+    await refreshLegalMoves(state.boardFen);
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+    expectedUci = liveExpectedMoveUci(lesson);
+    expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
+  }
   if (!expectedUci) return;
   if (move.uci !== expectedUci) {
     state.lessonMistakes += 1;
@@ -1709,28 +2713,29 @@ async function submitTrainerMove(from, to) {
       state.trainingCursor === (lesson.target_ply_index || 0)
         ? lesson.explanation
         : `To stay inside this repertoire line, Bookup wants ${expectedSan} here before moving on.`;
-    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} misses the line here. ${escapeHtml(explanation)} Best move: <strong>${escapeHtml(expectedSan)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
+    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} leaves this repertoire line. ${escapeHtml(explanation)} Recommended move: <strong>${escapeHtml(expectedSan)}</strong>${classificationBadge(recommendedClassification, "inline")}. Choose another legal move or play the recommendation to continue.`;
     el.trainerFeedback.classList.remove("empty");
-    el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
-    el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
-      state.lastMove = null;
-      state.lastMoveClassification = null;
-      await applyMoveToBoard(expectedUci, recommendedClassification || null);
+    await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
+    appendPlayedMove(move.uci, state.lastMoveSan || move.san);
     state.trainingCursor += 1;
-    const syncResult = await syncTrainerToPlayableTurn();
-    if (syncResult?.autoMoves?.length) {
-      el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
-    }
-    rebuildQueue();
-    renderQueue();
+    state.branchLocked = false;
+    syncTrainerPhase(lesson);
+    el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
+    el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+    updateTrainerCopy();
+    await updateCurrentInsight();
     return;
   }
 
   await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+  appendPlayedMove(move.uci, state.lastMoveSan || move.san);
   state.trainingCursor += 1;
+  syncTrainerPhase(lesson);
   const syncResult = await syncTrainerToPlayableTurn();
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
 
-  const lineFinished = state.trainingCursor >= lessonTrainingLine(lesson).length;
+  const lineFinished = syncTrainerPhase(lesson) === "completed";
   if (lineFinished) {
     if (state.lessonMistakes === 0) {
       recordReview(lesson.lesson_id, true);
@@ -1751,7 +2756,7 @@ async function submitTrainerMove(from, to) {
     el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
   }
   el.trainerFeedback.classList.remove("empty");
-  el.boardLine.textContent = lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
+  el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
 }
 
@@ -1902,7 +2907,7 @@ function classificationBadge(record, extraClass = "") {
   const key = classificationKey(record);
   const label = String(record?.label || "").trim();
   if (!key || !label) return "";
-  const icon = MOVE_CLASSIFICATION_ICONS[key];
+  const icon = String(record?.icon || MOVE_CLASSIFICATION_ICONS[key] || "").trim();
   if (!icon) return "";
   const title = escapeHtml(record?.reason || label);
   return `
@@ -1936,3 +2941,5 @@ function labelForStatus(status) {
 }
 
 init();
+
+

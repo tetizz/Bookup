@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Iterable
 
 import chess.pgn
@@ -126,58 +127,87 @@ def _import_from_pgn_blob(username_lc: str, pgn_blob: str, target: set[str], imp
     return found_any
 
 
-def fetch_games(username: str, time_classes: Iterable[str], max_games: int | None) -> list[ImportedGame]:
-    target = normalize_time_classes(time_classes)
-    archives = fetch_archives(username)
+def _import_from_month_json(username_lc: str, month: dict, target: set[str], max_games: int | None = None) -> list[ImportedGame]:
     imported: list[ImportedGame] = []
-    username_lc = username.lower()
-
-    for archive_url in reversed(archives):
-        pgn_loaded = False
-        try:
-            pgn_blob = _get_text(f"{archive_url}/pgn")
-            pgn_loaded = _import_from_pgn_blob(username_lc, pgn_blob, target, imported, max_games)
-            if max_games is not None and len(imported) >= max_games:
-                return imported
-        except Exception:
-            pgn_loaded = False
-
-        if pgn_loaded:
+    for raw_game in reversed(month.get("games", [])):
+        time_class = str(raw_game.get("time_class", "")).lower()
+        if target and time_class not in target:
+            continue
+        white = raw_game.get("white", {})
+        black = raw_game.get("black", {})
+        if str(white.get("username", "")).lower() == username_lc:
+            color = "white"
+            opponent = str(black.get("username", "Unknown"))
+            result = str(white.get("result", ""))
+        elif str(black.get("username", "")).lower() == username_lc:
+            color = "black"
+            opponent = str(white.get("username", "Unknown"))
+            result = str(black.get("result", ""))
+        else:
             continue
 
-        month = _get_json(archive_url)
-        for raw_game in reversed(month.get("games", [])):
-            time_class = str(raw_game.get("time_class", "")).lower()
-            if target and time_class not in target:
-                continue
-            white = raw_game.get("white", {})
-            black = raw_game.get("black", {})
-            if str(white.get("username", "")).lower() == username_lc:
-                color = "white"
-                opponent = str(black.get("username", "Unknown"))
-                result = str(white.get("result", ""))
-            elif str(black.get("username", "")).lower() == username_lc:
-                color = "black"
-                opponent = str(white.get("username", "Unknown"))
-                result = str(black.get("result", ""))
-            else:
-                continue
-
-            pgn_text = str(raw_game.get("pgn", ""))
-            game = chess.pgn.read_game(io.StringIO(pgn_text))
-            if game is None:
-                continue
-            imported.append(
-                ImportedGame(
-                    url=str(raw_game.get("url", "")),
-                    time_class=time_class,
-                    player_color=color,
-                    result=result,
-                    opponent=opponent,
-                    pgn=pgn_text,
-                    game=game,
-                )
+        pgn_text = str(raw_game.get("pgn", ""))
+        game = chess.pgn.read_game(io.StringIO(pgn_text))
+        if game is None:
+            continue
+        imported.append(
+            ImportedGame(
+                url=str(raw_game.get("url", "")),
+                time_class=time_class,
+                player_color=color,
+                result=result,
+                opponent=opponent,
+                pgn=pgn_text,
+                game=game,
             )
+        )
+        if max_games is not None and len(imported) >= max_games:
+            break
+    return imported
+
+
+def _fetch_archive_games(archive_url: str, username_lc: str, target: set[str]) -> list[ImportedGame]:
+    imported: list[ImportedGame] = []
+    pgn_loaded = False
+    try:
+        pgn_blob = _get_text(f"{archive_url}/pgn")
+        pgn_loaded = _import_from_pgn_blob(username_lc, pgn_blob, target, imported, None)
+    except Exception:
+        pgn_loaded = False
+
+    if pgn_loaded:
+        return imported
+
+    month = _get_json(archive_url)
+    return _import_from_month_json(username_lc, month, target, None)
+
+
+def fetch_games(
+    username: str,
+    time_classes: Iterable[str],
+    max_games: int | None,
+    archives: list[str] | None = None,
+) -> list[ImportedGame]:
+    target = normalize_time_classes(time_classes)
+    archives = archives if archives is not None else fetch_archives(username)
+    imported: list[ImportedGame] = []
+    username_lc = username.lower()
+    ordered_archives = list(reversed(archives))
+
+    if max_games is not None and max_games <= 200:
+        for archive_url in ordered_archives:
+            imported.extend(_fetch_archive_games(archive_url, username_lc, target))
+            if len(imported) >= max_games:
+                return imported[:max_games]
+        return imported
+
+    max_workers = min(8, max(2, len(ordered_archives))) if ordered_archives else 2
+    futures: list[Future[list[ImportedGame]]] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for archive_url in ordered_archives:
+            futures.append(executor.submit(_fetch_archive_games, archive_url, username_lc, target))
+        for future in futures:
+            imported.extend(future.result())
             if max_games is not None and len(imported) >= max_games:
-                return imported
+                return imported[:max_games]
     return imported

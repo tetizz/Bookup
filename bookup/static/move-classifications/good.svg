@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Good move">
+  <circle cx="256" cy="256" r="256" fill="#839869"/>
+  <path d="M132 282l70 70 178-178" fill="none" stroke="#41552c" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" opacity="0.85" transform="translate(0 18)"/>
+  <path d="M132 264l70 70 178-178" fill="none" stroke="#fff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

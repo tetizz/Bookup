@@ -11,14 +11,17 @@ import chess
 import requests
 
 
+PACKAGE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else ROOT_DIR
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 CACHE_PATH = DATA_DIR / "lichess_openings_cache.json"
+FALLBACK_OPENINGS_PATH = PACKAGE_DIR / "resources" / "openings_fallback.json"
 DATASET_BASE = "https://raw.githubusercontent.com/lichess-org/chess-openings/master"
 DATASET_FILES = ["a.tsv", "b.tsv", "c.tsv", "d.tsv", "e.tsv"]
 
 _CACHE: dict[str, Any] | None = None
+_FALLBACK_OPENINGS: dict[str, str] | None = None
 
 
 def _cache_is_fresh(payload: dict[str, Any]) -> bool:
@@ -84,14 +87,37 @@ def load_dataset() -> dict[str, Any]:
     return _CACHE
 
 
+def _load_fallback_openings() -> dict[str, str]:
+    global _FALLBACK_OPENINGS
+    if _FALLBACK_OPENINGS is not None:
+        return _FALLBACK_OPENINGS
+    try:
+        payload = json.loads(FALLBACK_OPENINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        _FALLBACK_OPENINGS = {}
+        return _FALLBACK_OPENINGS
+    _FALLBACK_OPENINGS = {
+        str(key or "").strip(): str(value or "").strip()
+        for key, value in payload.items()
+        if str(key or "").strip() and str(value or "").strip()
+    }
+    return _FALLBACK_OPENINGS
+
+
 def lookup_by_board(board: chess.Board) -> dict[str, str]:
     payload = load_dataset()
     match = payload.get("by_epd", {}).get(board.epd())
-    if not match:
+    if match:
+        return {
+            "name": str(match.get("name", "") or ""),
+            "eco": str(match.get("eco", "") or "").upper(),
+        }
+    fallback_name = _load_fallback_openings().get(board.board_fen(), "")
+    if not fallback_name:
         return {}
     return {
-        "name": str(match.get("name", "") or ""),
-        "eco": str(match.get("eco", "") or "").upper(),
+        "name": fallback_name,
+        "eco": "",
     }
 
 

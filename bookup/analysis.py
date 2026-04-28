@@ -19,7 +19,7 @@ from .chesscom import ImportedGame
 from .classifications import (
     annotate_candidate_classifications,
     classify_move_record,
-    maybe_book_classification,
+    expected_points_from_evaluation,
 )
 from .engine import EngineSession
 from .opening_names import lookup_by_board, lookup_by_eco
@@ -68,9 +68,9 @@ def configure_lichess(token: str = "") -> None:
     normalized = token.strip()
     EXPLORER_HEADERS.clear()
     EXPLORER_HEADERS["User-Agent"] = "Bookup/1.0 (local repertoire trainer)"
+    EXPLORER_AVAILABLE = True
     if normalized:
         EXPLORER_HEADERS["Authorization"] = f"Bearer {normalized}"
-        EXPLORER_AVAILABLE = True
     EXPLORER_CACHE.clear()
     ONLINE_OPENING_CACHE.clear()
 
@@ -106,27 +106,25 @@ def _score_cp(score: chess.engine.PovScore, turn: chess.Color) -> int:
     return int(pov.score(mate_score=100000) or 0)
 
 
+def _score_meta(score: chess.engine.PovScore, turn: chess.Color) -> tuple[str, int]:
+    pov = score.pov(turn)
+    if pov.is_mate():
+        mate = pov.mate()
+        return "mate", int(mate or 0)
+    return "centipawn", int(pov.score(mate_score=100000) or 0)
+
+
 def _clamp_cp(cp: int, limit: int = MAX_EXPLANATION_CP) -> int:
     return max(-limit, min(limit, int(cp)))
 
 
 def _expected_points_from_cp(cp: int) -> float:
-    clamped = max(-1200, min(1200, int(cp)))
-    return 1.0 / (1.0 + math.exp(-clamped / 220.0))
+    return expected_points_from_evaluation(score_type="centipawn", score_value=int(cp))
 
 
 def _expected_points_from_score(score: chess.engine.PovScore, turn: chess.Color, ply: int = 24) -> float:
-    pov_score = score.pov(turn)
-    for model in ("sf16", "sf15.1", "sf"):
-        try:
-            wdl = pov_score.wdl(model=model, ply=max(8, min(60, int(ply or 24))))
-            relative = getattr(wdl, "relative", wdl)
-            total = int(relative.wins) + int(relative.draws) + int(relative.losses)
-            if total:
-                return (float(relative.wins) + 0.5 * float(relative.draws)) / float(total)
-        except Exception:
-            continue
-    return _expected_points_from_cp(_score_cp(score, turn))
+    score_type, score_value = _score_meta(score, turn)
+    return expected_points_from_evaluation(score_type=score_type, score_value=score_value)
 
 
 def _edge_label(cp: int) -> str:
@@ -184,7 +182,6 @@ def _opening_library() -> ChessOpeningsLibrary | None:
 
 
 def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
-    global EXPLORER_AVAILABLE
     cache_key = f"{board.epd()}|{play_key}"
     if cache_key in EXPLORER_CACHE:
         return EXPLORER_CACHE[cache_key]
@@ -206,7 +203,6 @@ def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
         response.raise_for_status()
         payload = response.json()
     except Exception:
-        EXPLORER_AVAILABLE = False
         payload = {}
     EXPLORER_CACHE[cache_key] = payload
     return payload
@@ -425,6 +421,19 @@ def _database_moves(board: chess.Board, play_uci: list[str], limit: int = 6) -> 
     return items
 
 
+def _resulting_position_is_book(board: chess.Board, move_uci: str) -> bool:
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        return False
+    if move not in board.legal_moves:
+        return False
+    next_board = board.copy(stack=False)
+    next_board.push(move)
+    match = lookup_by_board(next_board)
+    return bool(str(match.get("name", "") or "").strip() or str(match.get("eco", "") or "").strip())
+
+
 def _move_purpose(board: chess.Board, move: chess.Move) -> str:
     piece = board.piece_at(move.from_square)
     if piece is None:
@@ -452,14 +461,26 @@ def _move_purpose(board: chess.Board, move: chess.Move) -> str:
     return "improves coordination"
 
 
-def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, play_uci: list[str] | None = None, limit: int = 5) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _candidate_lines_for_board(
+    board: chess.Board,
+    engine: EngineSession,
+    *,
+    play_uci: list[str] | None = None,
+    limit: int = 5,
+    time_sec: float | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     play_uci = play_uci or []
-    cache_key = f"{board.epd()}|{','.join(play_uci)}|d{engine.settings.depth}|mpv{engine.settings.multipv}|{limit}"
+    time_key = "none" if time_sec is None else f"{float(time_sec):.2f}"
+    cache_key = f"{board.epd()}|{','.join(play_uci)}|d{engine.settings.depth}|mpv{engine.settings.multipv}|t{time_key}|{limit}"
     if cache_key in POSITION_INSIGHT_CACHE:
         cached = POSITION_INSIGHT_CACHE[cache_key]
         return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", []))
 
-    root_lines = engine.analyse(board, multipv=max(limit, engine.settings.multipv))
+    root_lines = engine.analyse(
+        board,
+        multipv=max(limit, engine.settings.multipv),
+        time_sec=time_sec,
+    )
     database_moves = _database_moves(board, play_uci, limit=limit + 1)
     popularity_by_uci = {
         str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
@@ -476,11 +497,15 @@ def _candidate_lines_for_board(board: chess.Board, engine: EngineSession, *, pla
             continue
         first_san = board.san(first_move)
         continuation_san, continuation_uci = _pv_sans(board, pv)
+        score_type, score_value = _score_meta(line["score"], board.turn)
         candidate_lines.append(
             {
                 "move": first_san,
                 "uci": first_move.uci(),
                 "score_cp": _score_cp(line["score"], board.turn),
+                "score_cp_white": _score_cp(line["score"], chess.WHITE),
+                "score_type": score_type,
+                "score_value": score_value,
                 "expected_points": _expected_points_from_score(line["score"], board.turn, engine.settings.depth),
                 "line_san": " ".join(continuation_san),
                 "line_uci": continuation_uci,
@@ -592,8 +617,15 @@ def build_position_insight(
     your_move_uci: str = "",
     your_move_san: str = "",
     your_move_count: int = 0,
+    time_sec: float | None = None,
 ) -> dict[str, Any]:
-    candidate_lines, database_moves = _candidate_lines_for_board(board, engine, play_uci=play_uci, limit=5)
+    candidate_lines, database_moves = _candidate_lines_for_board(
+        board,
+        engine,
+        play_uci=play_uci,
+        limit=5,
+        time_sec=time_sec,
+    )
     best_line = candidate_lines[0] if candidate_lines else None
     if best_line is None:
         return {
@@ -619,6 +651,7 @@ def build_position_insight(
                 source="repertoire",
                 repeated_count=your_move_count,
                 popularity=next((item["popularity"] for item in database_moves if item.get("uci") == your_move_uci), 0.0),
+                time_sec=time_sec,
             )
         if your_line is not None:
             second_loss = candidate_lines[1]["expected_points_loss"] if len(candidate_lines) > 1 else 0.0
@@ -626,14 +659,11 @@ def build_position_insight(
                 board,
                 your_line,
                 best_line,
+                second_record=candidate_lines[1] if len(candidate_lines) > 1 else None,
                 second_loss=second_loss,
                 is_player_move=True,
-            )
-            your_move_classification = maybe_book_classification(
-                your_move_classification,
                 opening_phase=len(play_uci or []) < OPENING_PLIES,
-                repeated_count=your_move_count,
-                popularity=next((item["popularity"] for item in database_moves if item.get("uci") == your_move_uci), 0.0),
+                in_book=_resulting_position_is_book(board, your_move_uci),
             )
     return {
         "candidate_lines": candidate_lines,
@@ -643,6 +673,8 @@ def build_position_insight(
         "recommended_move_uci": best_line["uci"],
         "recommended_classification": best_line.get("classification"),
         "your_move_classification": your_move_classification,
+        "eval_cp_white": best_line.get("score_cp_white", best_line.get("score_cp", 0)),
+        "eval_cp_turn": best_line.get("score_cp", 0),
         "coach_explanation": _build_coach_explanation(
             board,
             best_move_uci=best_line["uci"],
@@ -668,6 +700,7 @@ def _build_branch_line(
     repeated_count: int = 0,
     popularity: float = 0.0,
     score_cp: int | None = None,
+    time_sec: float | None = None,
 ) -> dict[str, Any] | None:
     try:
         move = chess.Move.from_uci(move_uci)
@@ -678,19 +711,28 @@ def _build_branch_line(
 
     branch_board = board.copy(stack=False)
     branch_board.push(move)
-    analysis = engine.analyse(branch_board, depth=max(8, min(14, engine.settings.depth - 4)), multipv=1)
+    analysis = engine.analyse(
+        branch_board,
+        depth=max(8, min(14, engine.settings.depth - 4)),
+        multipv=1,
+        time_sec=time_sec,
+    )
     if not analysis:
         return None
     line = analysis[0]
     pv = line.get("pv") or []
     continuation_san, continuation_uci = _pv_sans(branch_board, pv)
+    score_type, score_value = _score_meta(line["score"], board.turn)
     branch_score_cp = score_cp if score_cp is not None else _score_cp(line["score"], board.turn)
     full_uci = [move_uci, *continuation_uci]
     full_san = [move_san, *continuation_san]
     return {
         "move": move_san,
         "uci": move_uci,
+        "resulting_fen": branch_board.fen(),
         "score_cp": branch_score_cp,
+        "score_type": score_type,
+        "score_value": score_value,
         "expected_points": _expected_points_from_score(line["score"], board.turn, engine.settings.depth),
         "line_san": " ".join(full_san),
         "line_uci": full_uci,
@@ -791,14 +833,10 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         board,
         root,
         root,
+        second_record=candidate_lines[1] if len(candidate_lines) > 1 else None,
         second_loss=second_loss,
-    )
-    recommended_classification = maybe_book_classification(
-        recommended_classification,
         opening_phase=node.ply_index < OPENING_PLIES,
-        repeated_count=best_repeat_count,
-        popularity=next((item["popularity"] for item in database_moves if item.get("uci") == best_move_uci), 0.0),
-        line_status=line_status,
+        in_book=_resulting_position_is_book(board, best_move_uci),
     )
     your_branch = branch_by_uci.get(top_played_uci) or next((line for line in candidate_lines if line["uci"] == top_played_uci), None)
     your_move_classification = None
@@ -807,19 +845,21 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             board,
             your_branch,
             root,
+            second_record=candidate_lines[1] if len(candidate_lines) > 1 else None,
             second_loss=second_loss,
             is_player_move=True,
-        )
-        your_move_classification = maybe_book_classification(
-            your_move_classification,
             opening_phase=node.ply_index < OPENING_PLIES,
-            repeated_count=top_played_count,
-            popularity=next((item["popularity"] for item in database_moves if item.get("uci") == top_played_uci), 0.0),
-            line_status=line_status,
+            in_book=_resulting_position_is_book(board, top_played_uci),
         )
 
     locked_training_line_uci = [*node.play_uci, *preferred_branch["line_uci"]]
     locked_training_line_san = _uci_line_sans_from_start(locked_training_line_uci)
+    decision_board = chess.Board()
+    for move_uci in intro_line_uci:
+        try:
+            decision_board.push(chess.Move.from_uci(move_uci))
+        except ValueError:
+            break
     discovery_nodes = [
         {
             "san": move["san"],
@@ -869,6 +909,8 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         "transposition_group_id": node.key,
         "color": node.color,
         "line_start_fen": chess.STARTING_FEN,
+        "line_root_fen": chess.STARTING_FEN,
+        "decision_fen": decision_board.fen(),
         "intro_line_uci": intro_line_uci,
         "intro_line_san": " ".join(intro_line_san),
         "training_line_uci": locked_training_line_uci,
@@ -905,12 +947,16 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             {
                 "uci": item["uci"],
                 "san": item["move"],
+                "resulting_fen": item.get("resulting_fen", ""),
                 "source": item["source"],
                 "repeated_count": item["repeated_count"],
                 "popularity": item["popularity"],
             }
             for item in branch_lines
         ],
+        "trainer_phase": "intro_autoplay",
+        "branch_locked": False,
+        "line_completed": False,
         "branch_lines": branch_lines,
         "candidate_lines": candidate_lines,
         "player_move_frequency": [

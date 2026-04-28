@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Inaccuracy">
+  <circle cx="256" cy="256" r="256" fill="#f4cb43"/>
+  <text x="224" y="304" text-anchor="middle" font-family="Arial, sans-serif" font-size="248" font-weight="700" fill="#8d6c11" opacity="0.85">?</text>
+  <text x="324" y="304" text-anchor="middle" font-family="Arial, sans-serif" font-size="248" font-weight="700" fill="#8d6c11" opacity="0.85">!</text>
+  <text x="224" y="286" text-anchor="middle" font-family="Arial, sans-serif" font-size="248" font-weight="700" fill="#fff">?</text>
+  <text x="324" y="286" text-anchor="middle" font-family="Arial, sans-serif" font-size="248" font-weight="700" fill="#fff">!</text>
+</svg>

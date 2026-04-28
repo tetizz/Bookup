@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Blunder">
+  <circle cx="256" cy="256" r="256" fill="#ff4634"/>
+  <text x="190" y="304" text-anchor="middle" font-family="Arial, sans-serif" font-size="232" font-weight="700" fill="#97261e" opacity="0.85">?</text>
+  <text x="320" y="304" text-anchor="middle" font-family="Arial, sans-serif" font-size="232" font-weight="700" fill="#97261e" opacity="0.85">?</text>
+  <text x="190" y="286" text-anchor="middle" font-family="Arial, sans-serif" font-size="232" font-weight="700" fill="#fff">?</text>
+  <text x="320" y="286" text-anchor="middle" font-family="Arial, sans-serif" font-size="232" font-weight="700" fill="#fff">?</text>
+</svg>

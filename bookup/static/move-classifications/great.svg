@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Great move">
+  <circle cx="256" cy="256" r="256" fill="#7ca3ca"/>
+  <g transform="translate(0 18)">
+    <rect x="229" y="92" width="54" height="264" rx="18" fill="#3c5774" opacity="0.85"/>
+    <rect x="229" y="370" width="54" height="64" rx="16" fill="#3c5774" opacity="0.85"/>
+    <rect x="229" y="74" width="54" height="264" rx="18" fill="#fff"/>
+    <rect x="229" y="352" width="54" height="64" rx="16" fill="#fff"/>
+  </g>
+</svg>

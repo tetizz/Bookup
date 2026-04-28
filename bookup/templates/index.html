@@ -44,7 +44,7 @@
       <button class="workspace-tab active" data-tab-target="setup">Setup</button>
       <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire Map</button>
       <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
-      <button class="workspace-tab" data-tab-target="trainer">Trainer</button>
+      <button class="workspace-tab" data-tab-target="trainer">Study Lines</button>
       <button class="workspace-tab" data-tab-target="review">Review</button>
     </nav>
 
@@ -88,6 +88,20 @@
               <input id="depthInput" type="number" min="10" max="28">
             </label>
             <label class="field compact">
+              <span>Thinking time</span>
+              <select id="thinkTimeInput">
+                <option value="0.5">0.5 sec</option>
+                <option value="1">1 sec</option>
+                <option value="2">2 sec</option>
+                <option value="3">3 sec</option>
+                <option value="5">5 sec</option>
+                <option value="10">10 sec</option>
+                <option value="20">20 sec</option>
+                <option value="30">30 sec</option>
+                <option value="0">Unlimited</option>
+              </select>
+            </label>
+            <label class="field compact">
               <span>MultiPV</span>
               <input id="multiPvInput" type="number" min="1" max="10">
             </label>
@@ -102,7 +116,15 @@
           </div>
           <div class="setup-actions">
             <button id="analyzeBtn" class="primary-btn" type="button">Build Repertoire</button>
-            <div id="status" class="status">Ready.</div>
+            <div class="progress-stack">
+              <div class="progress-track" id="progressTrack" aria-hidden="true">
+                <div class="progress-fill" id="progressFill"></div>
+              </div>
+              <div class="progress-meta">
+                <div id="status" class="status">Ready.</div>
+                <div id="progressLabel" class="progress-label">0%</div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -198,11 +220,11 @@
     </section>
 
     <section class="workspace-panel" data-tab-panel="trainer">
-      <div class="trainer-layout">
-        <section class="card trainer-board-card">
+      <div class="study-layout">
+        <section class="card trainer-board-card study-board-card">
           <div class="trainer-head">
             <div>
-              <div class="section-label">Trainer</div>
+              <div class="section-label">Analysis Board</div>
               <h2 id="boardTitle" class="section-title">No lesson loaded</h2>
               <p id="boardSummary" class="summary-copy">Build your repertoire, then train the next due line from your queue.</p>
             </div>
@@ -212,11 +234,23 @@
             </div>
           </div>
 
-          <div class="board-wrap">
-            <div id="boardArrows" class="board-arrows" aria-hidden="true"></div>
-            <div id="rankLabels" class="rank-labels"></div>
-            <div id="board" class="board-grid"></div>
-            <div id="fileLabels" class="file-labels"></div>
+          <div class="study-board-shell">
+            <aside class="eval-rail" aria-label="Evaluation bar">
+              <div id="studyEvalScore" class="eval-score">+0.00</div>
+              <div class="eval-bar" id="studyEvalBar">
+                <div id="studyEvalFill" class="eval-fill"></div>
+              </div>
+              <div id="studyEvalCaption" class="eval-caption">Waiting for live analysis</div>
+            </aside>
+
+            <div class="board-area">
+              <div class="board-wrap">
+                <div id="boardArrows" class="board-arrows" aria-hidden="true"></div>
+                <div id="rankLabels" class="rank-labels"></div>
+                <div id="board" class="board-grid"></div>
+                <div id="fileLabels" class="file-labels"></div>
+              </div>
+            </div>
           </div>
 
           <div id="trainerCoach" class="trainer-feedback empty">Bookup will ask what you would play here, then lock into the repertoire branch you choose or redirect you if you leave your repertoire.</div>
@@ -226,15 +260,100 @@
           <div id="trainerFeedback" class="trainer-feedback empty">Choose a due line from the queue or launch one from a repertoire card.</div>
         </section>
 
-        <section class="card trainer-queue-card">
-          <div class="section-label">Due Queue</div>
-          <h2 class="section-title">Your next lines to review</h2>
-          <div id="lessonQueueMeta" class="queue-meta">No review queue yet.</div>
-          <div class="section-label">Due Today</div>
-          <div id="lessonListDue" class="stack empty">No due lines yet.</div>
-          <div class="section-label">New Later</div>
-          <div id="lessonListNew" class="stack empty">No new lines yet.</div>
-        </section>
+        <aside class="study-side-column">
+          <section class="card study-panel-card">
+            <div class="section-label">Analysis</div>
+            <h2 class="section-title">Live engine and database view</h2>
+            <p id="studyOpeningMeta" class="summary-copy">Open a line to see its live engine and Lichess database context here.</p>
+            <div id="studyPositionLinks" class="chip-row study-link-row"></div>
+
+            <div class="study-panel-section">
+              <div class="study-section-header">
+                <span>Stockfish</span>
+                <span id="studyAnalysisMeta" class="line-badge">Depth -- | 5 sec | MultiPV --</span>
+              </div>
+              <div id="studyEngineLines" class="stack empty">Engine lines will show up here.</div>
+            </div>
+
+            <div class="study-panel-section">
+              <div class="study-section-header">
+                <span>Lichess Database</span>
+                <span id="studyDatabaseMeta" class="line-badge">No position loaded</span>
+              </div>
+              <div id="studyDatabaseMoves" class="stack empty">Database moves will show up here.</div>
+            </div>
+
+            <div class="study-panel-section">
+              <div class="study-section-header">
+                <span>Move Review</span>
+                <span id="studyMoveMeta" class="line-badge">Waiting for a move</span>
+              </div>
+              <div id="studyMoveClassifications" class="stack empty">Move classifications will show up here.</div>
+              <div id="studyMoveTrail" class="study-move-trail empty">No played line yet.</div>
+            </div>
+
+            <div class="study-panel-section">
+              <div class="study-section-header">
+                <span>Stockfish Settings</span>
+                <span class="line-badge">Live study</span>
+              </div>
+              <div class="form-grid study-settings-grid">
+                <label class="field">
+                  <span>Lichess token</span>
+                  <input id="studyLichessTokenInput" type="password" placeholder="Optional for live database moves">
+                </label>
+                <label class="field">
+                  <span>Engine path</span>
+                  <input id="studyEnginePathInput" type="text" placeholder="C:\path\to\stockfish.exe">
+                </label>
+                <label class="field">
+                  <span>Depth</span>
+                  <input id="studyDepthInput" type="number" min="10" max="30">
+                </label>
+                <label class="field">
+                  <span>Thinking time</span>
+                  <select id="studyThinkTimeInput">
+                    <option value="0.5">0.5 sec</option>
+                    <option value="1">1 sec</option>
+                    <option value="2">2 sec</option>
+                    <option value="3">3 sec</option>
+                    <option value="5">5 sec</option>
+                    <option value="10">10 sec</option>
+                    <option value="20">20 sec</option>
+                    <option value="30">30 sec</option>
+                    <option value="0">Unlimited</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>MultiPV</span>
+                  <input id="studyMultiPvInput" type="number" min="1" max="10">
+                </label>
+                <label class="field">
+                  <span>Threads</span>
+                  <input id="studyThreadsInput" type="number" min="1">
+                </label>
+                <label class="field">
+                  <span>Hash MB</span>
+                  <input id="studyHashInput" type="number" min="256">
+                </label>
+              </div>
+              <div class="chip-row">
+                <button id="studyApplySettingsBtn" class="launch-btn" type="button">Apply settings</button>
+              </div>
+              <div id="studySettingsStatus" class="line-note">These settings drive live study analysis and arrows.</div>
+            </div>
+          </section>
+
+          <section class="card trainer-queue-card">
+            <div class="section-label">Due Queue</div>
+            <h2 class="section-title">Your next lines to review</h2>
+            <div id="lessonQueueMeta" class="queue-meta">No review queue yet.</div>
+            <div class="section-label">Due Today</div>
+            <div id="lessonListDue" class="stack empty">No due lines yet.</div>
+            <div class="section-label">New Later</div>
+            <div id="lessonListNew" class="stack empty">No new lines yet.</div>
+          </section>
+        </aside>
       </div>
     </section>
   </main>

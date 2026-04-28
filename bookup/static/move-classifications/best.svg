@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Best move">
+  <circle cx="256" cy="256" r="256" fill="#8bbe4c"/>
+  <polygon points="256,82 309,190 430,207 342,289 364,407 256,347 148,407 170,289 82,207 203,190" fill="#4b6e28" opacity="0.85" transform="translate(0 18)"/>
+  <polygon points="256,64 309,172 430,189 342,271 364,389 256,329 148,389 170,271 82,189 203,172" fill="#fff"/>
+</svg>

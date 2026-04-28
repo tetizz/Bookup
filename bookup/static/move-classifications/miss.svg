@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Miss">
+  <circle cx="256" cy="256" r="256" fill="#ff8077"/>
+  <path d="M152 152l208 208M360 152L152 360" fill="none" stroke="#8d3a34" stroke-width="58" stroke-linecap="round" opacity="0.85" transform="translate(0 18)"/>
+  <path d="M152 134l208 208M360 134L152 342" fill="none" stroke="#fff" stroke-width="58" stroke-linecap="round"/>
+</svg>
