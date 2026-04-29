@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 8;
+const PROFILE_SCHEMA_VERSION = 9;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -775,13 +775,17 @@ function startAnalysisProgress() {
       message = "Finalizing trainer lines...";
     }
     if (elapsed >= 32000) {
-      target = 92;
-      message = "Wrapping up cached lessons and queues...";
+      target = 96;
+      message = "Still working. Stockfish is finishing the first lesson cache...";
     }
     const current = parseInt((el.progressFill?.style.width || "0").replace("%", ""), 10) || 0;
     if (current < target) {
-      setProgress(current + 1, message);
+      setProgress(current + 1, message, { indeterminate: elapsed >= 32000 });
     } else {
+      if (elapsed >= 32000) {
+        setProgress(target, message, { indeterminate: true });
+        return;
+      }
       setStatus(message);
     }
   }, 220);

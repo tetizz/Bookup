@@ -42,7 +42,8 @@ PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
-MAX_ANALYZED_REPERTOIRE_NODES = 140
+MAX_ANALYZED_REPERTOIRE_NODES = 72
+PROFILE_ANALYSIS_TIME_SEC = 0.9
 
 
 @dataclass(slots=True)
@@ -981,7 +982,7 @@ def _build_branch_line(
     }
 
 
-def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[str, Any]:
+def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_sec: float | None = None) -> dict[str, Any]:
     if node.occurrences < REPEATED_MISTAKE_THRESHOLD:
         return {}
 
@@ -993,6 +994,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
         your_move_uci=node.player_moves.most_common(1)[0][0] if node.player_moves else "",
         your_move_san=node.player_san.get(node.player_moves.most_common(1)[0][0], "") if node.player_moves else "",
         your_move_count=node.player_moves.most_common(1)[0][1] if node.player_moves else 0,
+        time_sec=time_sec,
     )
     candidate_lines = insight["candidate_lines"]
     database_moves = insight["database_moves"]
@@ -1045,6 +1047,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             repeated_count=node.player_moves.get(line["uci"], 0),
             popularity=next((item["popularity"] for item in database_moves if item.get("uci") == line["uci"]), 0.0),
             score_cp=line["score_cp"],
+            time_sec=time_sec,
         )
         if branch_record:
             branch_by_uci[line["uci"]] = branch_record
@@ -1059,6 +1062,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession) -> dict[s
             source="repertoire",
             repeated_count=top_played_count,
             popularity=next((item["popularity"] for item in database_moves if item.get("uci") == top_played_uci), 0.0),
+            time_sec=time_sec,
         )
         if repertoire_branch:
             branch_by_uci[top_played_uci] = repertoire_branch
@@ -1330,9 +1334,10 @@ def _build_repertoire_updates(urgent: list[dict[str, Any]], known_lines: list[di
 def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str, Any]:
     nodes, _position_counts, _opening_info = _collect_position_nodes(games)
     analyzed_nodes = _rank_nodes_for_analysis(nodes)
+    quick_time_sec = max(0.35, min(PROFILE_ANALYSIS_TIME_SEC, float(engine.settings.think_time_sec or PROFILE_ANALYSIS_TIME_SEC)))
     lessons = []
     for node in analyzed_nodes:
-        lesson = _build_lesson_from_node(node, engine)
+        lesson = _build_lesson_from_node(node, engine, time_sec=quick_time_sec)
         if lesson:
             lessons.append(lesson)
 

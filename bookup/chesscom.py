@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from typing import Iterable
 
 import chess.pgn
@@ -206,7 +206,7 @@ def fetch_games(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for archive_url in ordered_archives:
             futures.append(executor.submit(_fetch_archive_games, archive_url, username_lc, target))
-        for future in futures:
+        for future in as_completed(futures):
             imported.extend(future.result())
             if max_games is not None and len(imported) >= max_games:
                 return imported[:max_games]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import ctypes
 import json
 import os
 import sys
@@ -27,7 +28,8 @@ RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
-PROFILE_SCHEMA_VERSION = 8
+PROFILE_SCHEMA_VERSION = 9
+ENGINE_DEFAULTS_VERSION = 2
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EngineSession | None = None
 LIVE_ENGINE_KEY = ""
@@ -52,6 +54,60 @@ def save_config(payload: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def system_total_ram_mb() -> int:
+    try:
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MEMORYSTATUSEX()
+        status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return max(1024, int(status.ullTotalPhys // (1024 * 1024)))
+    except Exception:
+        pass
+    return 16384
+
+
+CPU_THREADS = max(1, os.cpu_count() or 8)
+TOTAL_RAM_MB = system_total_ram_mb()
+
+
+def recommended_engine_defaults() -> dict:
+    # Strong live-analysis defaults without making imports painfully expensive.
+    raw_hash = max(4096, min(32768, TOTAL_RAM_MB // 4))
+    hash_mb = max(4096, (raw_hash // 128) * 128)
+    return {
+        "depth": 26,
+        "threads": max(1, min(CPU_THREADS, 16)),
+        "hash_mb": hash_mb,
+        "multipv": 5,
+        "think_time_sec": 5.0,
+    }
+
+
+def migrate_engine_defaults(config: dict) -> dict:
+    if int(config.get("engine_defaults_version", 0) or 0) >= ENGINE_DEFAULTS_VERSION:
+        return config
+    migrated = dict(config)
+    defaults = recommended_engine_defaults()
+    for key, value in defaults.items():
+        migrated[key] = value
+    migrated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
+    if not str(migrated.get("engine_path", "")).strip():
+        migrated["engine_path"] = default_engine_path()
+    return migrated
+
+
 def local_lichess_token(config: dict | None = None) -> str:
     env_token = os.environ.get("LICHESS_TOKEN", "").strip()
     if env_token:
@@ -60,17 +116,18 @@ def local_lichess_token(config: dict | None = None) -> str:
 
 
 def build_engine_settings(payload: dict) -> EngineSettings:
+    defaults = recommended_engine_defaults()
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     try:
-        think_time_sec = float(payload.get("think_time_sec", 5.0) or 0)
+        think_time_sec = float(payload.get("think_time_sec", defaults["think_time_sec"]) or 0)
     except (TypeError, ValueError):
-        think_time_sec = 5.0
+        think_time_sec = float(defaults["think_time_sec"])
     return EngineSettings(
         path=engine_path,
-        depth=max(10, min(30, int(payload.get("depth", 24)))),
-        threads=max(1, min(max(1, os.cpu_count() or 8), int(payload.get("threads", max(1, os.cpu_count() or 8))))),
-        hash_mb=max(256, min(32768, int(payload.get("hash_mb", 2048)))),
-        multipv=max(1, min(10, int(payload.get("multipv", 5)))),
+        depth=max(10, min(30, int(payload.get("depth", defaults["depth"])))),
+        threads=max(1, min(CPU_THREADS, int(payload.get("threads", defaults["threads"])))),
+        hash_mb=max(256, min(32768, int(payload.get("hash_mb", defaults["hash_mb"])))),
+        multipv=max(1, min(10, int(payload.get("multipv", defaults["multipv"])))),
         think_time_sec=max(0.0, min(60.0, think_time_sec)),
     )
 
@@ -121,16 +178,18 @@ def apply_engine_settings_to_config(config: dict, settings: EngineSettings) -> d
     updated["threads"] = settings.threads
     updated["hash_mb"] = settings.hash_mb
     updated["think_time_sec"] = settings.think_time_sec
+    updated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
     return updated
 
 
 def build_defaults_payload(config: dict) -> dict:
-    settings = build_engine_settings(config)
+    migrated = migrate_engine_defaults(config)
+    settings = build_engine_settings(migrated)
     return {
-        "username": config.get("username", "trixize1234"),
-        "time_classes": config.get("time_classes", "all"),
-        "max_games": int(config.get("max_games", 0)),
-        "lichess_token": local_lichess_token(config),
+        "username": migrated.get("username", "trixize1234"),
+        "time_classes": migrated.get("time_classes", "all"),
+        "max_games": int(migrated.get("max_games", 0)),
+        "lichess_token": local_lichess_token(migrated),
         "engine_path": settings.path,
         "depth": settings.depth,
         "threads": settings.threads,
@@ -236,7 +295,8 @@ def serialize_legal_moves(board: chess.Board) -> list[dict]:
 
 @app.get("/")
 def index() -> str:
-    config = load_config()
+    config = migrate_engine_defaults(load_config())
+    save_config(config)
     bundled_engine = default_engine_path()
     default_engine = bundled_engine or config.get("engine_path", "")
     if getattr(sys, "frozen", False) and bundled_engine:
@@ -270,14 +330,14 @@ def local_state() -> tuple:
 @app.post("/api/settings")
 def save_settings() -> tuple:
     payload = request.get_json(force=True)
-    config = load_config()
+    config = migrate_engine_defaults(load_config())
 
     if "engine_path" in payload:
         engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
         config["engine_path"] = engine_path
     if "depth" in payload:
         try:
-            config["depth"] = int(payload.get("depth", config.get("depth", 24)))
+            config["depth"] = int(payload.get("depth", config.get("depth", recommended_engine_defaults()["depth"])))
         except (TypeError, ValueError):
             pass
     if "multipv" in payload:
@@ -287,12 +347,12 @@ def save_settings() -> tuple:
             pass
     if "threads" in payload:
         try:
-            config["threads"] = int(payload.get("threads", config.get("threads", max(1, os.cpu_count() or 8))))
+            config["threads"] = int(payload.get("threads", config.get("threads", recommended_engine_defaults()["threads"])))
         except (TypeError, ValueError):
             pass
     if "hash_mb" in payload:
         try:
-            config["hash_mb"] = int(payload.get("hash_mb", config.get("hash_mb", 2048)))
+            config["hash_mb"] = int(payload.get("hash_mb", config.get("hash_mb", recommended_engine_defaults()["hash_mb"])))
         except (TypeError, ValueError):
             pass
     if "lichess_token" in payload:
@@ -334,7 +394,7 @@ def profile() -> tuple:
     except (TypeError, ValueError):
         parsed_max_games = 0
     max_games = None if parsed_max_games <= 0 else max(1, min(20000, parsed_max_games))
-    config = load_config()
+    config = migrate_engine_defaults(load_config())
     lichess_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
