@@ -42,6 +42,7 @@ PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
+MAX_ANALYZED_REPERTOIRE_NODES = 140
 
 
 @dataclass(slots=True)
@@ -526,6 +527,21 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
             board.push(move)
 
     return nodes, position_counts, opening_by_position
+
+
+def _rank_nodes_for_analysis(nodes: dict[str, PositionNode]) -> list[PositionNode]:
+    """Analyze the most useful repeated positions first so imports stay responsive."""
+    repeated_nodes = [node for node in nodes.values() if node.occurrences >= REPEATED_MISTAKE_THRESHOLD]
+    repeated_nodes.sort(
+        key=lambda node: (
+            -node.occurrences,
+            node.ply_index,
+            node.color,
+            node.trigger_move,
+            node.key,
+        )
+    )
+    return repeated_nodes[:MAX_ANALYZED_REPERTOIRE_NODES]
 
 
 def _database_moves(board: chess.Board, play_uci: list[str], limit: int = 6) -> list[dict[str, Any]]:
@@ -1313,8 +1329,9 @@ def _build_repertoire_updates(urgent: list[dict[str, Any]], known_lines: list[di
 
 def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str, Any]:
     nodes, _position_counts, _opening_info = _collect_position_nodes(games)
+    analyzed_nodes = _rank_nodes_for_analysis(nodes)
     lessons = []
-    for node in nodes.values():
+    for node in analyzed_nodes:
         lesson = _build_lesson_from_node(node, engine)
         if lesson:
             lessons.append(lesson)
@@ -1385,6 +1402,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "summary": {
             "win_rate": win_rate,
             "positions": len(lessons),
+            "positions_indexed": len(nodes),
+            "positions_analyzed": len(analyzed_nodes),
             "trainable_positions": len(queue_due) + len(queue_new),
             "known_lines": len(known_lines),
             "urgent_lines": len(urgent_lines),

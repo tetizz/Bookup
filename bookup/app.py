@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import sys
@@ -12,8 +13,9 @@ import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import analyse_games, build_position_insight, configure_lichess, database_context_for_board, generate_theory_line
+from .analysis import OPENING_PLIES, analyse_games, build_position_insight, configure_lichess, database_context_for_board, generate_theory_line
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
+from .classifications import book_classification_payload
 from .engine import EngineSession, EngineSettings, default_engine_path
 from .storage import LocalStore, deserialize_games, serialize_games
 
@@ -26,6 +28,9 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 PROFILE_SCHEMA_VERSION = 8
+ENGINE_LOCK = threading.Lock()
+LIVE_ENGINE_SESSION: EngineSession | None = None
+LIVE_ENGINE_KEY = ""
 
 app = Flask(
     __name__,
@@ -68,6 +73,44 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         multipv=max(1, min(10, int(payload.get("multipv", 5)))),
         think_time_sec=max(0.0, min(60.0, think_time_sec)),
     )
+
+
+def engine_session_key(settings: EngineSettings) -> str:
+    return json.dumps(
+        {
+            "path": settings.path,
+            "depth": settings.depth,
+            "threads": settings.threads,
+            "hash_mb": settings.hash_mb,
+            "multipv": settings.multipv,
+        },
+        sort_keys=True,
+    )
+
+
+def close_live_engine() -> None:
+    global LIVE_ENGINE_KEY, LIVE_ENGINE_SESSION
+    if LIVE_ENGINE_SESSION is not None:
+        try:
+            LIVE_ENGINE_SESSION.close()
+        except Exception:
+            pass
+    LIVE_ENGINE_SESSION = None
+    LIVE_ENGINE_KEY = ""
+
+
+def live_engine_for(settings: EngineSettings) -> EngineSession:
+    global LIVE_ENGINE_KEY, LIVE_ENGINE_SESSION
+    key = engine_session_key(settings)
+    if LIVE_ENGINE_SESSION is None or LIVE_ENGINE_KEY != key:
+        close_live_engine()
+        LIVE_ENGINE_SESSION = EngineSession(settings)
+        LIVE_ENGINE_SESSION.open()
+        LIVE_ENGINE_KEY = key
+    return LIVE_ENGINE_SESSION
+
+
+atexit.register(close_live_engine)
 
 
 def apply_engine_settings_to_config(config: dict, settings: EngineSettings) -> dict:
@@ -264,6 +307,8 @@ def save_settings() -> tuple:
     config = apply_engine_settings_to_config(config, settings)
     save_config(config)
     configure_lichess(local_lichess_token(config))
+    with ENGINE_LOCK:
+        close_live_engine()
 
     return jsonify(
         {
@@ -400,7 +445,8 @@ def profile() -> tuple:
         return jsonify({"error": "No matching public games were found for that username and time control."}), 404
 
     try:
-        with EngineSession(settings) as engine:
+        with ENGINE_LOCK:
+            engine = live_engine_for(settings)
             profile_data = analyse_games(games, engine)
     except FileNotFoundError:
         return jsonify({"error": "The Stockfish executable could not be opened."}), 400
@@ -480,7 +526,8 @@ def position_insight() -> tuple:
     your_move_san = str(payload.get("your_move_san", "")).strip()
     your_move_count = int(payload.get("your_move_count", 0) or 0)
     try:
-        with EngineSession(settings) as engine:
+        with ENGINE_LOCK:
+            engine = live_engine_for(settings)
             insight = build_position_insight(
                 board,
                 engine,
@@ -539,7 +586,8 @@ def generate_theory() -> tuple:
     config = load_config()
     settings = build_engine_settings(config)
     try:
-        with EngineSession(settings) as engine:
+        with ENGINE_LOCK:
+            engine = live_engine_for(settings)
             theory = generate_theory_line(
                 board,
                 engine,
@@ -588,12 +636,19 @@ def apply_move() -> tuple:
         return jsonify({"error": "Invalid move."}), 400
     if move not in board.legal_moves:
         return jsonify({"error": "That move is not legal in this position."}), 400
+    ply_before_move = max(0, (board.fullmove_number - 1) * 2 + (0 if board.turn == chess.WHITE else 1))
     san = board.san(move)
+    played_classification = (
+        book_classification_payload(0.5, reason="opening book move")
+        if ply_before_move < OPENING_PLIES
+        else None
+    )
     board.push(move)
     return jsonify(
         {
             "fen": board.fen(),
             "played_san": san,
+            "played_classification": played_classification,
             "last_move": {"from": move_uci[:2], "to": move_uci[2:4]},
             "legal_moves": serialize_legal_moves(board),
         }

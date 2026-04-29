@@ -31,6 +31,19 @@ const MOVE_CLASSIFICATION_ICONS = {
   blunder: `/static/move-classifications/blunder.png?v=${CLASSIFICATION_ASSET_VERSION}`,
   miss: `/static/move-classifications/miss.png?v=${CLASSIFICATION_ASSET_VERSION}`,
 };
+const MOVE_CLASSIFICATION_LABELS = {
+  brilliant: "Brilliant",
+  great: "Great",
+  best: "Best",
+  forced: "Forced",
+  excellent: "Excellent",
+  good: "Good",
+  book: "Book",
+  inaccuracy: "Inaccuracy",
+  mistake: "Mistake",
+  blunder: "Blunder",
+  miss: "Miss",
+};
 window.BOOKUP_MOVE_CLASSIFICATION_ICONS = MOVE_CLASSIFICATION_ICONS;
 
 function preloadClassificationIcons() {
@@ -2290,6 +2303,10 @@ function canUserInteract(lesson = currentLesson()) {
 }
 
 async function classifyMoveAtCurrentPosition(lesson, moveUci, moveSan, repeatedCount = 0) {
+  return classifyMoveAtFen(state.boardFen, lesson, moveUci, moveSan, repeatedCount);
+}
+
+async function classifyMoveAtFen(fen, lesson, moveUci, moveSan, repeatedCount = 0) {
   if (!lesson || !moveUci) {
     return {
       insight: null,
@@ -2299,7 +2316,7 @@ async function classifyMoveAtCurrentPosition(lesson, moveUci, moveSan, repeatedC
     };
   }
   const insight = await fetchPositionInsight(
-    state.boardFen,
+    fen,
     currentPlayPrefix(lesson),
     moveUci,
     moveSan,
@@ -2311,6 +2328,44 @@ async function classifyMoveAtCurrentPosition(lesson, moveUci, moveSan, repeatedC
     recommendedClassification: insight?.recommended_classification || null,
     recommendedMove: insight?.recommended_move || lesson.best_reply || moveSan || moveUci,
   };
+}
+
+function currentPlyEstimate(fen = state.boardFen) {
+  const parts = normalizeFen(fen).split(/\s+/);
+  const turn = parts[1] || "w";
+  const fullmove = Number(parts[5] || 1);
+  return Math.max(0, (Math.max(1, fullmove) - 1) * 2 + (turn === "b" ? 1 : 0));
+}
+
+function localMoveClassification(key, reason) {
+  return {
+    key,
+    label: MOVE_CLASSIFICATION_LABELS[key] || key,
+    icon: MOVE_CLASSIFICATION_ICONS[key] || "",
+    expected_points: 0.5,
+    expected_points_loss: 0,
+    reason,
+  };
+}
+
+function instantMoveClassification(lesson, move) {
+  const insight = currentLiveInsight(lesson);
+  const candidate = (insight?.candidate_lines || []).find((line) => line?.uci === move?.uci);
+  if (candidate?.classification) return candidate.classification;
+  if (currentPlyEstimate(state.boardFen) < 16) {
+    return localMoveClassification("book", "opening book move");
+  }
+  return null;
+}
+
+function applyResolvedMoveClassification(moveUci, classification, expectedFen = "") {
+  if (!classification) return;
+  const lastMoveUci = state.lastMove ? `${state.lastMove.from}${state.lastMove.to}` : "";
+  if (lastMoveUci !== String(moveUci || "").slice(0, 4)) return;
+  if (expectedFen && normalizeFen(state.boardFen) !== normalizeFen(expectedFen)) return;
+  state.lastMoveClassification = classification;
+  renderBoard(state.boardFen, { animate: false });
+  renderStudyWorkspace();
 }
 
 function renderAutoMoveSummary(autoMoves = []) {
@@ -2503,7 +2558,7 @@ async function applyMoveToBoard(moveUci, classification = null) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not apply move.");
   playMoveSound(payload.played_san);
-  applyBoardState(payload, { classification });
+  applyBoardState(payload, { classification: classification || payload.played_classification || null });
   renderBoard(state.boardFen, { animate: true });
   return payload;
 }
@@ -2543,22 +2598,29 @@ async function syncTrainerToPlayableTurn() {
     }
     if (!expectedEntry) break;
     const expectedSan = expectedEntry?.san || expectedUci;
-    const moveMeta = await classifyMoveAtCurrentPosition(
+    const preMoveFen = state.boardFen;
+    const instantClassification = instantMoveClassification(lesson, expectedEntry);
+    const moveMetaPromise = classifyMoveAtFen(
+      preMoveFen,
       lesson,
       expectedUci,
       expectedSan,
       moveRepeatedCount(lesson, expectedUci),
     );
     if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
-    await applyMoveToBoard(expectedUci, moveMeta.classification || moveMeta.recommendedClassification || null);
+    await applyMoveToBoard(expectedUci, instantClassification);
     if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+    const appliedFen = state.boardFen;
+    moveMetaPromise.then((moveMeta) => {
+      applyResolvedMoveClassification(expectedUci, moveMeta?.classification || moveMeta?.recommendedClassification || null, appliedFen);
+    });
     state.trainingCursor += 1;
     appendPlayedMove(expectedUci, state.lastMoveSan || expectedSan);
     syncTrainerPhase(lesson);
     autoMoves.push({
       color: movingColor,
       san: state.lastMoveSan || expectedSan,
-      classification: moveMeta.classification || moveMeta.recommendedClassification || null,
+      classification: state.lastMoveClassification || instantClassification || null,
     });
     updateTrainerCopy();
   }
@@ -3041,21 +3103,22 @@ async function submitTrainerMove(from, to) {
   const phase = syncTrainerPhase(lesson);
   const rootCursor = lessonRootCursor(lesson);
   const runToken = lessonRunToken(lesson);
-  const moveMeta = await classifyMoveAtCurrentPosition(
+  const preMoveFen = state.boardFen;
+  const instantClassification = instantMoveClassification(lesson, move);
+  const moveMetaPromise = classifyMoveAtFen(
+    preMoveFen,
     lesson,
     move.uci,
     move.san,
     moveRepeatedCount(lesson, move.uci),
   );
-  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
-  const moveInsight = moveMeta.insight || currentLiveInsight(lesson);
-  const playedClassification = moveMeta.classification || null;
+  const moveInsight = currentLiveInsight(lesson);
+  const playedClassification = instantClassification;
   const recommendedClassification =
-    moveMeta.recommendedClassification
-    || moveInsight?.recommended_classification
+    moveInsight?.recommended_classification
     || lesson.recommended_classification
     || null;
-  const recommendedMoveLabel = moveMeta.recommendedMove || lesson.best_reply;
+  const recommendedMoveLabel = moveInsight?.recommended_move || lesson.best_reply;
 
   if (phase === "decision_point") {
     const previewPayload = await previewMoveOnBoard(move.uci);
@@ -3070,6 +3133,10 @@ async function submitTrainerMove(from, to) {
       applyBoardState(previewPayload, { classification: playedClassification || recommendedClassification || null });
       appendPlayedMove(move.uci, previewPayload.played_san || move.san);
       renderBoard(state.boardFen, { animate: true });
+      const appliedFen = state.boardFen;
+      moveMetaPromise.then((moveMeta) => {
+        applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+      });
       state.trainingCursor = rootCursor + 1;
       syncTrainerPhase(lesson);
       if (chosenBranch.uci === lesson.preferred_branch_uci) {
@@ -3097,6 +3164,10 @@ async function submitTrainerMove(from, to) {
     applyBoardState(previewPayload, { classification: playedClassification || recommendedClassification || null });
     appendPlayedMove(move.uci, previewPayload.played_san || move.san);
     renderBoard(state.boardFen, { animate: true });
+    const appliedFen = state.boardFen;
+    moveMetaPromise.then((moveMeta) => {
+      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+    });
     state.trainingCursor += 1;
     state.branchLocked = false;
     syncTrainerPhase(lesson);
@@ -3131,6 +3202,10 @@ async function submitTrainerMove(from, to) {
     el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} leaves this repertoire line. ${escapeHtml(explanation)} Recommended move: <strong>${escapeHtml(expectedSan)}</strong>${classificationBadge(recommendedClassification, "inline")}. Choose another legal move or play the recommendation to continue.`;
     el.trainerFeedback.classList.remove("empty");
     await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
+    const appliedFen = state.boardFen;
+    moveMetaPromise.then((moveMeta) => {
+      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+    });
     appendPlayedMove(move.uci, state.lastMoveSan || move.san);
     state.trainingCursor += 1;
     state.branchLocked = false;
@@ -3144,6 +3219,10 @@ async function submitTrainerMove(from, to) {
 
   await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
   if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+  const appliedFen = state.boardFen;
+  moveMetaPromise.then((moveMeta) => {
+    applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+  });
   appendPlayedMove(move.uci, state.lastMoveSan || move.san);
   state.trainingCursor += 1;
   syncTrainerPhase(lesson);
@@ -3185,16 +3264,18 @@ async function submitFreeAnalysisMove(from, to) {
   state.selectedSquare = "";
   renderBoard(state.boardFen, { animate: false });
 
-  let playedClassification = null;
-  try {
-    const moveInsight = await fetchPositionInsight(state.boardFen, currentPlayedLine(), move.uci, move.san, 0);
-    playedClassification = moveInsight?.your_move_classification || moveInsight?.played_classification || null;
-  } catch {
-    playedClassification = null;
-  }
+  const preMoveFen = state.boardFen;
+  const playedClassification = instantMoveClassification(null, move);
+  const classificationPromise = fetchPositionInsight(preMoveFen, currentPlayedLine(), move.uci, move.san, 0)
+    .then((moveInsight) => moveInsight?.your_move_classification || moveInsight?.played_classification || null)
+    .catch(() => null);
 
   try {
     const payload = await applyMoveToBoard(move.uci, playedClassification);
+    const appliedFen = state.boardFen;
+    classificationPromise.then((classification) => {
+      applyResolvedMoveClassification(move.uci, classification, appliedFen);
+    });
     appendPlayedMove(move.uci, payload.played_san || move.san);
     state.positionInsightCache = {};
     state.currentInsight = null;
