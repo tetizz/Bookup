@@ -31,6 +31,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   - a live eval bar
   - Stockfish candidate lines
   - Lichess/database moves from the current position
+  - copy buttons for the current FEN and played PGN path
   - move classifications
   - a move trail
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
@@ -48,6 +49,7 @@ It combines:
 - a live evaluation rail
 - top Stockfish lines for the current position
 - practical Lichess/database moves from that same position
+- a database-only fallback refresh when Stockfish is unavailable or still loading
 - move classifications for the move played and the recommended move
 - live board arrows for ideas and threats
 - in-tab Stockfish settings so you can tune analysis without leaving the study view
@@ -136,6 +138,7 @@ If you rerun the exact same import and analysis settings, Bookup should load fro
 - Add a Lichess token if you want richer database move coverage in `Study Lines`.
 - Exact first-time loads can still take longer because Stockfish is doing real repertoire analysis.
 - Repeat loads of the same request should be much faster because Bookup now reuses cached games and cached analyzed profiles.
+- The Lichess database panel can update separately from Stockfish, so database moves are still useful when engine analysis is slow.
 
 ## Current Direction
 

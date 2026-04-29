@@ -491,7 +491,8 @@ select:focus {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  min-height: 30px;
+  padding: 4px 10px 4px 5px;
   border-radius: 999px;
   background: rgba(20, 28, 38, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -499,6 +500,7 @@ select:focus {
   font-size: 11px;
   line-height: 1;
   vertical-align: middle;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
 }
 
 .classification-badge.inline {
@@ -511,9 +513,17 @@ select:focus {
 }
 
 .classification-badge img {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   display: block;
+  object-fit: contain;
+  image-rendering: auto;
+  filter: drop-shadow(0 4px 7px rgba(0, 0, 0, 0.24));
+}
+
+.classification-badge.compact img {
+  width: 20px;
+  height: 20px;
 }
 
 .candidate-line-list {
@@ -607,6 +617,11 @@ select:focus {
 
 .study-link-btn {
   min-height: 40px;
+}
+
+.study-link-btn.utility {
+  border-style: dashed;
+  color: var(--muted);
 }
 
 .study-classified-card {

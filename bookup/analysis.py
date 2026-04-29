@@ -429,6 +429,18 @@ def _database_moves(board: chess.Board, play_uci: list[str], limit: int = 6) -> 
     return items
 
 
+def database_context_for_board(board: chess.Board, play_uci: list[str] | None = None, limit: int = 8) -> dict[str, Any]:
+    moves = _database_moves(board, play_uci or [], limit=limit)
+    return {
+        "fen": board.fen(),
+        "database_moves": moves,
+        "database_error": EXPLORER_LAST_ERROR,
+        "database_source": "lichess" if moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
+        "position_identifier": _analysis_url_for_fen(board.fen()),
+        "position_identifier_label": "Lichess analysis",
+    }
+
+
 def _resulting_position_is_book(board: chess.Board, move_uci: str) -> bool:
     try:
         move = chess.Move.from_uci(move_uci)

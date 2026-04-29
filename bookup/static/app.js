@@ -32,6 +32,15 @@ const MOVE_CLASSIFICATION_ICONS = {
   miss: `/static/move-classifications/miss.png?v=${CLASSIFICATION_ASSET_VERSION}`,
 };
 window.BOOKUP_MOVE_CLASSIFICATION_ICONS = MOVE_CLASSIFICATION_ICONS;
+
+function preloadClassificationIcons() {
+  Object.values(MOVE_CLASSIFICATION_ICONS).forEach((src) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = src;
+  });
+}
+
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 const REVIEW_INTERVALS = [0, 1, 3, 7, 14];
@@ -169,6 +178,7 @@ const state = {
 };
 
 async function init() {
+  preloadClassificationIcons();
   el.username.value = defaults.username || "trixize1234";
   el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games ?? 0;
@@ -228,6 +238,12 @@ async function init() {
       const from = trainerMove.slice(0, 2);
       const to = trainerMove.slice(2, 4);
       void submitTrainerMove(from, to);
+      return;
+    }
+    const copyButton = target.closest("[data-copy-study]");
+    const copyKind = copyButton instanceof HTMLElement ? copyButton.dataset.copyStudy : "";
+    if (copyKind) {
+      void copyStudyValue(copyKind, copyButton);
     }
   });
   document.addEventListener("pointerdown", unlockAudio);
@@ -278,6 +294,30 @@ function applyDefaultsToState(saved = {}) {
 function currentLichessToken() {
   const token = String(el.studyLichessToken?.value || el.lichessToken?.value || defaults.lichess_token || "").trim();
   return ["demo-token", "your-token", "lichess-token", "paste-token-here"].includes(token.toLowerCase()) ? "" : token;
+}
+
+function studyCopyValue(kind) {
+  if (kind === "fen") return normalizeFen(state.boardFen);
+  if (kind === "pgn") return currentPlayedLineSan().join(" ");
+  return "";
+}
+
+async function copyStudyValue(kind, button) {
+  const value = studyCopyValue(kind);
+  if (!value) {
+    if (button instanceof HTMLElement) button.textContent = kind === "fen" ? "No FEN yet" : "No PGN yet";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    if (button instanceof HTMLElement) {
+      const original = button.textContent;
+      button.textContent = "Copied";
+      window.setTimeout(() => { button.textContent = original || "Copy"; }, 900);
+    }
+  } catch {
+    if (button instanceof HTMLElement) button.textContent = "Copy failed";
+  }
 }
 
 function currentStudySettingsPayload() {
@@ -1352,14 +1392,18 @@ function currentStudyLinks(lesson = currentLesson(), insight = currentLiveInsigh
 }
 
 function renderStudyLinksMarkup(links = []) {
+  const utilityButtons = `
+    <button class="launch-btn study-link-btn utility" type="button" data-copy-study="fen">Copy FEN</button>
+    <button class="launch-btn study-link-btn utility" type="button" data-copy-study="pgn">Copy PGN</button>
+  `;
   if (!links.length) {
-    return `<span class="line-note">Open a line to jump into Lichess analysis or explorer for the current position.</span>`;
+    return `${utilityButtons}<span class="line-note">Open a line to jump into Lichess analysis or explorer for the current position.</span>`;
   }
-  return links.map((link) => `
+  return `${utilityButtons}${links.map((link) => `
     <a class="launch-btn study-link-btn" href="${escapeHtml(link.href)}" target="_blank" rel="noopener noreferrer">
       ${escapeHtml(link.label)}
     </a>
-  `).join("");
+  `).join("")}`;
 }
 
 function currentEvalCpForStudy(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
@@ -1773,6 +1817,21 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
   return payload;
 }
 
+async function fetchDatabaseContext(fen, playUci = []) {
+  const response = await fetch("/api/database-moves", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fen,
+      lichess_token: currentLichessToken(),
+      play_uci: playUci,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not load database moves.");
+  return payload;
+}
+
 function buildLessonInsight(lesson) {
   return {
     candidate_lines: Array.isArray(lesson?.candidate_lines) ? lesson.candidate_lines : [],
@@ -1787,6 +1846,18 @@ function buildLessonInsight(lesson) {
     coach_explanation: lesson?.coach_explanation || lesson?.explanation || "",
     position_identifier: lesson?.position_identifier || "",
     position_identifier_label: lesson?.position_identifier_label || "Lichess analysis",
+  };
+}
+
+function mergeDatabaseContext(baseInsight, databaseContext) {
+  const base = baseInsight || {};
+  return {
+    ...base,
+    database_moves: Array.isArray(databaseContext?.database_moves) ? databaseContext.database_moves : [],
+    database_error: databaseContext?.database_error || "",
+    database_source: databaseContext?.database_source || base.database_source || "fallback",
+    position_identifier: databaseContext?.position_identifier || base.position_identifier || "",
+    position_identifier_label: databaseContext?.position_identifier_label || base.position_identifier_label || "Lichess analysis",
   };
 }
 
@@ -2581,6 +2652,15 @@ async function updateCurrentInsight() {
     el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
   } catch (error) {
     if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
+    try {
+      const databaseContext = await fetchDatabaseContext(state.boardFen, playPrefix);
+      if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
+      state.currentInsight = mergeDatabaseContext(state.currentInsight || buildLessonInsight(lesson), databaseContext);
+      state.currentInsightKey = cacheKey;
+      state.positionInsightCache[cacheKey] = state.currentInsight;
+    } catch {
+      // Keep the current/cached insight if both engine and database refresh fail.
+    }
     state.insightLoading = false;
     renderArrows(currentLiveInsight(lesson));
     el.trainerInsight.textContent = state.currentInsight?.coach_explanation
@@ -2616,6 +2696,14 @@ async function updateFreeAnalysisInsight() {
     }
   } catch {
     if (state.activeLessonId || requestId !== state.insightRequestId) return;
+    try {
+      const databaseContext = await fetchDatabaseContext(state.boardFen, currentPlayedLine());
+      if (state.activeLessonId || requestId !== state.insightRequestId) return;
+      state.currentInsight = mergeDatabaseContext(state.currentInsight, databaseContext);
+      state.currentInsightKey = cacheKey;
+    } catch {
+      // Keep the last visible study state when live refreshes fail.
+    }
     state.insightLoading = false;
     renderArrows(state.currentInsight);
     if (el.trainerInsight) {

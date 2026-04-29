@@ -12,7 +12,7 @@ import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import analyse_games, build_position_insight, configure_lichess
+from .analysis import analyse_games, build_position_insight, configure_lichess, database_context_for_board
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .engine import EngineSession, EngineSettings, default_engine_path
 from .storage import LocalStore, deserialize_games, serialize_games
@@ -462,6 +462,8 @@ def profile() -> tuple:
 def position_insight() -> tuple:
     payload = request.get_json(force=True)
     fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
     if not fen:
         return jsonify({"error": "FEN is required."}), 400
     try:
@@ -471,7 +473,7 @@ def position_insight() -> tuple:
 
     config = load_config()
     settings = build_engine_settings(config)
-    request_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
+    request_token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
     configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     your_move_uci = str(payload.get("your_move_uci", "")).strip()
@@ -496,10 +498,32 @@ def position_insight() -> tuple:
     return jsonify(insight)
 
 
+@app.post("/api/database-moves")
+def database_moves() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
+    if not fen:
+        return jsonify({"error": "FEN is required."}), 400
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return jsonify({"error": "Invalid FEN."}), 400
+
+    config = load_config()
+    request_token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
+    configure_lichess(request_token)
+    play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
+    return jsonify(database_context_for_board(board, play_uci=play_uci, limit=8))
+
+
 @app.post("/api/legal-moves")
 def legal_moves() -> tuple:
     payload = request.get_json(force=True)
     fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
     if not fen:
         return jsonify({"error": "FEN is required."}), 400
     try:
@@ -513,6 +537,8 @@ def legal_moves() -> tuple:
 def apply_move() -> tuple:
     payload = request.get_json(force=True)
     fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
     move_uci = str(payload.get("move_uci", "")).strip()
     if not fen or not move_uci:
         return jsonify({"error": "FEN and move are required."}), 400
