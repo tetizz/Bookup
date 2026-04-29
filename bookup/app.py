@@ -38,13 +38,20 @@ def load_config() -> dict:
     if not CONFIG_PATH.exists():
         return {}
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
 
 
 def save_config(payload: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def local_lichess_token(config: dict | None = None) -> str:
+    env_token = os.environ.get("LICHESS_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    return str((config or {}).get("lichess_token", "")).strip()
 
 
 def build_engine_settings(payload: dict) -> EngineSettings:
@@ -80,7 +87,7 @@ def build_defaults_payload(config: dict) -> dict:
         "username": config.get("username", "trixize1234"),
         "time_classes": config.get("time_classes", "all"),
         "max_games": int(config.get("max_games", 0)),
-        "lichess_token": config.get("lichess_token", ""),
+        "lichess_token": local_lichess_token(config),
         "engine_path": settings.path,
         "depth": settings.depth,
         "threads": settings.threads,
@@ -256,7 +263,7 @@ def save_settings() -> tuple:
     settings = build_engine_settings(config)
     config = apply_engine_settings_to_config(config, settings)
     save_config(config)
-    configure_lichess(str(config.get("lichess_token", "")))
+    configure_lichess(local_lichess_token(config))
 
     return jsonify(
         {
@@ -282,7 +289,8 @@ def profile() -> tuple:
     except (TypeError, ValueError):
         parsed_max_games = 0
     max_games = None if parsed_max_games <= 0 else max(1, min(20000, parsed_max_games))
-    lichess_token = str(payload.get("lichess_token", "")).strip()
+    config = load_config()
+    lichess_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
@@ -463,7 +471,7 @@ def position_insight() -> tuple:
 
     config = load_config()
     settings = build_engine_settings(config)
-    request_token = str(payload.get("lichess_token", config.get("lichess_token", ""))).strip()
+    request_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
     configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     your_move_uci = str(payload.get("your_move_uci", "")).strip()
