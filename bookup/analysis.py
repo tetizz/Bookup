@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from .chesscom import ImportedGame
 from .classifications import (
     annotate_candidate_classifications,
+    book_classification_payload,
     classify_move_record,
     expected_points_from_evaluation,
 )
@@ -368,6 +369,122 @@ def _first_move_repertoire(games: list[ImportedGame], color_name: str) -> dict[s
     }
 
 
+def _book_payload_for_tree() -> dict[str, Any]:
+    return book_classification_payload(0.5, reason="move from your imported opening tree")
+
+
+def _build_game_move_tree(
+    games: list[ImportedGame],
+    *,
+    max_depth: int = 20,
+    max_children: int = 8,
+) -> dict[str, Any]:
+    """Build a compact practical move tree from imported games without engine work."""
+
+    def new_node() -> dict[str, Any]:
+        return {
+            "uci": "",
+            "san": "Start",
+            "count": 0,
+            "white_wins": 0,
+            "draws": 0,
+            "black_wins": 0,
+            "children": {},
+        }
+
+    root = new_node()
+    opening_cache: dict[str, dict[str, Any]] = {}
+    for imported in games:
+        board = imported.game.board()
+        node = root
+        result = str(imported.game.headers.get("Result", "") or "")
+        white_score = 0.5
+        if result == "1-0":
+            white_score = 1.0
+        elif result == "0-1":
+            white_score = 0.0
+
+        for ply_index, move in enumerate(imported.game.mainline_moves()):
+            if ply_index >= max_depth:
+                break
+            if move not in board.legal_moves:
+                break
+            san = board.san(move)
+            uci = move.uci()
+            color = "white" if board.turn == chess.WHITE else "black"
+            next_board = board.copy(stack=False)
+            next_board.push(move)
+            opening_key = next_board.epd()
+            opening = opening_cache.get(opening_key)
+            if opening is None:
+                opening = lookup_by_board(next_board) if ply_index < OPENING_PLIES else {}
+                opening_cache[opening_key] = opening
+            children = node.setdefault("children", {})
+            child = children.get(uci)
+            if child is None:
+                child = {
+                    "uci": uci,
+                    "san": san,
+                    "color": color,
+                    "count": 0,
+                    "white_wins": 0,
+                    "draws": 0,
+                    "black_wins": 0,
+                    "classification": _book_payload_for_tree() if ply_index < OPENING_PLIES else None,
+                    "opening_name": str(opening.get("name", "") or ""),
+                    "opening_code": str(opening.get("eco", "") or ""),
+                    "position_fen": next_board.fen(),
+                    "position_identifier": _analysis_url_for_fen(next_board.fen()),
+                    "children": {},
+                }
+                children[uci] = child
+            child["count"] += 1
+            if white_score == 1.0:
+                child["white_wins"] += 1
+            elif white_score == 0.0:
+                child["black_wins"] += 1
+            else:
+                child["draws"] += 1
+            node = child
+            board.push(move)
+
+    def prune(node: dict[str, Any], depth: int = 0) -> dict[str, Any]:
+        raw_children = list((node.get("children") or {}).values())
+        raw_children.sort(key=lambda item: (-int(item.get("count", 0)), str(item.get("san", ""))))
+        total = sum(int(item.get("count", 0) or 0) for item in raw_children)
+        kept = []
+        for child in raw_children[:max_children]:
+            count = int(child.get("count", 0) or 0)
+            score_games = count or 1
+            white_score = (float(child.get("white_wins", 0) or 0) + 0.5 * float(child.get("draws", 0) or 0)) / score_games
+            compact = {
+                "uci": child.get("uci", ""),
+                "san": child.get("san", ""),
+                "color": child.get("color", ""),
+                "count": count,
+                "popularity": round((count / total) * 100, 1) if total else 0.0,
+                "white_score": round(white_score * 100, 1),
+                "classification": child.get("classification"),
+                "opening_name": child.get("opening_name", ""),
+                "opening_code": child.get("opening_code", ""),
+                "position_fen": child.get("position_fen", ""),
+                "position_identifier": child.get("position_identifier", ""),
+                "children": [],
+            }
+            if depth + 1 < max_depth:
+                compact["children"] = prune(child, depth + 1).get("children", [])
+            kept.append(compact)
+        return {"children": kept}
+
+    root["count"] = len(games)
+    return {
+        "total_games": len(games),
+        "max_depth": max_depth,
+        "max_children": max_children,
+        "root": prune(root),
+    }
+
+
 def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, PositionNode], dict[str, Counter[str]], dict[str, dict[str, Any]]]:
     nodes: dict[str, PositionNode] = {}
     position_counts: dict[str, Counter[str]] = defaultdict(Counter)
@@ -711,6 +828,88 @@ def build_position_insight(
         ),
         "position_identifier": _analysis_url_for_fen(board.fen()),
         "position_identifier_label": "Lichess analysis",
+    }
+
+
+def generate_theory_line(
+    board: chess.Board,
+    engine: EngineSession,
+    *,
+    seed_move_uci: str = "",
+    plies: int = 10,
+    time_sec: float | None = None,
+) -> dict[str, Any]:
+    """Generate a best-play theory line from the current position or after one seed move."""
+    work_board = board.copy(stack=False)
+    seed = None
+    if seed_move_uci:
+        try:
+            seed_move = chess.Move.from_uci(seed_move_uci)
+        except ValueError as exc:
+            raise ValueError("Seed move must be UCI, like e2e4 or e7e8q.") from exc
+        if seed_move not in work_board.legal_moves:
+            raise ValueError("Seed move is not legal in the current position.")
+        seed = {
+            "uci": seed_move.uci(),
+            "san": work_board.san(seed_move),
+            "from": chess.square_name(seed_move.from_square),
+            "to": chess.square_name(seed_move.to_square),
+        }
+        work_board.push(seed_move)
+
+    steps: list[dict[str, Any]] = []
+    requested_plies = max(1, min(30, int(plies or 10)))
+    for index in range(requested_plies):
+        if work_board.is_game_over(claim_draw=True):
+            break
+        candidate_lines, database_moves = _candidate_lines_for_board(
+            work_board,
+            engine,
+            play_uci=[],
+            limit=5,
+            time_sec=time_sec,
+        )
+        if not candidate_lines:
+            break
+        best = candidate_lines[0]
+        try:
+            move = chess.Move.from_uci(str(best.get("uci", "")))
+        except ValueError:
+            break
+        if move not in work_board.legal_moves:
+            break
+        san = work_board.san(move)
+        from_square = chess.square_name(move.from_square)
+        to_square = chess.square_name(move.to_square)
+        side = "white" if work_board.turn == chess.WHITE else "black"
+        work_board.push(move)
+        steps.append(
+            {
+                "ply": index + 1,
+                "side": side,
+                "uci": move.uci(),
+                "san": san,
+                "from": from_square,
+                "to": to_square,
+                "fen_after": work_board.fen(),
+                "eval_cp_white": best.get("score_cp_white", best.get("score_cp", 0)),
+                "classification": best.get("classification"),
+                "candidate_lines": candidate_lines,
+                "database_moves": database_moves,
+            }
+        )
+
+    return {
+        "fen": board.fen(),
+        "seed_move": seed,
+        "plies_requested": requested_plies,
+        "plies_generated": len(steps),
+        "line_san": " ".join(step["san"] for step in steps),
+        "line_uci": [step["uci"] for step in steps],
+        "resulting_fen": work_board.fen(),
+        "steps": steps,
+        "position_identifier": _analysis_url_for_fen(work_board.fen()),
+        "position_identifier_label": "Open final position on Lichess",
     }
 
 
@@ -1173,6 +1372,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
 
     white_first = _first_move_repertoire(games, "white")
     black_first = _first_move_repertoire(games, "black")
+    game_move_tree = _build_game_move_tree(games)
     total_results = Counter(_classify_result(game.result) for game in games)
     win_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
     prep_summary = (
@@ -1197,6 +1397,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "top_openings_by_color": top_openings_by_color,
         "repertoire_map": repertoire_map,
         "repertoire_tree": repertoire_tree,
+        "game_move_tree": game_move_tree,
+        "move_tree": game_move_tree,
         "known_lines": known_lines,
         "urgent_lines": urgent_lines,
         "needs_work": queue_due,

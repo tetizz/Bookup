@@ -11,6 +11,8 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - groups transpositions by position instead of only by opening label
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
 - uses the Lichess opening database when available for practical move popularity and common replies
+- builds a practical move tree from your imported games, with counts and book labels by branch
+- generates on-demand theory lines from the current position or after a move you want to test
 - filters out lines you already know well enough so the active queue stays focused
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
 - runs as a Windows desktop app instead of a plain browser tab
@@ -36,6 +38,9 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   - a move trail
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
 
+- `Theory`
+  Explore your imported games as a move tree and ask Stockfish to generate the next best moves from the current board position.
+
 - `Review`
   Revisit repeated positions that still need correction.
 
@@ -60,6 +65,16 @@ The board is still repertoire-first:
 - it plays the lead-in automatically until your turn
 - at decision points, it can classify what you actually play
 - it still shows the recommended repertoire move and continuation
+
+## Theory
+
+The `Theory` workspace has two study tools:
+
+- `Move Tree`
+  A tree built only from your imported games. Each branch shows the SAN move, how often it occurred, branch popularity, White score, and a `Book` label for opening-phase moves.
+
+- `Theory Generator`
+  Uses the current Study Lines board position. You can optionally enter a UCI move such as `e2e4`, then generate the next 10 best moves, or any value from 1 to 30, using the saved Stockfish settings.
 
 ## Inputs
 
@@ -126,6 +141,7 @@ That includes:
 
 - imported Chess.com games
 - cached analyzed repertoires keyed by request/settings
+- imported-game move-tree payloads
 - snapshot state for the latest profile
 - training progress and review stats
 
@@ -155,7 +171,7 @@ The current product direction is:
 ## Next Improvements
 
 - clickable engine lines that jump the board into that variation
-- richer move-tree view in `Study Lines`
+- clickable move-tree branches that jump the analysis board into that position
 - background analysis for new positions before you open them
 - stronger book-move detection from live opening context
 - tighter drag-and-drop polish and board-interaction cleanup

@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 7;
+const PROFILE_SCHEMA_VERSION = 8;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -77,6 +77,11 @@ const el = {
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
   previewPanel: document.getElementById("previewPanel"),
   knownArchiveList: document.getElementById("knownArchiveList"),
+  gameMoveTree: document.getElementById("gameMoveTree"),
+  theoryMove: document.getElementById("theoryMoveInput"),
+  theoryPly: document.getElementById("theoryPlyInput"),
+  generateTheory: document.getElementById("generateTheoryBtn"),
+  theoryOutput: document.getElementById("theoryOutput"),
   urgentList: document.getElementById("urgentList"),
   sidelineList: document.getElementById("sidelineList"),
   suggestionList: document.getElementById("suggestionList"),
@@ -174,6 +179,8 @@ const state = {
   manualNeedsWork: [],
   reviewStats: {},
   games: [],
+  gameMoveTree: null,
+  theoryResult: null,
   analysisProgressTimer: 0,
 };
 
@@ -197,6 +204,7 @@ async function init() {
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
   el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
+  el.generateTheory?.addEventListener("click", () => { void generateTheoryLine(); });
   [el.lichessToken, el.enginePath, el.depth, el.multiPv, el.threads, el.hash].forEach((input) => {
     input?.addEventListener("change", syncStudySettingsFromSetup);
   });
@@ -896,6 +904,7 @@ function renderProfile(payload) {
   });
   state.lessonMap = Object.fromEntries(state.lessons.map((lesson) => [lesson.lesson_id, lesson]));
   state.knownArchive = profile.known_line_archive || [];
+  state.gameMoveTree = profile.game_move_tree || profile.move_tree || null;
   state.manualNeedsWork = (payload.training_summary?.manual_needs_work || []);
   rebuildQueue();
 
@@ -911,6 +920,7 @@ function renderProfile(payload) {
   renderFirstMoves(profile.first_move_repertoire || {});
   renderRepertoireMap(profile.repertoire_map || {});
   renderKnownArchive(profile.known_line_archive || []);
+  renderGameMoveTree(state.gameMoveTree);
   renderImproveList(el.urgentList, state.queueDue, "No due lines right now.");
   renderImproveList(el.sidelineList, state.queueNew, "No fresh lines waiting right now.");
   renderSuggestions(profile.repertoire_updates || []);
@@ -974,6 +984,58 @@ function renderKnownArchive(items) {
       </article>
     `)
     .join("");
+}
+
+function renderGameMoveTree(tree) {
+  if (!el.gameMoveTree) return;
+  const rootChildren = tree?.root?.children || [];
+  if (!rootChildren.length) {
+    el.gameMoveTree.className = "move-tree empty";
+    el.gameMoveTree.textContent = "Import games to build your move tree.";
+    return;
+  }
+  el.gameMoveTree.className = "move-tree";
+  const totalGames = Number(tree?.total_games || 0);
+  el.gameMoveTree.innerHTML = `
+    <div class="move-tree-summary">
+      <span>${totalGames} imported games</span>
+      <span>Top ${tree?.max_children || 8} replies per branch</span>
+      <span>${tree?.max_depth || 20} plies deep</span>
+    </div>
+    <div class="move-tree-root">${rootChildren.map((node) => renderMoveTreeNode(node, 0)).join("")}</div>
+  `;
+}
+
+function renderMoveTreeNode(node, depth = 0) {
+  const children = Array.isArray(node?.children) ? node.children : [];
+  const hasChildren = children.length > 0 && depth < 8;
+  const opening = joinMetaParts([node?.opening_name || "", node?.opening_code || ""]);
+  const row = `
+    <div class="move-tree-row" style="--depth:${depth}">
+      <div class="move-tree-move">
+        <span class="move-tree-san">${escapeHtml(node?.san || "")}</span>
+        ${classificationBadge(node?.classification, "compact")}
+      </div>
+      <div class="move-tree-stats">
+        <span>${Number(node?.count || 0)}x</span>
+        <span>${Number(node?.popularity || 0).toFixed(1)}%</span>
+        <span>White score ${Number(node?.white_score || 0).toFixed(1)}%</span>
+      </div>
+      ${opening ? `<div class="move-tree-opening">${escapeHtml(opening)}</div>` : ""}
+    </div>
+  `;
+  if (!hasChildren) {
+    return `<article class="move-tree-node leaf">${row}</article>`;
+  }
+  const open = depth < 2 ? "open" : "";
+  return `
+    <details class="move-tree-node" ${open}>
+      <summary>${row}</summary>
+      <div class="move-tree-children">
+        ${children.map((child) => renderMoveTreeNode(child, depth + 1)).join("")}
+      </div>
+    </details>
+  `;
 }
 
 function renderRepertoireMapColumn(node, items, emptyText) {
@@ -1830,6 +1892,79 @@ async function fetchDatabaseContext(fen, playUci = []) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load database moves.");
   return payload;
+}
+
+async function generateTheoryLine() {
+  if (!el.generateTheory || !el.theoryOutput) return;
+  const moveUci = String(el.theoryMove?.value || "").trim();
+  const plies = Math.max(1, Math.min(30, Number(el.theoryPly?.value || 10)));
+  el.generateTheory.disabled = true;
+  el.theoryOutput.className = "theory-output";
+  el.theoryOutput.innerHTML = `<div class="line-note">Generating ${plies} best moves from the current board position...</div>`;
+  try {
+    const response = await fetch("/api/generate-theory", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fen: normalizeFen(state.boardFen || START_FEN),
+        move_uci: moveUci,
+        plies,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not generate theory.");
+    state.theoryResult = payload;
+    renderTheoryResult(payload);
+  } catch (error) {
+    el.theoryOutput.className = "theory-output empty";
+    el.theoryOutput.textContent = error.message || "Could not generate theory.";
+  } finally {
+    el.generateTheory.disabled = false;
+  }
+}
+
+function renderTheoryResult(result) {
+  if (!el.theoryOutput) return;
+  const steps = Array.isArray(result?.steps) ? result.steps : [];
+  if (!steps.length) {
+    el.theoryOutput.className = "theory-output empty";
+    el.theoryOutput.textContent = "No engine theory line was generated from this position.";
+    return;
+  }
+  el.theoryOutput.className = "theory-output";
+  const seed = result.seed_move
+    ? `<div class="theory-seed">After ${escapeHtml(result.seed_move.san)} (${escapeHtml(result.seed_move.uci)})</div>`
+    : `<div class="theory-seed">From the current board position</div>`;
+  const line = steps.map((step) => step.san).join(" ");
+  el.theoryOutput.innerHTML = `
+    ${seed}
+    <div class="theory-line">${escapeHtml(line)}</div>
+    <div class="theory-step-list">
+      ${steps.map((step) => renderTheoryStep(step)).join("")}
+    </div>
+    <div class="chip-row">
+      <button class="launch-btn study-link-btn utility" type="button" data-copy-study="fen">Copy current FEN</button>
+      ${result.position_identifier ? `<a class="launch-btn study-link-btn" href="${escapeHtml(result.position_identifier)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.position_identifier_label || "Open on Lichess")}</a>` : ""}
+    </div>
+  `;
+}
+
+function renderTheoryStep(step) {
+  const candidates = Array.isArray(step?.candidate_lines) ? step.candidate_lines.slice(0, 3) : [];
+  const db = Array.isArray(step?.database_moves) ? step.database_moves.slice(0, 3) : [];
+  return `
+    <article class="theory-step">
+      <div class="theory-step-head">
+        <div>
+          <div class="theory-step-title">${Number(step?.ply || 0)}. ${escapeHtml(step?.san || "")} ${classificationBadge(step?.classification, "compact")}</div>
+          <div class="tree-meta">${escapeHtml(step?.side || "")} to move | ${formatEval(step?.eval_cp_white ?? 0)}</div>
+        </div>
+        <span class="line-badge">${escapeHtml(step?.uci || "")}</span>
+      </div>
+      <div class="line-note">Top engine alternatives: ${candidates.map((line) => renderCandidateLineSummary(line)).join("") || "No alternatives."}</div>
+      <div class="line-note">Database replies: ${db.map((move) => `${escapeHtml(move.san || move.uci || "")} ${Number(move.popularity || 0).toFixed(1)}%`).join(" | ") || "No database data."}</div>
+    </article>
+  `;
 }
 
 function buildLessonInsight(lesson) {

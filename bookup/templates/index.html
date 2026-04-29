@@ -45,6 +45,7 @@
       <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire Map</button>
       <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
       <button class="workspace-tab" data-tab-target="trainer">Study Lines</button>
+      <button class="workspace-tab" data-tab-target="theory">Theory</button>
       <button class="workspace-tab" data-tab-target="review">Review</button>
     </nav>
 
@@ -217,6 +218,37 @@
         <h2 class="section-title">Repeated positions that still need correction</h2>
         <div id="mistakeList" class="stack empty">Opening mistakes will show up here.</div>
       </section>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="theory">
+      <div class="theory-layout">
+        <section class="card">
+          <div class="section-label">Move Tree</div>
+          <h2 class="section-title">Your imported games as a practical tree</h2>
+          <p class="summary-copy">Every branch is counted from your games. Opening-phase moves are surfaced as Book moves so you can see what you actually play before engine coaching takes over.</p>
+          <div id="gameMoveTree" class="move-tree empty">Import games to build your move tree.</div>
+        </section>
+
+        <aside class="card theory-generator-card">
+          <div class="section-label">Theory Generator</div>
+          <h2 class="section-title">Generate the next best moves</h2>
+          <p class="summary-copy">Use the current analysis-board position, optionally enter a move like <span class="mono-inline">e2e4</span>, then let Stockfish extend the best theory line.</p>
+          <div class="form-grid theory-form-grid">
+            <label class="field">
+              <span>First move to test (optional)</span>
+              <input id="theoryMoveInput" type="text" placeholder="e2e4">
+            </label>
+            <label class="field">
+              <span>Best moves to generate</span>
+              <input id="theoryPlyInput" type="number" min="1" max="30" value="10">
+            </label>
+          </div>
+          <div class="chip-row">
+            <button id="generateTheoryBtn" class="launch-btn" type="button">Generate Theory</button>
+          </div>
+          <div id="theoryOutput" class="theory-output empty">Generated theory will show up here.</div>
+        </aside>
+      </div>
     </section>
 
     <section class="workspace-panel" data-tab-panel="trainer">

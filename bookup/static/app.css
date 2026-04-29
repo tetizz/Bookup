@@ -1219,6 +1219,169 @@ select:focus {
   color: var(--muted);
 }
 
+.theory-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 430px;
+  gap: 24px;
+  align-items: start;
+}
+
+.theory-generator-card {
+  position: sticky;
+  top: 18px;
+}
+
+.mono-inline {
+  font-family: var(--mono);
+  color: var(--text-strong);
+}
+
+.theory-form-grid {
+  grid-template-columns: 1fr;
+  margin-top: 16px;
+}
+
+.move-tree {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.move-tree.empty,
+.theory-output.empty {
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(13, 18, 25, 0.72);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+}
+
+.move-tree-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.move-tree-summary span,
+.theory-seed {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(11, 16, 23, 0.8);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 7px 10px;
+  text-transform: uppercase;
+}
+
+.move-tree-node {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(11, 16, 23, 0.64);
+  overflow: hidden;
+}
+
+.move-tree-node summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.move-tree-node summary::-webkit-details-marker {
+  display: none;
+}
+
+.move-tree-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) auto;
+  gap: 10px 14px;
+  align-items: center;
+  padding: 12px 14px 12px calc(14px + var(--depth, 0) * 14px);
+}
+
+.move-tree-move {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.move-tree-san {
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.move-tree-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.move-tree-opening {
+  grid-column: 1 / -1;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.move-tree-children {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.theory-output {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.theory-line {
+  border-radius: 16px;
+  background: rgba(10, 15, 21, 0.92);
+  color: var(--text-strong);
+  font-family: var(--mono);
+  line-height: 1.8;
+  padding: 14px;
+}
+
+.theory-step-list {
+  display: grid;
+  gap: 10px;
+}
+
+.theory-step {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(11, 16, 23, 0.9);
+  padding: 14px;
+}
+
+.theory-step-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.theory-step-title {
+  color: var(--text-strong);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .repertoire-node-card .line-note strong {
   color: var(--text-strong);
 }
@@ -1252,6 +1415,14 @@ select:focus {
 
   .study-side-column {
     order: 2;
+  }
+
+  .theory-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .theory-generator-card {
+    position: static;
   }
 }
 

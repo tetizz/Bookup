@@ -12,7 +12,7 @@ import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import analyse_games, build_position_insight, configure_lichess, database_context_for_board
+from .analysis import analyse_games, build_position_insight, configure_lichess, database_context_for_board, generate_theory_line
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .engine import EngineSession, EngineSettings, default_engine_path
 from .storage import LocalStore, deserialize_games, serialize_games
@@ -25,7 +25,7 @@ RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
-PROFILE_SCHEMA_VERSION = 7
+PROFILE_SCHEMA_VERSION = 8
 
 app = Flask(
     __name__,
@@ -516,6 +516,45 @@ def database_moves() -> tuple:
     configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     return jsonify(database_context_for_board(board, play_uci=play_uci, limit=8))
+
+
+@app.post("/api/generate-theory")
+def generate_theory() -> tuple:
+    payload = request.get_json(force=True)
+    fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
+    if not fen:
+        return jsonify({"error": "FEN is required."}), 400
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return jsonify({"error": "Invalid FEN."}), 400
+    seed_move_uci = str(payload.get("move_uci", "") or payload.get("seed_move_uci", "")).strip()
+    try:
+        plies = int(payload.get("plies", 10) or 10)
+    except (TypeError, ValueError):
+        plies = 10
+
+    config = load_config()
+    settings = build_engine_settings(config)
+    try:
+        with EngineSession(settings) as engine:
+            theory = generate_theory_line(
+                board,
+                engine,
+                seed_move_uci=seed_move_uci,
+                plies=plies,
+                time_sec=settings.think_time_sec,
+            )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError:
+        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Theory generation failed: {exc}"}), 500
+
+    return jsonify(theory)
 
 
 @app.post("/api/legal-moves")
