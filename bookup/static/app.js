@@ -241,6 +241,7 @@ async function init() {
   setActiveTab("setup");
   renderStudyWorkspace();
   await bootstrapLocalState();
+  void initializeFreeAnalysisBoard();
 }
 
 function normalizeFen(fen) {
@@ -1173,7 +1174,7 @@ function renderStudyMoveTrailMarkup() {
 }
 
 function currentLiveInsight(lesson = currentLesson()) {
-  if (!lesson) return null;
+  if (!lesson) return state.currentInsight || null;
   const expectedKey = insightCacheKey(lesson);
   if (state.positionInsightCache[expectedKey]) {
     return state.positionInsightCache[expectedKey];
@@ -1234,6 +1235,23 @@ function currentRecommendedMoveData(lesson = currentLesson(), insight = currentL
 
 function currentAnalysisRecommendation(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
   if (!lesson) {
+    if (insight?.recommended_move || insight?.recommended_move_uci) {
+      return {
+        san: String(insight.recommended_move || ""),
+        uci: String(insight.recommended_move_uci || ""),
+        classification: insight.recommended_classification || null,
+      };
+    }
+    const candidate = Array.isArray(insight?.candidate_lines) && insight.candidate_lines.length
+      ? insight.candidate_lines[0]
+      : null;
+    if (candidate?.move || candidate?.uci) {
+      return {
+        san: String(candidate.move || ""),
+        uci: String(candidate.uci || ""),
+        classification: candidate.classification || null,
+      };
+    }
     return { san: "", uci: "", classification: null };
   }
   if (insight?.recommended_move || insight?.recommended_move_uci) {
@@ -1426,10 +1444,120 @@ function renderEmptyStudyWorkspace() {
   renderBoard(START_FEN, { animate: false });
 }
 
+function renderFreeStudyWorkspace() {
+  const insight = currentLiveInsight(null);
+  const candidateLines = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines : [];
+  const databaseMoves = Array.isArray(insight?.database_moves) ? insight.database_moves : [];
+  const databaseError = String(insight?.database_error || "").trim();
+  const evalCp = currentEvalCpForStudy(null, insight);
+  const evalPercent = computeEvalPercent(evalCp);
+  const explorerEnabled = Boolean(currentLichessToken());
+  const candidateMap = Object.fromEntries(candidateLines.map((line) => [String(line?.uci || ""), line]));
+  const playedMoveClassification = state.lastMoveClassification || null;
+  const playedMoveSan = String(state.lastMoveSan || "");
+  const recommended = currentAnalysisRecommendation(null, insight);
+  const recommendedClassification = recommended.classification || insight?.recommended_classification || null;
+  const recommendedMove = recommended.san || "";
+  const coachText = String(insight?.coach_explanation || "").trim();
+  const positionLinks = currentStudyLinks(null, insight);
+  const turnLabel = sideToMove(state.boardFen) === "b" ? "Black to move" : "White to move";
+
+  if (el.studyEvalFill) {
+    el.studyEvalFill.style.setProperty("--eval-percent", `${evalPercent}%`);
+  }
+  if (el.studyEvalScore) {
+    el.studyEvalScore.textContent = formatEval(evalCp);
+  }
+  if (el.studyEvalCaption) {
+    el.studyEvalCaption.textContent = state.insightLoading && state.lastEvalCp !== null
+      ? `${evalCaption(evalCp)} · updating`
+      : evalCaption(evalCp);
+  }
+  if (el.studyOpeningMeta) {
+    el.studyOpeningMeta.textContent = joinMetaParts([
+      "Free analysis board",
+      turnLabel,
+      explorerEnabled ? "Lichess database ready" : "Database fallback mode",
+    ]);
+  }
+  if (el.studyPositionLinks) {
+    el.studyPositionLinks.innerHTML = renderStudyLinksMarkup(positionLinks);
+  }
+  if (el.studyAnalysisMeta) {
+    el.studyAnalysisMeta.textContent = `Depth ${el.studyDepth?.value || el.depth?.value || "--"} | ${currentThinkTimeLabel()} | MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`;
+  }
+  if (el.studyDatabaseMeta) {
+    el.studyDatabaseMeta.textContent = explorerEnabled ? "Lichess practical replies" : "Fallback / cached moves";
+  }
+  if (el.studyEngineLines) {
+    if (state.insightLoading && !candidateLines.length) {
+      el.studyEngineLines.className = "stack empty";
+      el.studyEngineLines.textContent = "Loading live Stockfish lines for this position...";
+    } else if (!candidateLines.length) {
+      el.studyEngineLines.className = "stack empty";
+      el.studyEngineLines.textContent = "Engine lines are unavailable for this position right now.";
+    } else {
+      el.studyEngineLines.className = "stack";
+      el.studyEngineLines.innerHTML = candidateLines.slice(0, 5).map(renderStudyEngineLine).join("");
+    }
+  }
+  if (el.studyDatabaseMoves) {
+    if (state.insightLoading && !databaseMoves.length) {
+      el.studyDatabaseMoves.className = "stack empty";
+      el.studyDatabaseMoves.textContent = explorerEnabled
+        ? "Loading database moves for this position..."
+        : "Loading fallback move context for this position...";
+    } else if (!databaseMoves.length) {
+      el.studyDatabaseMoves.className = "stack empty";
+      el.studyDatabaseMoves.textContent = databaseError
+        || (explorerEnabled
+          ? "No database moves were returned for this exact position yet."
+          : "Add a Lichess token in Setup or Study Lines for richer database move coverage.");
+    } else {
+      el.studyDatabaseMoves.className = "stack";
+      el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
+    }
+  }
+  if (el.studyMoveMeta) {
+    el.studyMoveMeta.textContent = playedMoveSan
+      ? `Last move: ${playedMoveSan}`
+      : (state.insightLoading ? "Analyzing current position..." : "Waiting for a move");
+  }
+  if (el.studyMoveClassifications) {
+    const cards = [];
+    const mainReviewMarkup = renderStudyReviewMarkup(
+      null,
+      playedMoveSan,
+      playedMoveClassification,
+      recommendedMove,
+      recommendedClassification,
+      coachText,
+    );
+    if (mainReviewMarkup) cards.push(mainReviewMarkup);
+    if (playedMoveSan && recommendedMove) {
+      cards.push(renderStudyMoveCard(
+        "Recommended move",
+        recommendedMove,
+        recommendedClassification,
+        recommendedClassification?.reason || "Bookup's current Stockfish recommendation from this position.",
+      ));
+    }
+    el.studyMoveClassifications.className = cards.length ? "stack" : "stack empty";
+    el.studyMoveClassifications.innerHTML = cards.length
+      ? cards.join("")
+      : (state.insightLoading ? "Loading live move review for this position..." : "Make a move to see live classifications here.");
+  }
+  if (el.studyMoveTrail) {
+    const markup = renderStudyMoveTrailMarkup();
+    el.studyMoveTrail.classList.toggle("empty", markup === "No played line yet.");
+    el.studyMoveTrail.innerHTML = markup;
+  }
+}
+
 function renderStudyWorkspace() {
   const lesson = currentLesson();
   if (!lesson) {
-    renderEmptyStudyWorkspace();
+    renderFreeStudyWorkspace();
     return;
   }
   const insight = currentLiveInsight(lesson);
@@ -1844,7 +1972,7 @@ function pieceAtSquare(squareName, fen = state.boardFen) {
 }
 
 function allowedUserMoves(lesson = currentLesson(), fen = state.boardFen) {
-  if (!lesson || !canUserInteract(lesson)) return [];
+  if (lesson && !canUserInteract(lesson)) return [];
   const currentSide = sideToMove(fen);
   const pieceMap = currentPieceMap(fen);
   const sideLegalMoves = (state.legalMoves || []).filter((move) => {
@@ -1859,7 +1987,7 @@ function allowedTargetsForSquare(squareName, lesson = currentLesson(), fen = sta
 }
 
 function isSquareMovableByUser(squareName, lesson = currentLesson(), fen = state.boardFen) {
-  if (!lesson || !canUserInteract(lesson)) return false;
+  if (lesson && !canUserInteract(lesson)) return false;
   const piece = pieceAtSquare(squareName, fen);
   if (!piece) return false;
   if (pieceSide(piece) !== sideToMove(fen)) return false;
@@ -2367,6 +2495,7 @@ function clearTrainer() {
   renderBoard(START_FEN, { animate: false });
   renderArrows(null);
   renderStudyWorkspace();
+  void initializeFreeAnalysisBoard();
 }
 
 async function refreshLegalMoves(fen = state.boardFen) {
@@ -2461,6 +2590,55 @@ async function updateCurrentInsight() {
   renderStudyWorkspace();
 }
 
+async function updateFreeAnalysisInsight() {
+  if (state.activeLessonId || !state.boardFen) return;
+  const requestId = ++state.insightRequestId;
+  const cacheKey = `free:${normalizeFen(state.boardFen)}:${currentPlayedLine().join(" ")}`;
+  state.insightLoading = true;
+  renderStudyWorkspace();
+  try {
+    const insight = await fetchPositionInsight(state.boardFen, currentPlayedLine(), "", "", 0);
+    if (state.activeLessonId || requestId !== state.insightRequestId) return;
+    state.currentInsight = insight;
+    state.currentInsightKey = cacheKey;
+    state.insightLoading = false;
+    state.lastEvalCp = Number(
+      insight?.eval_cp_white
+        ?? insight?.candidate_lines?.[0]?.score_cp_white
+        ?? insight?.candidate_lines?.[0]?.score_cp
+        ?? state.lastEvalCp
+        ?? 0
+    );
+    renderArrows(insight);
+    if (el.trainerInsight) {
+      el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show top engine moves. Red arrows show threats or practical replies.";
+      el.trainerInsight.classList.remove("empty");
+    }
+  } catch {
+    if (state.activeLessonId || requestId !== state.insightRequestId) return;
+    state.insightLoading = false;
+    renderArrows(state.currentInsight);
+    if (el.trainerInsight) {
+      el.trainerInsight.textContent = "Live analysis is unavailable right now. You can still make legal moves on the analysis board.";
+      el.trainerInsight.classList.remove("empty");
+    }
+  }
+  renderStudyWorkspace();
+}
+
+async function initializeFreeAnalysisBoard() {
+  if (state.activeLessonId) return;
+  try {
+    await refreshLegalMoves(state.boardFen || START_FEN);
+    if (state.activeLessonId) return;
+    renderCoords();
+    renderBoard(state.boardFen, { animate: false });
+    await updateFreeAnalysisInsight();
+  } catch {
+    renderStudyWorkspace();
+  }
+}
+
 function renderBoard(fen, options = {}) {
   const { animate = false } = options;
   state.boardFen = fen || state.boardFen;
@@ -2521,7 +2699,7 @@ function renderBoard(fen, options = {}) {
         if (state.dragFrom === squareName && state.dragGhost instanceof HTMLElement) {
           img.classList.add("piece-dragging-source");
         }
-        if (lesson && isSquareMovableByUser(squareName, lesson, state.boardFen)) {
+        if (isSquareMovableByUser(squareName, lesson, state.boardFen)) {
           img.classList.add("piece-movable");
           square.classList.add("movable-piece-square");
           img.addEventListener("pointerdown", (event) => {
@@ -2581,7 +2759,11 @@ async function handleGlobalPointerUp(event) {
 
 function handleSquareClick(squareName) {
   const lesson = currentLesson();
-  if (!lesson || !canUserInteract(lesson)) return;
+  if (lesson && !canUserInteract(lesson)) return;
+  if (!lesson && !(state.legalMoves || []).length) {
+    void initializeFreeAnalysisBoard();
+    return;
+  }
   if (state.suppressNextClick) {
     state.suppressNextClick = false;
     return;
@@ -2615,7 +2797,11 @@ function handleSquareClick(squareName) {
 
 async function submitTrainerMove(from, to) {
   const lesson = currentLesson();
-  if (!lesson || !canUserInteract(lesson)) {
+  if (!lesson) {
+    await submitFreeAnalysisMove(from, to);
+    return;
+  }
+  if (!canUserInteract(lesson)) {
     state.selectedSquare = "";
     renderBoard(state.boardFen, { animate: false });
     return;
@@ -2764,6 +2950,40 @@ async function submitTrainerMove(from, to) {
   el.trainerFeedback.classList.remove("empty");
   el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
+}
+
+async function submitFreeAnalysisMove(from, to) {
+  const move = allowedTargetsForSquare(from, null, state.boardFen).find((item) => item.to === to);
+  if (!move) {
+    state.selectedSquare = from;
+    renderBoard(state.boardFen, { animate: false });
+    return;
+  }
+  state.selectedSquare = "";
+  renderBoard(state.boardFen, { animate: false });
+
+  let playedClassification = null;
+  try {
+    const moveInsight = await fetchPositionInsight(state.boardFen, currentPlayedLine(), move.uci, move.san, 0);
+    playedClassification = moveInsight?.your_move_classification || moveInsight?.played_classification || null;
+  } catch {
+    playedClassification = null;
+  }
+
+  try {
+    const payload = await applyMoveToBoard(move.uci, playedClassification);
+    appendPlayedMove(move.uci, payload.played_san || move.san);
+    state.positionInsightCache = {};
+    state.currentInsight = null;
+    state.currentInsightKey = "";
+    el.boardLine.textContent = currentPlayedLineSan().join(" ") || "No line loaded yet.";
+    el.boardLine.classList.toggle("empty", !currentPlayedLineSan().length);
+    await updateFreeAnalysisInsight();
+  } catch (error) {
+    el.trainerFeedback.textContent = error?.message || "That move could not be applied.";
+    el.trainerFeedback.classList.remove("empty");
+    renderBoard(state.boardFen, { animate: false });
+  }
 }
 
 function defaultReviewState() {
