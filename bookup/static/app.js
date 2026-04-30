@@ -1058,6 +1058,7 @@ function renderGameMoveTree(tree) {
 
 function renderMoveTreePerspective(section) {
   const children = section.children || [];
+  const firstLayer = children.slice(0, 14);
   return `
     <section class="move-tree-panel ${escapeHtml(section.key)}">
       <div class="move-tree-panel-head">
@@ -1069,10 +1070,46 @@ function renderMoveTreePerspective(section) {
       </div>
       ${
         children.length
-          ? `<div class="move-tree-root">${children.map((node) => renderMoveTreeNode(node, 0, section.key)).join("")}</div>`
+          ? `
+            <div class="move-tree-map-view">
+              <div class="move-tree-root-orb">
+                <strong>0.</strong>
+                <span>${escapeHtml(section.key === "white" ? "White" : "Black")}</span>
+              </div>
+              <div class="move-tree-map-branches">
+                ${firstLayer.map((node) => renderMoveTreeMapNode(node, section.key)).join("")}
+              </div>
+            </div>
+            <details class="move-tree-deep" open>
+              <summary>Deep branch explorer</summary>
+              <div class="move-tree-root">${children.map((node) => renderMoveTreeNode(node, 0, section.key)).join("")}</div>
+            </details>
+          `
           : `<div class="move-tree-empty">No imported games from this side yet.</div>`
       }
     </section>
+  `;
+}
+
+function renderMoveTreeMapNode(node, perspective = "") {
+  const opening = joinMetaParts([node?.opening_name || "", node?.opening_code || ""]);
+  const label = `${node?.path_san?.join(" ") || node?.san || ""}`.trim();
+  const role = node?.move_role || (node?.role === "player" ? "your move" : "opponent reply");
+  const popularity = Number(node?.popularity || 0);
+  const weight = Math.max(2, Math.min(22, popularity / 2.2));
+  return `
+    <div class="move-tree-map-branch" style="--branch-weight:${weight}px">
+      <div class="move-tree-map-label">
+        <strong>${opening ? escapeHtml(opening) : escapeHtml(role)}</strong>
+        <span>${escapeHtml(role)} · ${Number(node?.count || 0)} games</span>
+      </div>
+      <span class="move-tree-map-line"></span>
+      <button class="move-tree-map-node ${node?.role === "player" ? "player" : "opponent"}" type="button" data-tree-fen="${escapeHtml(node?.position_fen || "")}" data-tree-label="${escapeHtml(label || node?.san || "")}" data-tree-perspective="${escapeHtml(perspective || node?.perspective || "")}" title="Open this imported-game position">
+        <span class="move-tree-map-percent">${popularity.toFixed(popularity >= 10 ? 0 : 1)}%</span>
+        <strong>${escapeHtml(node?.san || "")}</strong>
+        <span class="move-tree-plus">+</span>
+      </button>
+    </div>
   `;
 }
 

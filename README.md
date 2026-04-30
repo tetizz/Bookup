@@ -23,7 +23,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
 
 - `Repertoire Map`
-  See the positions and branches you actually reach, compare your repeated move with the recommended move, and open exact lines to work on.
+  See your imported games as a visual tree map split by games where you played White or Black, click branch nodes to open exact positions on the analysis board, compare your repeated move with the recommended move, and open exact lines to work on.
 
 - `Needs Work`
   Focus on repeated repertoire mistakes, due lines, fresh lines, and suggested repertoire updates.
@@ -39,7 +39,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
 
 - `Theory`
-  Explore your imported games as a perspective-aware move tree, click any node to load that exact position on the Study Lines board, and ask Stockfish to generate the next best moves from the current board position.
+  Ask Stockfish to generate the next best moves from the current board position.
 
 - `Review`
   Revisit repeated positions that still need correction.
@@ -66,12 +66,21 @@ The board is still repertoire-first:
 - at decision points, it can classify what you actually play
 - it still shows the recommended repertoire move and continuation
 
+## Imported Game Tree Map
+
+The `Repertoire Map` workspace includes a tree map built from your imported games only.
+
+It includes:
+
+- separate trees for games where you played White and games where you played Black
+- a root node with weighted first-move branches, branch percentages, and opening labels
+- clear labels for `your move` versus `opponent reply`
+- a deep branch explorer under the visual map
+- click-to-load nodes that open the exact resulting FEN on the Study Lines analysis board
+
 ## Theory
 
-The `Theory` workspace has two study tools:
-
-- `Move Tree`
-  A tree built only from your imported games. It separates your White games from your Black games, marks whether a branch is your move or an opponent reply, and each circular branch node opens the exact resulting position on the live analysis board.
+The `Theory` workspace has one study tool:
 
 - `Theory Generator`
   Uses the current Study Lines board position. You can optionally enter a UCI move such as `e2e4`, then generate the next 10 best moves, or any value from 1 to 30, using the saved Stockfish settings.
