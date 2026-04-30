@@ -11,7 +11,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - groups transpositions by position instead of only by opening label
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
 - uses the Lichess opening database when available for practical move popularity and common replies
-- builds a practical move tree split by games where you played White or Black, with counts, book labels, and click-to-study branch nodes
+- builds a practical theory tree from imported games, split by games where you played White or Black
 - generates on-demand theory lines from the current position or after a move you want to test
 - filters out lines you already know well enough so the active queue stays focused
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
@@ -23,7 +23,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
 
 - `Repertoire Map`
-  See your imported games as a visual tree map split by games where you played White or Black, click branch nodes to open exact positions on the analysis board, compare your repeated move with the recommended move, and open exact lines to work on.
+  See repeated repertoire positions and branches you actually reach, compare your repeated move with the recommended move, and open exact lines to work on.
 
 - `Needs Work`
   Focus on repeated repertoire mistakes, due lines, fresh lines, and suggested repertoire updates.
@@ -39,7 +39,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
 
 - `Theory`
-  Ask Stockfish to generate the next best moves from the current board position.
+  Explore your imported-game move tree and ask Stockfish to generate the next best moves from the current board position.
 
 - `Review`
   Revisit repeated positions that still need correction.
@@ -68,19 +68,22 @@ The board is still repertoire-first:
 
 ## Imported Game Tree Map
 
-The `Repertoire Map` workspace includes a tree map built from your imported games only.
+The `Theory` workspace includes a tree map built from your imported games only.
 
 It includes:
 
 - separate trees for games where you played White and games where you played Black
-- a root node with weighted first-move branches, branch percentages, and opening labels
+- Bookup-themed branch cards with weighted first moves, branch percentages, and opening labels
 - clear labels for `your move` versus `opponent reply`
 - a deep branch explorer under the visual map
 - click-to-load nodes that open the exact resulting FEN on the Study Lines analysis board
 
 ## Theory
 
-The `Theory` workspace has one study tool:
+The `Theory` workspace has two study tools:
+
+- `Imported Games Theory Tree`
+  Shows the move tree from your imported games only. Click any branch card to open that exact position on the Study Lines board.
 
 - `Theory Generator`
   Uses the current Study Lines board position. You can optionally enter a UCI move such as `e2e4`, then generate the next 10 best moves, or any value from 1 to 30, using the saved Stockfish settings.

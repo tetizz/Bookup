@@ -1072,9 +1072,10 @@ function renderMoveTreePerspective(section) {
         children.length
           ? `
             <div class="move-tree-map-view">
-              <div class="move-tree-root-orb">
-                <strong>0.</strong>
-                <span>${escapeHtml(section.key === "white" ? "White" : "Black")}</span>
+              <div class="move-tree-origin-card">
+                <span>Imported ${escapeHtml(section.key)} games</span>
+                <strong>${section.count}</strong>
+                <small>game${section.count === 1 ? "" : "s"}</small>
               </div>
               <div class="move-tree-map-branches">
                 ${firstLayer.map((node) => renderMoveTreeMapNode(node, section.key)).join("")}
@@ -1105,8 +1106,8 @@ function renderMoveTreeMapNode(node, perspective = "") {
       </div>
       <span class="move-tree-map-line"></span>
       <button class="move-tree-map-node ${node?.role === "player" ? "player" : "opponent"}" type="button" data-tree-fen="${escapeHtml(node?.position_fen || "")}" data-tree-label="${escapeHtml(label || node?.san || "")}" data-tree-perspective="${escapeHtml(perspective || node?.perspective || "")}" title="Open this imported-game position">
-        <span class="move-tree-map-percent">${popularity.toFixed(popularity >= 10 ? 0 : 1)}%</span>
         <strong>${escapeHtml(node?.san || "")}</strong>
+        <span class="move-tree-map-percent">${popularity.toFixed(popularity >= 10 ? 0 : 1)}%</span>
         <span class="move-tree-plus">+</span>
       </button>
     </div>
