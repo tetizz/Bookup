@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 11;
+const PROFILE_SCHEMA_VERSION = 12;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -105,6 +105,7 @@ const el = {
   suggestionList: document.getElementById("suggestionList"),
   mistakeList: document.getElementById("mistakeList"),
   mistakeHeatmap: document.getElementById("mistakeHeatmap"),
+  mistakeTimeline: document.getElementById("mistakeTimeline"),
   reviewSchedule: document.getElementById("reviewSchedule"),
   databaseTrainingList: document.getElementById("databaseTrainingList"),
   lessonListDue: document.getElementById("lessonListDue"),
@@ -1009,6 +1010,7 @@ function renderProfile(payload) {
   renderSuggestions(profile.repertoire_updates || []);
   renderMistakes(profile.opening_mistakes || []);
   renderMistakeHeatmap(profile.mistake_heatmap || null);
+  renderMistakeTimeline(profile.mistake_timeline || null);
   renderReviewSchedule(profile.review_schedule || null);
   renderDatabaseTraining(profile.database_training || []);
   renderQueue();
@@ -1180,6 +1182,87 @@ function renderMistakeHeatmap(heatmap) {
           <span>${escapeHtml(item.your_repeated_move)} should become ${escapeHtml(item.recommended_move)} · ${Number(item.repeat_mistake_count || 0)} repeats</span>
         </button>
       `).join("")}
+    </div>
+  `;
+}
+
+function formatReviewTime(timestamp) {
+  const value = Number(timestamp || 0);
+  if (!value) return "not worked yet";
+  const diff = Date.now() - value;
+  const days = Math.floor(diff / (24 * 60 * 60 * 1000));
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  return months === 1 ? "1 month ago" : `${months} months ago`;
+}
+
+function timelineProgressLabel(item, review) {
+  if (!review || !Number(review.seen || 0)) return "untrained";
+  if (review.last_result === "right" && Number(review.streak || 0) >= 2) return "improving";
+  if (review.last_result === "right") return "recently fixed";
+  if (review.last_result === "wrong") return "still missing";
+  return "in progress";
+}
+
+function renderMistakeTimeline(timeline) {
+  if (!el.mistakeTimeline) return;
+  const items = timeline?.items || [];
+  if (!items.length) {
+    el.mistakeTimeline.className = "timeline-panel empty";
+    el.mistakeTimeline.textContent = "No repeated mistake history yet. Bookup only adds positions here after they repeat.";
+    return;
+  }
+  const summary = timeline.summary || {};
+  el.mistakeTimeline.className = "timeline-panel";
+  el.mistakeTimeline.innerHTML = `
+    <div class="timeline-summary">
+      <article><strong>${Number(summary.tracked || items.length)}</strong><span>tracked problems</span></article>
+      <article><strong>${Number(summary.urgent || 0)}</strong><span>urgent</span></article>
+      <article><strong>${Number(summary.active || 0)}</strong><span>active</span></article>
+      <article><strong>${Number(summary.watch || 0)}</strong><span>watch</span></article>
+    </div>
+    <div class="timeline-list">
+      ${items.map((item) => {
+        const review = state.reviewStats[item.lesson_id] || null;
+        const progress = timelineProgressLabel(item, review);
+        const result = item.result_breakdown || {};
+        return `
+          <article class="timeline-item ${escapeHtml(item.severity || "watch")} ${escapeHtml(progress.replaceAll(" ", "-"))}">
+            <div class="timeline-spine">
+              <span class="timeline-dot"></span>
+              <span class="timeline-line"></span>
+            </div>
+            <div class="timeline-card">
+              <div class="line-card-header">
+                <div>
+                  <div class="line-title">${escapeHtml(item.line_label || item.opening_name || "Repeated position")}</div>
+                  <div class="tree-meta">
+                    First seen ${escapeHtml(item.first_seen_label || "unknown")} · last seen ${escapeHtml(item.last_seen_label || "unknown")}
+                  </div>
+                </div>
+                <div class="line-badge ${escapeHtml(item.severity || "")}">${escapeHtml(progress)}</div>
+              </div>
+              <div class="timeline-move-row">
+                <span>You play <strong>${escapeHtml(item.your_repeated_move || "?")}</strong></span>
+                <span>Train <strong>${escapeHtml(item.recommended_move || "?")}</strong></span>
+                <span>${Number(item.repeat_mistake_count || 0)} repeats</span>
+              </div>
+              <div class="timeline-metrics">
+                <span>${Number(item.span_games || 0)} games between first and latest repeat</span>
+                <span>${Number(item.value_lost_cp || 0).toFixed(0)}cp lost</span>
+                <span>${Number(result.wins || 0)}W ${Number(result.draws || 0)}D ${Number(result.losses || 0)}L</span>
+                <span>last worked ${formatReviewTime(review?.last_seen_at)}</span>
+              </div>
+              <div class="timeline-actions">
+                <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work this line</button>
+                ${item.position_identifier ? `<a class="launch-btn" href="${escapeHtml(item.position_identifier)}" target="_blank" rel="noopener noreferrer">Open position</a>` : ""}
+              </div>
+            </div>
+          </article>
+        `;
+      }).join("")}
     </div>
   `;
 }
@@ -3703,6 +3786,8 @@ function recordReview(lessonId, correct) {
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
+    renderMistakeTimeline(state.payload?.profile?.mistake_timeline || null);
+    renderReviewSchedule(state.payload?.profile?.review_schedule || null);
     void persistReviewStats(state.payload.username);
   }
 }

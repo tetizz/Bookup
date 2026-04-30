@@ -16,7 +16,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - builds a practical theory tree from imported games, split by games where you played White or Black
 - generates on-demand theory lines from the current position or after a move you want to test
 - builds database-weighted response drills so common replies become trainable lines
-- tracks repeated mistake heatmap squares and spaced-review buckets
+- tracks repeated mistake heatmap squares, mistake timelines, and spaced-review buckets
 - filters out lines you already know well enough so the active queue stays focused
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
 - runs as a Windows desktop app instead of a plain browser tab
@@ -30,7 +30,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   See health, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
 
 - `Needs Work`
-  Focus on repeated repertoire mistakes, due lines, fresh lines, suggested repertoire updates, mistake heatmap squares, and spaced-review buckets.
+  Focus on repeated repertoire mistakes, due lines, fresh lines, suggested repertoire updates, mistake heatmap squares, mistake timelines, and spaced-review buckets.
 
 - `Study Lines`
   Work through a line on the board with:
@@ -166,7 +166,7 @@ That includes:
 - imported PGN games from manual local imports
 - cached analyzed repertoires keyed by request/settings
 - imported-game move-tree payloads
-- health dashboard, heatmap, response-builder, and transposition payloads inside the saved profile snapshot
+- health dashboard, heatmap, mistake timeline, response-builder, and transposition payloads inside the saved profile snapshot
 - snapshot state for the latest profile
 - training progress and review stats
 
@@ -192,7 +192,7 @@ The current product direction is:
 - practical opponent replies from the database
 - engine-backed candidate lines and eval
 - move classifications on the board and in the side panels
-- health, heatmap, review schedule, and response-builder surfaces that explain what to study next
+- health, heatmap, mistake timeline, review schedule, and response-builder surfaces that explain what to study next
 - a legal-move study board that helps you work on the lines that matter most
 
 ## Next Improvements

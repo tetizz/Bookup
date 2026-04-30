@@ -63,12 +63,19 @@ class PositionNode:
     occurrences: int = 0
     player_moves: Counter[str] | None = None
     player_san: dict[str, str] | None = None
+    first_seen_game: int = 0
+    last_seen_game: int = 0
+    first_seen_label: str = ""
+    last_seen_label: str = ""
+    result_counts: Counter[str] | None = None
 
     def __post_init__(self) -> None:
         if self.player_moves is None:
             self.player_moves = Counter()
         if self.player_san is None:
             self.player_san = {}
+        if self.result_counts is None:
+            self.result_counts = Counter()
 
 
 def configure_lichess(token: str = "") -> None:
@@ -233,6 +240,14 @@ def _classify_result(result: str) -> str:
     if lowered in {"agreed", "stalemate", "repetition", "timevsinsufficient", "insufficient", "50move"}:
         return "draw"
     return "loss"
+
+
+def _game_date_label(imported: ImportedGame, fallback_index: int) -> str:
+    headers = imported.game.headers
+    date = str(headers.get("Date") or headers.get("UTCDate") or headers.get("EndDate") or "").strip()
+    if date and date not in {"?", "????.??.??"}:
+        return date.replace("????", "unknown").replace(".??", "")
+    return f"Game {fallback_index}"
 
 
 def _normalize_position_key(board: chess.Board) -> str:
@@ -617,12 +632,14 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
     position_counts: dict[str, Counter[str]] = defaultdict(Counter)
     opening_by_position: dict[str, dict[str, Any]] = {}
 
-    for imported in games:
+    for game_index, imported in enumerate(games, start=1):
         user_side = chess.WHITE if imported.player_color == "white" else chess.BLACK
         opening_info = identify_opening(imported)
         board = imported.game.board()
         play_uci: list[str] = []
         last_san = "Start position"
+        seen_label = _game_date_label(imported, game_index)
+        game_result = _classify_result(imported.result)
 
         for ply_index, move in enumerate(imported.game.mainline_moves()):
             if ply_index >= OPENING_PLIES:
@@ -645,6 +662,12 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
                     opening_by_position[key] = opening_info
                 san = board.san(move)
                 node.occurrences += 1
+                if not node.first_seen_game:
+                    node.first_seen_game = game_index
+                    node.first_seen_label = seen_label
+                node.last_seen_game = game_index
+                node.last_seen_label = seen_label
+                node.result_counts[game_result] += 1
                 node.player_moves[move.uci()] += 1
                 node.player_san[move.uci()] = san
                 position_counts[key][san] += 1
@@ -1325,6 +1348,15 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
         "line_status": line_status,
         "repeat_count": best_repeat_count,
         "repeat_mistake_count": repeat_mistake_count,
+        "first_seen_game": node.first_seen_game,
+        "last_seen_game": node.last_seen_game,
+        "first_seen_label": node.first_seen_label,
+        "last_seen_label": node.last_seen_label,
+        "result_breakdown": {
+            "wins": int(node.result_counts.get("win", 0)),
+            "draws": int(node.result_counts.get("draw", 0)),
+            "losses": int(node.result_counts.get("loss", 0)),
+        },
         "frequency": frequency,
         "importance": importance,
         "confidence": confidence,
@@ -1632,6 +1664,71 @@ def _build_mistake_heatmap(repeated_work_lines: list[dict[str, Any]]) -> dict[st
     }
 
 
+def _build_mistake_timeline(repeated_work_lines: list[dict[str, Any]]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for item in sorted(
+        repeated_work_lines,
+        key=lambda row: (
+            int(row.get("first_seen_game", 0) or 0),
+            -int(row.get("repeat_mistake_count", 0) or 0),
+            -float(row.get("value_lost_cp", 0) or 0),
+        ),
+    ):
+        first_seen = int(item.get("first_seen_game", 0) or 0)
+        last_seen = int(item.get("last_seen_game", 0) or first_seen)
+        span = max(0, last_seen - first_seen)
+        repeat_misses = int(item.get("repeat_mistake_count", 0) or 0)
+        value_lost = float(item.get("value_lost_cp", 0) or 0)
+        severity = "watch"
+        if repeat_misses >= 5 or value_lost >= 120:
+            severity = "urgent"
+        elif repeat_misses >= 3 or value_lost >= 60:
+            severity = "active"
+        result_breakdown = item.get("result_breakdown") or {}
+        items.append(
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "opening_name": item.get("opening_name", ""),
+                "opening_code": item.get("opening_code", ""),
+                "color": item.get("color", ""),
+                "first_seen_game": first_seen,
+                "last_seen_game": last_seen,
+                "first_seen_label": item.get("first_seen_label") or (f"Game {first_seen}" if first_seen else "Unknown"),
+                "last_seen_label": item.get("last_seen_label") or (f"Game {last_seen}" if last_seen else "Unknown"),
+                "span_games": span,
+                "your_repeated_move": item.get("your_repeated_move", ""),
+                "recommended_move": item.get("recommended_move", ""),
+                "repeat_mistake_count": repeat_misses,
+                "frequency": item.get("frequency", 0),
+                "value_lost_cp": round(value_lost, 1),
+                "severity": severity,
+                "result_breakdown": {
+                    "wins": int(result_breakdown.get("wins", 0) or 0),
+                    "draws": int(result_breakdown.get("draws", 0) or 0),
+                    "losses": int(result_breakdown.get("losses", 0) or 0),
+                },
+                "continuation_san": item.get("continuation_san", ""),
+                "position_identifier": item.get("position_identifier", ""),
+            }
+        )
+    recent = sorted(items, key=lambda row: (-int(row.get("last_seen_game", 0) or 0), -int(row.get("repeat_mistake_count", 0) or 0)))[:8]
+    oldest = items[:8]
+    urgent = [item for item in items if item["severity"] == "urgent"][:8]
+    return {
+        "items": items[:40],
+        "recent": recent,
+        "oldest": oldest,
+        "urgent": urgent,
+        "summary": {
+            "tracked": len(items),
+            "urgent": len([item for item in items if item["severity"] == "urgent"]),
+            "active": len([item for item in items if item["severity"] == "active"]),
+            "watch": len([item for item in items if item["severity"] == "watch"]),
+        },
+    }
+
+
 def _build_transposition_groups(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for lesson in lessons:
@@ -1801,6 +1898,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         win_rate=win_rate,
     )
     mistake_heatmap = _build_mistake_heatmap(repeated_work_lines)
+    mistake_timeline = _build_mistake_timeline(repeated_work_lines)
     transposition_groups = _build_transposition_groups(lessons)
     review_schedule = _build_review_schedule(queue_due, queue_new, known_line_archive)
     database_training = _build_database_training(queue_due, queue_new)
@@ -1832,6 +1930,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "move_tree": game_move_tree,
         "health_dashboard": health_dashboard,
         "mistake_heatmap": mistake_heatmap,
+        "mistake_timeline": mistake_timeline,
         "transposition_groups": transposition_groups,
         "review_schedule": review_schedule,
         "database_training": database_training,

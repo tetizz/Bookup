@@ -433,7 +433,8 @@ select:focus {
 }
 
 .health-dashboard.empty,
-.heatmap-panel.empty {
+.heatmap-panel.empty,
+.timeline-panel.empty {
   padding: 18px;
   border-radius: 16px;
   color: var(--muted);
@@ -602,6 +603,121 @@ select:focus {
 .heatmap-lines {
   display: grid;
   gap: 8px;
+}
+
+.timeline-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.timeline-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.timeline-summary article {
+  padding: 16px;
+  border: 1px solid rgba(139, 171, 224, 0.16);
+  border-radius: 18px;
+  background: rgba(7, 11, 16, 0.68);
+}
+
+.timeline-summary strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 34px;
+  line-height: 1;
+}
+
+.timeline-summary span {
+  color: var(--muted);
+}
+
+.timeline-list {
+  display: grid;
+  gap: 0;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.timeline-spine {
+  display: grid;
+  justify-items: center;
+  grid-template-rows: 18px 1fr;
+  padding-top: 22px;
+}
+
+.timeline-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.65);
+  background: #e5c66f;
+  box-shadow: 0 0 18px rgba(229, 198, 111, 0.45);
+}
+
+.timeline-line {
+  width: 2px;
+  min-height: 100%;
+  background: linear-gradient(180deg, rgba(229, 198, 111, 0.5), rgba(115, 158, 255, 0.08));
+}
+
+.timeline-item:last-child .timeline-line {
+  display: none;
+}
+
+.timeline-item.urgent .timeline-dot,
+.line-badge.urgent {
+  background: #ff6f7a;
+}
+
+.timeline-item.active .timeline-dot,
+.line-badge.active {
+  background: #e5c66f;
+}
+
+.timeline-item.improving .timeline-dot,
+.timeline-item.recently-fixed .timeline-dot {
+  background: #68cc88;
+  box-shadow: 0 0 18px rgba(104, 204, 136, 0.45);
+}
+
+.timeline-card {
+  margin-bottom: 14px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 92% 12%, rgba(115, 158, 255, 0.14), transparent 28%),
+    rgba(8, 13, 20, 0.8);
+}
+
+.timeline-move-row,
+.timeline-metrics,
+.timeline-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.timeline-move-row span,
+.timeline-metrics span {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.timeline-move-row strong {
+  color: var(--text-strong);
 }
 
 .section-divider {
@@ -1877,7 +1993,8 @@ select:focus {
 @media (max-width: 1100px) {
   .health-card-grid,
   .health-columns,
-  .heatmap-grid {
+  .heatmap-grid,
+  .timeline-summary {
     grid-template-columns: 1fr;
   }
 
