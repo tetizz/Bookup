@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 9;
+const PROFILE_SCHEMA_VERSION = 10;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -265,6 +265,18 @@ async function init() {
     const copyKind = copyButton instanceof HTMLElement ? copyButton.dataset.copyStudy : "";
     if (copyKind) {
       void copyStudyValue(copyKind, copyButton);
+      return;
+    }
+    const treeButton = target.closest("[data-tree-fen]");
+    const treeFen = treeButton instanceof HTMLElement ? treeButton.dataset.treeFen : "";
+    if (treeFen) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMoveTreePosition(
+        treeFen,
+        treeButton.dataset.treeLabel || "",
+        treeButton.dataset.treePerspective || ""
+      );
     }
   });
   document.addEventListener("pointerdown", unlockAudio);
@@ -1005,8 +1017,25 @@ function renderKnownArchive(items) {
 
 function renderGameMoveTree(tree) {
   if (!el.gameMoveTree) return;
-  const rootChildren = tree?.root?.children || [];
-  if (!rootChildren.length) {
+  const splits = tree?.by_player_color || {};
+  const sections = [
+    {
+      key: "white",
+      title: "Your White games",
+      note: "Branches from games where you had the white pieces.",
+      count: Number(splits.white?.total_games || tree?.player_color_counts?.white || 0),
+      children: splits.white?.root?.children || [],
+    },
+    {
+      key: "black",
+      title: "Your Black games",
+      note: "Branches from games where you had the black pieces.",
+      count: Number(splits.black?.total_games || tree?.player_color_counts?.black || 0),
+      children: splits.black?.root?.children || [],
+    },
+  ];
+  const hasAnyNode = sections.some((section) => section.children.length) || (tree?.root?.children || []).length;
+  if (!hasAnyNode) {
     el.gameMoveTree.className = "move-tree empty";
     el.gameMoveTree.textContent = "Import games to build your move tree.";
     return;
@@ -1016,29 +1045,66 @@ function renderGameMoveTree(tree) {
   el.gameMoveTree.innerHTML = `
     <div class="move-tree-summary">
       <span>${totalGames} imported games</span>
+      <span>${sections[0].count} as White</span>
+      <span>${sections[1].count} as Black</span>
       <span>Top ${tree?.max_children || 8} replies per branch</span>
       <span>${tree?.max_depth || 20} plies deep</span>
     </div>
-    <div class="move-tree-root">${rootChildren.map((node) => renderMoveTreeNode(node, 0)).join("")}</div>
+    <div class="move-tree-perspectives">
+      ${sections.map((section) => renderMoveTreePerspective(section)).join("")}
+    </div>
   `;
 }
 
-function renderMoveTreeNode(node, depth = 0) {
+function renderMoveTreePerspective(section) {
+  const children = section.children || [];
+  return `
+    <section class="move-tree-panel ${escapeHtml(section.key)}">
+      <div class="move-tree-panel-head">
+        <div>
+          <h3>${escapeHtml(section.title)}</h3>
+          <p>${escapeHtml(section.note)}</p>
+        </div>
+        <span>${section.count} games</span>
+      </div>
+      ${
+        children.length
+          ? `<div class="move-tree-root">${children.map((node) => renderMoveTreeNode(node, 0, section.key)).join("")}</div>`
+          : `<div class="move-tree-empty">No imported games from this side yet.</div>`
+      }
+    </section>
+  `;
+}
+
+function renderMoveTreeNode(node, depth = 0, perspective = "") {
   const children = Array.isArray(node?.children) ? node.children : [];
   const hasChildren = children.length > 0 && depth < 8;
   const opening = joinMetaParts([node?.opening_name || "", node?.opening_code || ""]);
+  const label = `${node?.path_san?.join(" ") || node?.san || ""}`.trim();
+  const role = node?.move_role || (node?.role === "player" ? "your move" : "opponent reply");
+  const safeFen = escapeHtml(node?.position_fen || "");
+  const safeLabel = escapeHtml(label || node?.san || "");
+  const safePerspective = escapeHtml(perspective || node?.perspective || "");
   const row = `
     <div class="move-tree-row" style="--depth:${depth}">
-      <div class="move-tree-move">
-        <span class="move-tree-san">${escapeHtml(node?.san || "")}</span>
-        ${classificationBadge(node?.classification, "compact")}
+      <div class="move-tree-branch">
+        <span class="move-tree-connector"></span>
+        <button class="move-tree-circle" type="button" data-tree-fen="${safeFen}" data-tree-label="${safeLabel}" data-tree-perspective="${safePerspective}" title="Open this position on the analysis board">
+          <span class="move-tree-san">${escapeHtml(node?.san || "")}</span>
+          <span class="move-tree-plus">+</span>
+        </button>
+        <div class="move-tree-copy">
+          <div class="move-tree-role ${node?.role === "player" ? "player" : "opponent"}">${escapeHtml(role)}</div>
+          ${opening ? `<div class="move-tree-opening">${escapeHtml(opening)}</div>` : ""}
+          <div class="move-tree-path">${escapeHtml(label)}</div>
+        </div>
       </div>
       <div class="move-tree-stats">
         <span>${Number(node?.count || 0)}x</span>
         <span>${Number(node?.popularity || 0).toFixed(1)}%</span>
+        <span>${Number(node?.player_share || 0).toFixed(0)}% yours</span>
         <span>White score ${Number(node?.white_score || 0).toFixed(1)}%</span>
       </div>
-      ${opening ? `<div class="move-tree-opening">${escapeHtml(opening)}</div>` : ""}
     </div>
   `;
   if (!hasChildren) {
@@ -1049,10 +1115,38 @@ function renderMoveTreeNode(node, depth = 0) {
     <details class="move-tree-node" ${open}>
       <summary>${row}</summary>
       <div class="move-tree-children">
-        ${children.map((child) => renderMoveTreeNode(child, depth + 1)).join("")}
+        ${children.map((child) => renderMoveTreeNode(child, depth + 1, perspective)).join("")}
       </div>
     </details>
   `;
+}
+
+async function openMoveTreePosition(fen, label = "", perspective = "") {
+  if (!fen) return;
+  state.activeLessonId = "";
+  state.previewLessonId = "";
+  state.boardFen = fen;
+  state.startFen = fen;
+  state.boardOrientation = perspective === "black" ? "black" : "white";
+  state.selectedSquare = "";
+  state.dragFrom = "";
+  state.lastMove = null;
+  state.lastMoveClassification = null;
+  state.currentInsight = null;
+  state.currentInsightKey = "";
+  state.playedTrainingLine = [];
+  state.playedTrainingLineSan = [];
+  state.legalMoves = [];
+  state.legalByFrom = {};
+  setActiveTab("trainer");
+  renderCoords();
+  renderBoard(fen, { animate: false });
+  renderStudyWorkspace();
+  el.boardTitle.textContent = label ? `Tree position after ${label}` : "Move tree position";
+  el.boardSummary.textContent = "Loaded from your imported move tree. You can now explore it freely on the analysis board.";
+  await refreshLegalMoves(fen);
+  renderBoard(fen, { animate: false });
+  await updateFreeAnalysisInsight();
 }
 
 function renderRepertoireMapColumn(node, items, emptyText) {

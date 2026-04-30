@@ -458,12 +458,20 @@ def _build_game_move_tree(
             "white_wins": 0,
             "draws": 0,
             "black_wins": 0,
+            "player_move_count": 0,
+            "opponent_move_count": 0,
             "children": {},
         }
 
-    root = new_node()
+    roots = {
+        "all": new_node(),
+        "white": new_node(),
+        "black": new_node(),
+    }
+    player_color_counts = Counter(imported.player_color for imported in games)
     opening_cache: dict[str, dict[str, Any]] = {}
-    for imported in games:
+
+    def add_game_to_root(root: dict[str, Any], imported: ImportedGame, perspective: str) -> None:
         board = imported.game.board()
         node = root
         result = str(imported.game.headers.get("Result", "") or "")
@@ -473,6 +481,8 @@ def _build_game_move_tree(
         elif result == "0-1":
             white_score = 0.0
 
+        path_san: list[str] = []
+        path_uci: list[str] = []
         for ply_index, move in enumerate(imported.game.mainline_moves()):
             if ply_index >= max_depth:
                 break
@@ -481,6 +491,7 @@ def _build_game_move_tree(
             san = board.san(move)
             uci = move.uci()
             color = "white" if board.turn == chess.WHITE else "black"
+            role = "player" if color == imported.player_color else "opponent"
             next_board = board.copy(stack=False)
             next_board.push(move)
             opening_key = next_board.epd()
@@ -488,6 +499,8 @@ def _build_game_move_tree(
             if opening is None:
                 opening = lookup_by_board(next_board) if ply_index < OPENING_PLIES else {}
                 opening_cache[opening_key] = opening
+            next_path_san = [*path_san, san]
+            next_path_uci = [*path_uci, uci]
             children = node.setdefault("children", {})
             child = children.get(uci)
             if child is None:
@@ -495,10 +508,18 @@ def _build_game_move_tree(
                     "uci": uci,
                     "san": san,
                     "color": color,
+                    "role": role,
+                    "perspective": perspective,
+                    "player_color": imported.player_color,
                     "count": 0,
                     "white_wins": 0,
                     "draws": 0,
                     "black_wins": 0,
+                    "player_move_count": 0,
+                    "opponent_move_count": 0,
+                    "ply": ply_index + 1,
+                    "path_san": next_path_san,
+                    "path_uci": next_path_uci,
                     "classification": _book_payload_for_tree() if ply_index < OPENING_PLIES else None,
                     "opening_name": str(opening.get("name", "") or ""),
                     "opening_code": str(opening.get("eco", "") or ""),
@@ -514,8 +535,18 @@ def _build_game_move_tree(
                 child["black_wins"] += 1
             else:
                 child["draws"] += 1
+            if role == "player":
+                child["player_move_count"] += 1
+            else:
+                child["opponent_move_count"] += 1
             node = child
             board.push(move)
+            path_san = next_path_san
+            path_uci = next_path_uci
+
+    for imported in games:
+        add_game_to_root(roots["all"], imported, "all")
+        add_game_to_root(roots[imported.player_color], imported, imported.player_color)
 
     def prune(node: dict[str, Any], depth: int = 0) -> dict[str, Any]:
         raw_children = list((node.get("children") or {}).values())
@@ -526,13 +557,25 @@ def _build_game_move_tree(
             count = int(child.get("count", 0) or 0)
             score_games = count or 1
             white_score = (float(child.get("white_wins", 0) or 0) + 0.5 * float(child.get("draws", 0) or 0)) / score_games
+            player_move_count = int(child.get("player_move_count", 0) or 0)
+            opponent_move_count = int(child.get("opponent_move_count", 0) or 0)
             compact = {
                 "uci": child.get("uci", ""),
                 "san": child.get("san", ""),
                 "color": child.get("color", ""),
+                "role": "player" if player_move_count >= opponent_move_count else "opponent",
+                "move_role": "your move" if player_move_count >= opponent_move_count else "opponent reply",
+                "perspective": child.get("perspective", ""),
+                "player_color": child.get("player_color", ""),
+                "ply": int(child.get("ply", 0) or 0),
+                "path_san": child.get("path_san", []),
+                "path_uci": child.get("path_uci", []),
                 "count": count,
                 "popularity": round((count / total) * 100, 1) if total else 0.0,
                 "white_score": round(white_score * 100, 1),
+                "player_move_count": player_move_count,
+                "opponent_move_count": opponent_move_count,
+                "player_share": round((player_move_count / count) * 100, 1) if count else 0.0,
                 "classification": child.get("classification"),
                 "opening_name": child.get("opening_name", ""),
                 "opening_code": child.get("opening_code", ""),
@@ -545,12 +588,27 @@ def _build_game_move_tree(
             kept.append(compact)
         return {"children": kept}
 
-    root["count"] = len(games)
+    for key, root in roots.items():
+        root["count"] = len(games) if key == "all" else int(player_color_counts.get(key, 0))
     return {
         "total_games": len(games),
+        "player_color_counts": {
+            "white": int(player_color_counts.get("white", 0)),
+            "black": int(player_color_counts.get("black", 0)),
+        },
         "max_depth": max_depth,
         "max_children": max_children,
-        "root": prune(root),
+        "root": prune(roots["all"]),
+        "by_player_color": {
+            "white": {
+                "total_games": int(player_color_counts.get("white", 0)),
+                "root": prune(roots["white"]),
+            },
+            "black": {
+                "total_games": int(player_color_counts.get("black", 0)),
+                "root": prune(roots["black"]),
+            },
+        },
     }
 
 

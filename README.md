@@ -11,7 +11,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - groups transpositions by position instead of only by opening label
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
 - uses the Lichess opening database when available for practical move popularity and common replies
-- builds a practical move tree from your imported games, with counts and book labels by branch
+- builds a practical move tree split by games where you played White or Black, with counts, book labels, and click-to-study branch nodes
 - generates on-demand theory lines from the current position or after a move you want to test
 - filters out lines you already know well enough so the active queue stays focused
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
@@ -39,7 +39,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
 
 - `Theory`
-  Explore your imported games as a move tree and ask Stockfish to generate the next best moves from the current board position.
+  Explore your imported games as a perspective-aware move tree, click any node to load that exact position on the Study Lines board, and ask Stockfish to generate the next best moves from the current board position.
 
 - `Review`
   Revisit repeated positions that still need correction.
@@ -71,7 +71,7 @@ The board is still repertoire-first:
 The `Theory` workspace has two study tools:
 
 - `Move Tree`
-  A tree built only from your imported games. Each branch shows the SAN move, how often it occurred, branch popularity, White score, and a `Book` label for opening-phase moves.
+  A tree built only from your imported games. It separates your White games from your Black games, marks whether a branch is your move or an opponent reply, and each circular branch node opens the exact resulting position on the live analysis board.
 
 - `Theory Generator`
   Uses the current Study Lines board position. You can optionally enter a UCI move such as `e2e4`, then generate the next 10 best moves, or any value from 1 to 30, using the saved Stockfish settings.
