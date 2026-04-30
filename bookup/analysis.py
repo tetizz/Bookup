@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+import json
 import math
 from statistics import mean
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 import chess
@@ -30,6 +31,8 @@ OPENING_LIBRARY: ChessOpeningsLibrary | None = None
 ONLINE_OPENING_CACHE: dict[str, dict[str, str]] = {}
 EXPLORER_CACHE: dict[str, dict[str, Any]] = {}
 POSITION_INSIGHT_CACHE: dict[str, dict[str, Any]] = {}
+PERSISTENT_ENGINE_CACHE_LOAD: Callable[[str], dict[str, Any]] | None = None
+PERSISTENT_ENGINE_CACHE_SAVE: Callable[[str, dict[str, Any]], None] | None = None
 EXPLORER_AVAILABLE = True
 EXPLORER_LAST_ERROR = ""
 LICHESS_EXPLORER_URL = "https://explorer.lichess.ovh/lichess"
@@ -44,6 +47,7 @@ REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
+ENGINE_CACHE_SCHEMA_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -80,6 +84,69 @@ def configure_lichess(token: str = "") -> None:
         EXPLORER_HEADERS["Authorization"] = f"Bearer {normalized}"
     EXPLORER_CACHE.clear()
     ONLINE_OPENING_CACHE.clear()
+
+
+def configure_engine_cache(
+    loader: Callable[[str], dict[str, Any]] | None = None,
+    saver: Callable[[str, dict[str, Any]], None] | None = None,
+) -> None:
+    global PERSISTENT_ENGINE_CACHE_LOAD, PERSISTENT_ENGINE_CACHE_SAVE
+    PERSISTENT_ENGINE_CACHE_LOAD = loader
+    PERSISTENT_ENGINE_CACHE_SAVE = saver
+
+
+def _engine_cache_key(
+    kind: str,
+    board: chess.Board,
+    engine: EngineSession,
+    *,
+    play_uci: list[str] | None = None,
+    limit: int = 1,
+    time_sec: float | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    time_key = "none" if time_sec is None else f"{float(time_sec):.2f}"
+    payload = {
+        "schema": ENGINE_CACHE_SCHEMA_VERSION,
+        "kind": kind,
+        "fen_key": board.epd(),
+        "turn": "white" if board.turn == chess.WHITE else "black",
+        "play_uci": play_uci or [],
+        "depth": int(engine.settings.depth),
+        "multipv": int(engine.settings.multipv),
+        "limit": int(limit),
+        "time_sec": time_key,
+        "explorer": bool(EXPLORER_AVAILABLE),
+        "extra": extra or {},
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _load_engine_cache(cache_key: str) -> dict[str, Any] | None:
+    cached = POSITION_INSIGHT_CACHE.get(cache_key)
+    if cached:
+        return cached
+    if not PERSISTENT_ENGINE_CACHE_LOAD:
+        return None
+    try:
+        payload = PERSISTENT_ENGINE_CACHE_LOAD(cache_key)
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != ENGINE_CACHE_SCHEMA_VERSION:
+        return None
+    POSITION_INSIGHT_CACHE[cache_key] = payload
+    return payload
+
+
+def _save_engine_cache(cache_key: str, payload: dict[str, Any]) -> None:
+    cached = {"schema": ENGINE_CACHE_SCHEMA_VERSION, **payload}
+    POSITION_INSIGHT_CACHE[cache_key] = cached
+    if not PERSISTENT_ENGINE_CACHE_SAVE:
+        return
+    try:
+        PERSISTENT_ENGINE_CACHE_SAVE(cache_key, cached)
+    except Exception:
+        pass
 
 
 def _analysis_url_for_fen(fen: str) -> str:
@@ -624,10 +691,16 @@ def _candidate_lines_for_board(
     time_sec: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     play_uci = play_uci or []
-    time_key = "none" if time_sec is None else f"{float(time_sec):.2f}"
-    cache_key = f"{board.epd()}|{','.join(play_uci)}|d{engine.settings.depth}|mpv{engine.settings.multipv}|t{time_key}|{limit}"
-    if cache_key in POSITION_INSIGHT_CACHE:
-        cached = POSITION_INSIGHT_CACHE[cache_key]
+    cache_key = _engine_cache_key(
+        "candidate-lines",
+        board,
+        engine,
+        play_uci=play_uci,
+        limit=limit,
+        time_sec=time_sec,
+    )
+    cached = _load_engine_cache(cache_key)
+    if cached:
         return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", []))
 
     root_lines = engine.analyse(
@@ -675,10 +748,10 @@ def _candidate_lines_for_board(
         popularity_by_uci=popularity_by_uci,
     )
 
-    POSITION_INSIGHT_CACHE[cache_key] = {
+    _save_engine_cache(cache_key, {
         "candidate_lines": list(candidate_lines),
         "database_moves": list(database_moves),
-    }
+    })
     return candidate_lines, database_moves
 
 
@@ -951,6 +1024,27 @@ def _build_branch_line(
 
     branch_board = board.copy(stack=False)
     branch_board.push(move)
+    cache_key = _engine_cache_key(
+        "branch-line",
+        branch_board,
+        engine,
+        limit=1,
+        time_sec=time_sec,
+        extra={
+            "move_uci": move_uci,
+            "move_san": move_san,
+            "source": source,
+            "score_cp": score_cp,
+        },
+    )
+    cached = _load_engine_cache(cache_key)
+    if cached and isinstance(cached.get("branch_line"), dict):
+        branch_line = dict(cached["branch_line"])
+        branch_line["source"] = source
+        branch_line["repeated_count"] = repeated_count
+        branch_line["popularity"] = popularity
+        return branch_line
+
     analysis = engine.analyse(
         branch_board,
         depth=max(8, min(14, engine.settings.depth - 4)),
@@ -966,7 +1060,7 @@ def _build_branch_line(
     branch_score_cp = score_cp if score_cp is not None else _score_cp(line["score"], board.turn)
     full_uci = [move_uci, *continuation_uci]
     full_san = [move_san, *continuation_san]
-    return {
+    branch_line = {
         "move": move_san,
         "uci": move_uci,
         "resulting_fen": branch_board.fen(),
@@ -980,6 +1074,8 @@ def _build_branch_line(
         "repeated_count": repeated_count,
         "popularity": popularity,
     }
+    _save_engine_cache(cache_key, {"branch_line": dict(branch_line)})
+    return branch_line
 
 
 def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_sec: float | None = None) -> dict[str, Any]:

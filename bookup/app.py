@@ -14,7 +14,7 @@ import chess
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import OPENING_PLIES, analyse_games, build_position_insight, configure_lichess, database_context_for_board, generate_theory_line
+from .analysis import OPENING_PLIES, analyse_games, build_position_insight, configure_engine_cache, configure_lichess, database_context_for_board, generate_theory_line
 from .chesscom import fetch_archives, fetch_games, normalize_time_classes
 from .classifications import book_classification_payload
 from .engine import EngineSession, EngineSettings, default_engine_path
@@ -28,6 +28,7 @@ RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
 CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
+configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
 PROFILE_SCHEMA_VERSION = 9
 ENGINE_DEFAULTS_VERSION = 2
 ENGINE_LOCK = threading.Lock()

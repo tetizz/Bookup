@@ -58,6 +58,12 @@ class LocalStore:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return self._cache_dir(username, kind) / f"{digest}.json"
 
+    def _shared_cache_path(self, kind: str, key: str) -> Path:
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        path = self.root / "_shared" / "cache" / kind
+        path.mkdir(parents=True, exist_ok=True)
+        return path / f"{digest}.json"
+
     def load_snapshot(self, username: str) -> dict[str, Any]:
         user_dir = self._user_dir(username)
         return self._read_json(user_dir / "snapshot.json", {})
@@ -95,6 +101,15 @@ class LocalStore:
         cached["request_key"] = request_key
         cached["saved_at"] = datetime.now(timezone.utc).isoformat()
         self._write_json(self._cache_path(username, "games", request_key), cached)
+
+    def load_engine_cache(self, key: str) -> dict[str, Any]:
+        return self._read_json(self._shared_cache_path("engine", key), {})
+
+    def save_engine_cache(self, key: str, payload: dict[str, Any]) -> None:
+        cached = dict(payload)
+        cached["request_key"] = key
+        cached["saved_at"] = datetime.now(timezone.utc).isoformat()
+        self._write_json(self._shared_cache_path("engine", key), cached)
 
 
 def serialize_games(imported_games: list[ImportedGame]) -> list[dict[str, Any]]:
