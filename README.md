@@ -18,6 +18,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - builds database-weighted response drills so common replies become trainable lines
 - tracks repeated mistake heatmap squares, mistake timelines, and spaced-review buckets
 - filters out lines you already know well enough so the active queue stays focused
+- explains every due/new queue item with the repeated-miss evidence, frequency, review state, and engine/database factors that put it there
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
 - runs as a Windows desktop app instead of a plain browser tab
 
@@ -30,7 +31,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   See health, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
 
 - `Needs Work`
-  Focus on repeated repertoire mistakes, due lines, fresh lines, suggested repertoire updates, mistake heatmap squares, mistake timelines, and spaced-review buckets.
+  Focus on repeated repertoire mistakes, due lines, fresh lines, queue explainers, suggested repertoire updates, mistake heatmap squares, mistake timelines, and spaced-review buckets.
 
 - `Study Lines`
   Work through a line on the board with:

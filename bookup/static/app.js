@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 12;
+const PROFILE_SCHEMA_VERSION = 13;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -2254,6 +2254,57 @@ function renderStudyWorkspace() {
   }
 }
 
+function queueReviewFactor(lesson) {
+  const review = lesson?.review || state.reviewStats[lesson?.lesson_id] || null;
+  if (!review || !Number(review.seen || 0)) {
+    return {
+      label: "Review state",
+      value: "New",
+      detail: "You have not worked this line in Bookup yet.",
+      tone: "stable",
+    };
+  }
+  const due = Number(review.due_at || 0);
+  const isDue = !due || due <= Date.now();
+  const streak = Number(review.streak || 0);
+  const lastResult = review.last_result === "wrong" ? "missed" : review.last_result === "right" ? "correct" : "worked";
+  return {
+    label: isDue ? "Review state" : "Next review",
+    value: isDue ? "Due" : formatReviewTime(due),
+    detail: `Last ${lastResult}; current streak ${streak}.`,
+    tone: review.last_result === "wrong" ? "urgent" : isDue ? "warning" : "stable",
+  };
+}
+
+function renderQueueExplainer(lesson, variant = "full") {
+  const explainer = lesson?.queue_explainer || {};
+  const headline = explainer.headline || (lesson?.line_status === "new" ? "New repeated position" : "Queue reason");
+  const summary = explainer.summary || "Bookup queued this from repeated game evidence and current study priority.";
+  const factors = [
+    ...(Array.isArray(explainer.factors) ? explainer.factors : []),
+    queueReviewFactor(lesson),
+  ].slice(0, variant === "compact" ? 3 : 6);
+  const factorMarkup = factors
+    .map((factor) => `
+      <div class="queue-factor ${escapeHtml(factor?.tone || "stable")}">
+        <div class="queue-factor-label">${escapeHtml(factor?.label || "Factor")}</div>
+        <div class="queue-factor-value">${escapeHtml(String(factor?.value ?? ""))}</div>
+        ${variant === "compact" ? "" : `<div class="queue-factor-detail">${escapeHtml(factor?.detail || "")}</div>`}
+      </div>
+    `)
+    .join("");
+  return `
+    <div class="queue-explainer ${variant === "compact" ? "compact" : ""}">
+      <div class="queue-explainer-head">
+        <span>${escapeHtml(headline)}</span>
+        ${explainer.next_action && variant !== "compact" ? `<small>${escapeHtml(explainer.next_action)}</small>` : ""}
+      </div>
+      <p>${escapeHtml(summary)}</p>
+      <div class="queue-factor-grid">${factorMarkup}</div>
+    </div>
+  `;
+}
+
 function renderImproveList(node, items, emptyText) {
   if (!items.length) {
     node.className = "stack empty";
@@ -2286,6 +2337,7 @@ function renderImproveList(node, items, emptyText) {
           <span class="lesson-chip">Priority ${Math.round(item.priority)}</span>
           <span class="lesson-chip">${describeEdge(item.value_lost_cp)}</span>
         </div>
+        ${renderQueueExplainer(item)}
         <div class="line-preview">${escapeHtml(item.continuation_san)}</div>
         <div class="line-note">${escapeHtml(item.explanation)}</div>
         <div class="chip-row">
@@ -2557,6 +2609,7 @@ function renderQueue() {
           <span class="lesson-chip">Frequency ${lesson.frequency}</span>
           <span class="lesson-chip">Streak ${lesson.review.streak || 0}</span>
         </div>
+        ${renderQueueExplainer(lesson, "compact")}
       </button>
     `)
       .join("");

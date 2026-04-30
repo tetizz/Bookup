@@ -1159,6 +1159,142 @@ def _build_branch_line(
     return branch_line
 
 
+def _build_queue_explainer(
+    *,
+    line_status: str,
+    line_label: str,
+    top_played: str,
+    best_reply: str,
+    repeat_mistake_count: int,
+    frequency: int,
+    value_lost_cp: int,
+    priority: float,
+    confidence: float,
+    database_moves: list[dict[str, Any]],
+    first_seen_label: str,
+    last_seen_label: str,
+    result_counts: Counter[str],
+) -> dict[str, Any]:
+    """Explain why a line belongs in a queue without changing queue priority logic."""
+
+    top_database = max((float(item.get("popularity", 0.0) or 0.0) for item in database_moves), default=0.0)
+    losses = int(result_counts.get("loss", 0))
+    wins = int(result_counts.get("win", 0))
+    draws = int(result_counts.get("draw", 0))
+    factors: list[dict[str, Any]] = []
+
+    if line_status == "needs_work":
+        headline = "Repeated repertoire miss"
+        summary = (
+            f"Bookup queued this because you reached {line_label} {frequency} times and repeated "
+            f"{top_played} instead of {best_reply} {repeat_mistake_count} times."
+        )
+        next_action = f"Work this until {best_reply} feels automatic from the shown position."
+        factors.append(
+            {
+                "label": "Repeated miss",
+                "value": f"{repeat_mistake_count}x",
+                "detail": f"Your repeated move here is {top_played}; Bookup recommends {best_reply}.",
+                "tone": "urgent",
+            }
+        )
+    elif line_status == "new":
+        headline = "New repeated position"
+        summary = (
+            f"This position repeated {frequency} times in your games. It is ready to learn later, "
+            "but it is not a repeated mistake yet."
+        )
+        next_action = "Review it after the repeated-miss queue is clear."
+        factors.append(
+            {
+                "label": "Trainable",
+                "value": f"{frequency}x",
+                "detail": "Repeated enough to be a real repertoire position, not a random one-off.",
+                "tone": "stable",
+            }
+        )
+    elif line_status == "known":
+        headline = "Known line"
+        summary = f"You already play the recommended move {best_reply} often enough for Bookup to archive this line."
+        next_action = "Keep it archived unless it starts producing repeated misses later."
+        factors.append(
+            {
+                "label": "Confidence",
+                "value": f"{round(confidence)}",
+                "detail": "High confidence keeps this out of active Needs Work.",
+                "tone": "stable",
+            }
+        )
+    else:
+        headline = "Queue candidate"
+        summary = f"Bookup ranked this line from repeated game evidence and current engine/database context."
+        next_action = "Open the line to decide whether to add it to Needs Work."
+
+    if value_lost_cp > 0:
+        factors.append(
+            {
+                "label": "Engine swing",
+                "value": f"{value_lost_cp}cp",
+                "detail": "Estimated centipawn loss compared with the current top engine continuation.",
+                "tone": "warning" if value_lost_cp >= 80 else "stable",
+            }
+        )
+    else:
+        factors.append(
+            {
+                "label": "Engine swing",
+                "value": "0cp",
+                "detail": "No clear engine loss was measured for your main move.",
+                "tone": "stable",
+            }
+        )
+
+    factors.append(
+        {
+            "label": "Game frequency",
+            "value": f"{frequency}x",
+            "detail": f"Seen from {first_seen_label or 'your games'} to {last_seen_label or 'your latest import'}.",
+            "tone": "database" if frequency >= 8 else "stable",
+        }
+    )
+
+    if top_database > 0:
+        factors.append(
+            {
+                "label": "Database weight",
+                "value": f"{top_database:.1f}%",
+                "detail": "Lichess/player-database replies make this position more practical to study.",
+                "tone": "database",
+            }
+        )
+
+    if losses or wins or draws:
+        factors.append(
+            {
+                "label": "Results",
+                "value": f"{wins}-{draws}-{losses}",
+                "detail": "Win-draw-loss record from imported games that reached this position.",
+                "tone": "warning" if losses > wins else "stable",
+            }
+        )
+
+    return {
+        "headline": headline,
+        "summary": summary,
+        "factors": factors[:5],
+        "rank_inputs": {
+            "priority": priority,
+            "frequency": frequency,
+            "repeat_mistake_count": repeat_mistake_count,
+            "value_lost_cp": value_lost_cp,
+            "database_popularity": round(top_database, 1),
+            "confidence": confidence,
+            "line_status": line_status,
+        },
+        "next_action": next_action,
+    }
+
+
 def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_sec: float | None = None) -> dict[str, Any]:
     if node.occurrences < REPEATED_MISTAKE_THRESHOLD:
         return {}
@@ -1317,6 +1453,21 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
 
     explanation = insight["coach_explanation"]
     line_label = _line_label(node.trigger_move, node.play_uci)
+    queue_explainer = _build_queue_explainer(
+        line_status=line_status,
+        line_label=line_label,
+        top_played=top_played,
+        best_reply=best_reply,
+        repeat_mistake_count=repeat_mistake_count,
+        frequency=frequency,
+        value_lost_cp=value_lost_cp,
+        priority=priority,
+        confidence=confidence,
+        database_moves=database_moves,
+        first_seen_label=node.first_seen_label,
+        last_seen_label=node.last_seen_label,
+        result_counts=node.result_counts,
+    )
 
     return {
         "lesson_id": f"{node.color}:{quote(node.key, safe='')[:48]}:{best_move_uci}",
@@ -1361,6 +1512,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
         "importance": importance,
         "confidence": confidence,
         "priority": priority,
+        "queue_explainer": queue_explainer,
         "your_top_move": top_played,
         "your_top_move_uci": top_played_uci,
         "your_top_move_count": top_played_count,
