@@ -304,6 +304,25 @@ select:focus {
   gap: 8px;
 }
 
+.import-pgn-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(139, 171, 224, 0.18);
+  border-radius: 18px;
+  background: rgba(6, 10, 15, 0.38);
+}
+
+.import-pgn-panel summary {
+  cursor: pointer;
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.import-pgn-panel textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
 .progress-track {
   position: relative;
   inline-size: 100%;
@@ -406,6 +425,193 @@ select:focus {
   background: rgba(13, 18, 25, 0.72);
   border: 1px dashed rgba(255, 255, 255, 0.1);
   color: var(--muted);
+}
+
+.health-dashboard {
+  display: grid;
+  gap: 16px;
+}
+
+.health-dashboard.empty,
+.heatmap-panel.empty {
+  padding: 18px;
+  border-radius: 16px;
+  color: var(--muted);
+  background: rgba(13, 18, 25, 0.72);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.health-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.health-card {
+  padding: 18px;
+  border: 1px solid rgba(139, 171, 224, 0.18);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 88% 12%, rgba(115, 158, 255, 0.18), transparent 34%),
+    rgba(7, 11, 16, 0.72);
+}
+
+.health-card.urgent,
+.health-card.heavy {
+  border-color: rgba(255, 111, 122, 0.38);
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 111, 122, 0.16), transparent 34%),
+    rgba(7, 11, 16, 0.72);
+}
+
+.health-card.strong {
+  border-color: rgba(104, 204, 136, 0.34);
+}
+
+.health-card span,
+.health-card p {
+  color: var(--muted);
+}
+
+.health-card strong {
+  display: block;
+  margin: 8px 0;
+  color: var(--text-strong);
+  font-size: clamp(32px, 5vw, 54px);
+  line-height: 0.95;
+}
+
+.health-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.health-panel {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background: rgba(7, 11, 16, 0.58);
+}
+
+.health-panel h3 {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.health-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.health-bar-row span,
+.health-panel p,
+.health-line span,
+.schedule-row span {
+  color: var(--muted);
+}
+
+.health-bar {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.health-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5d8eff, #e5c66f);
+}
+
+.health-line,
+.schedule-row {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  color: inherit;
+  text-align: left;
+  background: rgba(9, 14, 20, 0.78);
+}
+
+.health-line:hover,
+.schedule-row:hover {
+  border-color: rgba(115, 158, 255, 0.58);
+  transform: translateY(-1px);
+}
+
+.tiny-action {
+  width: fit-content;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(139, 171, 224, 0.25);
+  border-radius: 999px;
+  color: var(--text-strong);
+  background: rgba(8, 13, 20, 0.72);
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.tiny-action:hover {
+  border-color: rgba(115, 158, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(115, 158, 255, 0.12);
+}
+
+.heatmap-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.heatmap-square {
+  min-height: 98px;
+  padding: 14px;
+  border: 1px solid rgba(255, 133, 101, 0.24);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 99, 82, 0.32) 0 var(--heat), rgba(255, 194, 92, 0.08) var(--heat) 100%),
+    rgba(7, 11, 16, 0.76);
+}
+
+.heatmap-square strong {
+  display: block;
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-size: 24px;
+}
+
+.heatmap-square span,
+.heatmap-square small {
+  display: block;
+  color: var(--muted);
+}
+
+.heatmap-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.section-divider {
+  height: 1px;
+  margin: 24px 0;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.compact-title {
+  font-size: 24px;
 }
 
 .line-card,
@@ -1669,6 +1875,16 @@ select:focus {
 }
 
 @media (max-width: 1100px) {
+  .health-card-grid,
+  .health-columns,
+  .heatmap-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .health-bar-row {
+    grid-template-columns: 1fr;
+  }
+
   .move-tree-perspectives {
     grid-template-columns: 1fr;
   }

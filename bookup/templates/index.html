@@ -127,6 +127,18 @@
               </div>
             </div>
           </div>
+          <details class="import-pgn-panel">
+            <summary>Import saved PGN instead</summary>
+            <p class="summary-copy">Paste one or more PGNs to build the same repertoire tree locally, without fetching from Chess.com.</p>
+            <label class="field">
+              <span>PGN text</span>
+              <textarea id="pgnImportInput" rows="8" placeholder="[Event &quot;My game&quot;]&#10;1. Nf3 d5 2. c4 ..."></textarea>
+            </label>
+            <div class="chip-row">
+              <button id="importPgnBtn" class="launch-btn" type="button">Import PGN</button>
+              <span id="pgnImportStatus" class="line-note">Uses the same Stockfish and Lichess settings above.</span>
+            </div>
+          </details>
         </section>
 
         <section class="card summary-card">
@@ -152,6 +164,12 @@
     </section>
 
     <section class="workspace-panel" data-tab-panel="repertoire-map">
+      <section class="section-block">
+        <div class="section-label">Health Dashboard</div>
+        <h2 class="section-title">What needs attention right now</h2>
+        <div id="healthDashboard" class="health-dashboard empty">Build your repertoire to see coverage, confidence, and today’s study load.</div>
+      </section>
+
       <section class="section-block">
         <div class="section-label">First Moves</div>
         <h2 class="section-title">How your repertoire starts</h2>
@@ -193,6 +211,12 @@
         <h2 class="section-title">Lines you already know well enough to keep out of the urgent queue</h2>
         <div id="knownArchiveList" class="stack empty">Known lines will show up here.</div>
       </section>
+
+      <section class="section-block">
+        <div class="section-label">Transpositions</div>
+        <h2 class="section-title">Different paths into the same position</h2>
+        <div id="transpositionList" class="stack empty">Transposition groups will show up here after import.</div>
+      </section>
     </section>
 
     <section class="workspace-panel" data-tab-panel="needs-work">
@@ -209,6 +233,18 @@
       <section class="section-block">
         <div class="section-label">Suggested Upgrades</div>
         <div id="suggestionList" class="stack empty">Suggested repertoire upgrades will show up here.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Mistake Heatmap</div>
+        <h2 class="section-title">Squares where repeated problems cluster</h2>
+        <div id="mistakeHeatmap" class="heatmap-panel empty">Repeated-mistake square pressure will show up here.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Spaced Review</div>
+        <h2 class="section-title">Maintenance schedule</h2>
+        <div id="reviewSchedule" class="stack empty">Review schedule will show up here.</div>
       </section>
     </section>
 
@@ -247,6 +283,11 @@
             <button id="generateTheoryBtn" class="launch-btn" type="button">Generate Theory</button>
           </div>
           <div id="theoryOutput" class="theory-output empty">Generated theory will show up here.</div>
+
+          <div class="section-divider"></div>
+          <div class="section-label">Response Builder</div>
+          <h2 class="section-title compact-title">Prepare against common replies</h2>
+          <div id="databaseTrainingList" class="stack empty">Database-weighted training replies will show up here.</div>
         </aside>
       </div>
     </section>

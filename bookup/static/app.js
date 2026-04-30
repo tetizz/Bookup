@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 10;
+const PROFILE_SCHEMA_VERSION = 11;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -72,6 +72,9 @@ const el = {
   threads: document.getElementById("threadsInput"),
   hash: document.getElementById("hashInput"),
   analyze: document.getElementById("analyzeBtn"),
+  pgnImport: document.getElementById("pgnImportInput"),
+  importPgn: document.getElementById("importPgnBtn"),
+  pgnImportStatus: document.getElementById("pgnImportStatus"),
   status: document.getElementById("status"),
   progressTrack: document.getElementById("progressTrack"),
   progressFill: document.getElementById("progressFill"),
@@ -88,6 +91,8 @@ const el = {
   firstMoveBlack: document.getElementById("firstMoveBlack"),
   repertoireMapWhite: document.getElementById("repertoireMapWhite"),
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
+  healthDashboard: document.getElementById("healthDashboard"),
+  transpositionList: document.getElementById("transpositionList"),
   previewPanel: document.getElementById("previewPanel"),
   knownArchiveList: document.getElementById("knownArchiveList"),
   gameMoveTree: document.getElementById("gameMoveTree"),
@@ -99,6 +104,9 @@ const el = {
   sidelineList: document.getElementById("sidelineList"),
   suggestionList: document.getElementById("suggestionList"),
   mistakeList: document.getElementById("mistakeList"),
+  mistakeHeatmap: document.getElementById("mistakeHeatmap"),
+  reviewSchedule: document.getElementById("reviewSchedule"),
+  databaseTrainingList: document.getElementById("databaseTrainingList"),
   lessonListDue: document.getElementById("lessonListDue"),
   lessonListNew: document.getElementById("lessonListNew"),
   lessonQueueMeta: document.getElementById("lessonQueueMeta"),
@@ -213,6 +221,7 @@ async function init() {
   syncStudySettingsFromSetup();
 
   el.analyze.addEventListener("click", runAnalysis);
+  el.importPgn?.addEventListener("click", importPgnGames);
   el.importAllGames?.addEventListener("change", syncImportScope);
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
@@ -854,6 +863,49 @@ async function runAnalysis() {
   }
 }
 
+async function importPgnGames() {
+  const pgn = el.pgnImport?.value?.trim() || "";
+  if (!pgn) {
+    if (el.pgnImportStatus) el.pgnImportStatus.textContent = "Paste at least one PGN first.";
+    return;
+  }
+  startAnalysisProgress();
+  if (el.importPgn) el.importPgn.disabled = true;
+  if (el.pgnImportStatus) el.pgnImportStatus.textContent = "Importing PGN and building local repertoire...";
+  try {
+    const response = await fetch("/api/import-pgn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: el.username.value.trim() || "PGN Player",
+        pgn,
+        player_color: "white",
+        lichess_token: el.lichessToken.value.trim(),
+        engine_path: el.enginePath.value.trim(),
+        depth: Number(el.depth.value || defaults.depth || 24),
+        multipv: Number(el.multiPv.value || defaults.multipv || 5),
+        threads: Number(el.threads.value || defaults.threads || 8),
+        hash_mb: Number(el.hash.value || defaults.hash_mb || 2048),
+        think_time_sec: Number(el.thinkTime.value || defaults.think_time_sec || 5),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "PGN import failed.");
+    state.payload = payload;
+    state.reviewStats = payload.training_progress || loadReviewStats(payload.username);
+    state.games = payload.games || [];
+    renderProfile(payload);
+    setProgress(100, `Imported ${payload.games_imported} PGN game${payload.games_imported === 1 ? "" : "s"} into your local Bookup workspace.`);
+    if (el.pgnImportStatus) el.pgnImportStatus.textContent = "PGN import complete. The move tree, theory, and trainer are ready.";
+  } catch (error) {
+    setProgress(0, error.message || "PGN import failed.");
+    if (el.pgnImportStatus) el.pgnImportStatus.textContent = error.message || "PGN import failed.";
+  } finally {
+    stopAnalysisProgress();
+    if (el.importPgn) el.importPgn.disabled = false;
+  }
+}
+
 async function fetchProfilePayload(username) {
   const response = await fetch("/api/profile", {
     method: "POST",
@@ -948,12 +1000,17 @@ function renderProfile(payload) {
 
   renderFirstMoves(profile.first_move_repertoire || {});
   renderRepertoireMap(profile.repertoire_map || {});
+  renderHealthDashboard(profile.health_dashboard || null);
   renderKnownArchive(profile.known_line_archive || []);
+  renderTranspositionGroups(profile.transposition_groups || []);
   renderGameMoveTree(state.gameMoveTree);
   renderImproveList(el.urgentList, state.queueDue, "No due lines right now.");
   renderImproveList(el.sidelineList, state.queueNew, "No fresh lines waiting right now.");
   renderSuggestions(profile.repertoire_updates || []);
   renderMistakes(profile.opening_mistakes || []);
+  renderMistakeHeatmap(profile.mistake_heatmap || null);
+  renderReviewSchedule(profile.review_schedule || null);
+  renderDatabaseTraining(profile.database_training || []);
   renderQueue();
   clearPreview();
 
@@ -1013,6 +1070,174 @@ function renderKnownArchive(items) {
       </article>
     `)
     .join("");
+}
+
+function renderHealthDashboard(dashboard) {
+  if (!el.healthDashboard) return;
+  const cards = dashboard?.cards || [];
+  if (!cards.length) {
+    el.healthDashboard.className = "health-dashboard empty";
+    el.healthDashboard.textContent = "Build your repertoire to see coverage, confidence, and today's study load.";
+    return;
+  }
+  const coverage = dashboard.coverage_by_color || [];
+  const weakest = dashboard.weakest_lines || [];
+  const strongest = dashboard.strongest_lines || [];
+  el.healthDashboard.className = "health-dashboard";
+  el.healthDashboard.innerHTML = `
+    <div class="health-card-grid">
+      ${cards.map((card) => `
+        <article class="health-card ${escapeHtml(card.tone || "")}">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(card.value)}</strong>
+          <p>${escapeHtml(card.detail)}</p>
+        </article>
+      `).join("")}
+    </div>
+    <div class="health-columns">
+      <article class="health-panel">
+        <h3>Coverage by color</h3>
+        ${coverage.map((row) => `
+          <div class="health-bar-row">
+            <div>
+              <strong>${escapeHtml(row.color === "black" ? "Black" : "White")}</strong>
+              <span>${Number(row.positions || 0)} positions · ${Number(row.due || 0)} due · ${Number(row.known || 0)} known</span>
+            </div>
+            <div class="health-bar"><span style="width:${Math.max(0, Math.min(100, Number(row.coverage || 0)))}%"></span></div>
+            <b>${Number(row.coverage || 0).toFixed(0)}%</b>
+          </div>
+        `).join("") || "<p>No coverage data yet.</p>"}
+      </article>
+      <article class="health-panel">
+        <h3>Weakest repeated branches</h3>
+        ${weakest.map((item) => `
+          <button class="health-line" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+            <strong>${escapeHtml(item.line_label)}</strong>
+            <span>${escapeHtml(item.your_repeated_move)} → ${escapeHtml(item.recommended_move)} · ${Number(item.repeat_mistake_count || 0)} misses</span>
+          </button>
+        `).join("") || "<p>No repeated problem branches right now.</p>"}
+      </article>
+      <article class="health-panel">
+        <h3>Strongest known lines</h3>
+        ${strongest.map((item) => `
+          <button class="health-line" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+            <strong>${escapeHtml(item.line_label)}</strong>
+            <span>${escapeHtml(item.recommended_move)} · ${Number(item.repeat_count || 0)} repeats · ${Math.round(Number(item.confidence || 0))} confidence</span>
+          </button>
+        `).join("") || "<p>Known lines unlock once you repeatedly play the best move.</p>"}
+      </article>
+    </div>
+  `;
+}
+
+function renderTranspositionGroups(groups) {
+  if (!el.transpositionList) return;
+  if (!groups.length) {
+    el.transpositionList.className = "stack empty";
+    el.transpositionList.textContent = "No repeated transposition groups found yet.";
+    return;
+  }
+  el.transpositionList.className = "stack";
+  el.transpositionList.innerHTML = groups.map((group, index) => `
+    <article class="line-card transposition-card">
+      <div class="line-card-header">
+        <div>
+          <div class="line-title">${index + 1}. ${escapeHtml((group.labels || [])[0] || "Shared position")}</div>
+          <div class="tree-meta">${Number(group.positions || 0)} paths · ${Number(group.frequency || 0)} games · ${Math.round(Number(group.confidence || 0))} confidence</div>
+        </div>
+        ${group.position_identifier ? `<a class="launch-btn" href="${escapeHtml(group.position_identifier)}" target="_blank" rel="noopener noreferrer">Lichess analysis</a>` : ""}
+      </div>
+      <div class="line-note">${(group.labels || []).map(escapeHtml).join(" | ")}</div>
+      <div class="chip-row">${(group.moves || []).map((move) => `<span class="lesson-chip">${escapeHtml(move)}</span>`).join("")}</div>
+      <div class="chip-row">${(group.lesson_ids || []).slice(0, 3).map((id) => `<button class="launch-btn" type="button" data-work-line="${escapeHtml(id)}">Work branch</button>`).join("")}</div>
+    </article>
+  `).join("");
+}
+
+function renderMistakeHeatmap(heatmap) {
+  if (!el.mistakeHeatmap) return;
+  const squares = heatmap?.squares || [];
+  if (!squares.length) {
+    el.mistakeHeatmap.className = "heatmap-panel empty";
+    el.mistakeHeatmap.textContent = "No repeated mistake clusters yet. One-off misses stay out of this heatmap.";
+    return;
+  }
+  el.mistakeHeatmap.className = "heatmap-panel";
+  el.mistakeHeatmap.innerHTML = `
+    <div class="heatmap-grid">
+      ${squares.map((item) => `
+        <article class="heatmap-square" style="--heat:${Math.max(8, Math.min(100, Number(item.intensity || 0)))}%">
+          <strong>${escapeHtml(item.square)}</strong>
+          <span>${Number(item.score || 0).toFixed(0)} pressure</span>
+          <small>${Number(item.sources || 0)} from · ${Number(item.targets || 0)} to</small>
+        </article>
+      `).join("")}
+    </div>
+    <div class="heatmap-lines">
+      ${(heatmap.top_lines || []).map((item) => `
+        <button class="health-line" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+          <strong>${escapeHtml(item.line_label)}</strong>
+          <span>${escapeHtml(item.your_repeated_move)} should become ${escapeHtml(item.recommended_move)} · ${Number(item.repeat_mistake_count || 0)} repeats</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderReviewSchedule(schedule) {
+  if (!el.reviewSchedule) return;
+  const groups = [
+    ["Due today", schedule?.due_today || []],
+    ["New later", schedule?.new_later || []],
+    ["Known archive", schedule?.known_archive || []],
+  ];
+  if (!groups.some(([, items]) => items.length)) {
+    el.reviewSchedule.className = "stack empty";
+    el.reviewSchedule.textContent = "Review schedule will show up here once lines enter your queues.";
+    return;
+  }
+  el.reviewSchedule.className = "stack review-schedule";
+  el.reviewSchedule.innerHTML = groups.map(([title, items]) => `
+    <article class="line-card">
+      <div class="line-card-header">
+        <div class="line-title">${escapeHtml(title)}</div>
+        <div class="line-badge">${items.length}</div>
+      </div>
+      ${items.length ? items.map((item) => `
+        <button class="schedule-row" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+          <strong>${escapeHtml(item.line_label)}</strong>
+          <span>${escapeHtml(item.interval)} · ${Math.round(Number(item.confidence || 0))} confidence</span>
+        </button>
+      `).join("") : `<div class="line-note">Nothing in this bucket.</div>`}
+    </article>
+  `).join("");
+}
+
+function renderDatabaseTraining(items) {
+  if (!el.databaseTrainingList) return;
+  if (!items.length) {
+    el.databaseTrainingList.className = "stack empty";
+    el.databaseTrainingList.textContent = "Import games with database context to prepare against common replies.";
+    return;
+  }
+  el.databaseTrainingList.className = "stack";
+  el.databaseTrainingList.innerHTML = items.slice(0, 8).map((item) => {
+    const reply = item.top_database_reply || {};
+    const moves = item.database_moves || [];
+    return `
+      <article class="line-card response-builder-card">
+        <div class="line-card-header">
+          <div>
+            <div class="line-title">${escapeHtml(item.line_label)}</div>
+            <div class="tree-meta">Most common reply: ${escapeHtml(reply.san || reply.uci || "unknown")} · ${Number(reply.popularity || 0)}%</div>
+          </div>
+          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Train it</button>
+        </div>
+        <div class="line-note">Recommended response: <strong>${escapeHtml(item.recommended_move)}</strong></div>
+        <div class="chip-row">${moves.map((move) => `<span class="lesson-chip">${escapeHtml(move.san || move.uci)} ${Number(move.popularity || 0)}%</span>`).join("")}</div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderGameMoveTree(tree) {
@@ -1310,6 +1535,7 @@ function renderStudyEngineLine(line, index) {
       </div>
       <div class="study-engine-preview">${detail}</div>
       <div class="study-engine-preview">${preview || "No continuation loaded yet."}</div>
+      ${line?.uci ? `<button class="tiny-action" type="button" data-trainer-move="${escapeHtml(line.uci)}">Try ${escapeHtml(line.move || line.uci)}</button>` : ""}
     </article>
   `;
 }
@@ -1330,6 +1556,7 @@ function renderStudyDatabaseMove(line, candidateMap = {}) {
         ${candidate?.move ? `<div class="line-badge">${escapeHtml(candidate.move)}</div>` : ""}
       </div>
       <div class="study-database-preview">${candidate?.line_san ? escapeHtml(candidate.line_san) : "Practical move from the Lichess database."}</div>
+      ${line?.uci ? `<button class="tiny-action" type="button" data-trainer-move="${escapeHtml(line.uci)}">Play database move</button>` : ""}
     </article>
   `;
 }

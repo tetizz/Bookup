@@ -5,14 +5,18 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 ## What Bookup Does
 
 - imports public Chess.com games by username and time control
+- imports saved PGN text when you want a fully local/manual source
 - supports `Import all public games`
 - caches imported games and full analyzed repertoires locally so repeat loads are much faster
 - builds a repertoire map from repeated positions you actually reach
 - groups transpositions by position instead of only by opening label
+- shows a repertoire health dashboard with coverage, due load, weak branches, and known lines
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
 - uses the Lichess opening database when available for practical move popularity and common replies
 - builds a practical theory tree from imported games, split by games where you played White or Black
 - generates on-demand theory lines from the current position or after a move you want to test
+- builds database-weighted response drills so common replies become trainable lines
+- tracks repeated mistake heatmap squares and spaced-review buckets
 - filters out lines you already know well enough so the active queue stays focused
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
 - runs as a Windows desktop app instead of a plain browser tab
@@ -23,10 +27,10 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
 
 - `Repertoire Map`
-  See repeated repertoire positions and branches you actually reach, compare your repeated move with the recommended move, and open exact lines to work on.
+  See health, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
 
 - `Needs Work`
-  Focus on repeated repertoire mistakes, due lines, fresh lines, and suggested repertoire updates.
+  Focus on repeated repertoire mistakes, due lines, fresh lines, suggested repertoire updates, mistake heatmap squares, and spaced-review buckets.
 
 - `Study Lines`
   Work through a line on the board with:
@@ -39,7 +43,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
 
 - `Theory`
-  Explore your imported-game move tree and ask Stockfish to generate the next best moves from the current board position.
+  Explore your imported-game move tree, prepare against common database replies, and ask Stockfish to generate the next best moves from the current board position.
 
 - `Review`
   Revisit repeated positions that still need correction.
@@ -65,6 +69,7 @@ The board is still repertoire-first:
 - it plays the lead-in automatically until your turn
 - at decision points, it can classify what you actually play
 - it still shows the recommended repertoire move and continuation
+- engine and database side-panel rows can be played directly onto the board for quick “what if?” study
 
 ## Imported Game Tree Map
 
@@ -80,13 +85,16 @@ It includes:
 
 ## Theory
 
-The `Theory` workspace has two study tools:
+The `Theory` workspace has three study tools:
 
 - `Imported Games Theory Tree`
   Shows the move tree from your imported games only. Click any branch card to open that exact position on the Study Lines board.
 
 - `Theory Generator`
   Uses the current Study Lines board position. You can optionally enter a UCI move such as `e2e4`, then generate the next 10 best moves, or any value from 1 to 30, using the saved Stockfish settings.
+
+- `Response Builder`
+  Uses repeated repertoire lines plus database/common-reply context to create practical “if they play this, answer with this” training cards.
 
 ## Inputs
 
@@ -104,6 +112,9 @@ The `Theory` workspace has two study tools:
 
 - `Stockfish path`
   Required when running from source unless the bundled engine is already available locally.
+
+- `PGN text`
+  Optional. Paste saved PGNs in Setup to build the same local repertoire and theory tree without fetching from Chess.com.
 
 ## Run From Source
 
@@ -152,8 +163,10 @@ Bookup stores local state in `bookup_data\` so it can reopen faster and remember
 That includes:
 
 - imported Chess.com games
+- imported PGN games from manual local imports
 - cached analyzed repertoires keyed by request/settings
 - imported-game move-tree payloads
+- health dashboard, heatmap, response-builder, and transposition payloads inside the saved profile snapshot
 - snapshot state for the latest profile
 - training progress and review stats
 
@@ -167,6 +180,7 @@ If you rerun the exact same import and analysis settings, Bookup should load fro
 - Exact first-time loads can still take longer because Stockfish is doing real repertoire analysis.
 - Repeat loads of the same request should be much faster because Bookup now reuses cached games and cached analyzed profiles.
 - The Lichess database panel can update separately from Stockfish, so database moves are still useful when engine analysis is slow.
+- PGN import is local and uses the same analysis/cache pipeline as Chess.com imports.
 
 ## Current Direction
 
@@ -178,13 +192,13 @@ The current product direction is:
 - practical opponent replies from the database
 - engine-backed candidate lines and eval
 - move classifications on the board and in the side panels
+- health, heatmap, review schedule, and response-builder surfaces that explain what to study next
 - a legal-move study board that helps you work on the lines that matter most
 
 ## Next Improvements
 
-- clickable engine lines that jump the board into that variation
-- clickable move-tree branches that jump the analysis board into that position
 - background analysis for new positions before you open them
 - stronger book-move detection from live opening context
 - tighter drag-and-drop polish and board-interaction cleanup
-- optional PGN import in addition to Chess.com archive import
+- richer theory-tree filtering by side, result, and time control
+- one-click “train against database” sessions that repeatedly choose common replies

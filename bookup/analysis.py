@@ -1485,6 +1485,246 @@ def _build_repertoire_updates(urgent: list[dict[str, Any]], known_lines: list[di
     return updates
 
 
+def _build_health_dashboard(
+    *,
+    lessons: list[dict[str, Any]],
+    queue_due: list[dict[str, Any]],
+    queue_new: list[dict[str, Any]],
+    known_lines: list[dict[str, Any]],
+    repeated_work_lines: list[dict[str, Any]],
+    games_count: int,
+    win_rate: float,
+) -> dict[str, Any]:
+    total = len(lessons)
+    average_confidence = round(mean([float(item.get("confidence", 0)) for item in lessons]), 1) if lessons else 0.0
+    due_share = round((len(queue_due) / total) * 100, 1) if total else 0.0
+    known_share = round((len(known_lines) / total) * 100, 1) if total else 0.0
+    review_load = len(queue_due) + min(len(queue_new), 8)
+    status = "stable"
+    if len(queue_due) >= 12 or due_share >= 35:
+        status = "heavy"
+    elif len(queue_due) <= 3 and known_share >= 35:
+        status = "strong"
+
+    coverage_by_color = []
+    for color in ("white", "black"):
+        color_lessons = [item for item in lessons if item.get("color") == color]
+        color_known = [item for item in known_lines if item.get("color") == color]
+        color_due = [item for item in queue_due if item.get("color") == color]
+        coverage_by_color.append(
+            {
+                "color": color,
+                "positions": len(color_lessons),
+                "due": len(color_due),
+                "known": len(color_known),
+                "coverage": round((len(color_known) / len(color_lessons)) * 100, 1) if color_lessons else 0.0,
+                "confidence": round(mean([float(item.get("confidence", 0)) for item in color_lessons]), 1) if color_lessons else 0.0,
+            }
+        )
+
+    weakest = sorted(
+        repeated_work_lines,
+        key=lambda item: (-float(item.get("value_lost_cp", 0)), -int(item.get("repeat_mistake_count", 0)), -int(item.get("frequency", 0))),
+    )[:5]
+    strongest = sorted(
+        known_lines,
+        key=lambda item: (-int(item.get("repeat_count", 0)), -float(item.get("confidence", 0)), -int(item.get("frequency", 0))),
+    )[:5]
+
+    return {
+        "status": status,
+        "cards": [
+            {
+                "label": "Repertoire health",
+                "value": f"{average_confidence:.0f}",
+                "detail": "average confidence across analyzed repeated positions",
+                "tone": status,
+            },
+            {
+                "label": "Due today",
+                "value": len(queue_due),
+                "detail": f"{due_share}% of analyzed positions need repeated-mistake review",
+                "tone": "urgent" if queue_due else "quiet",
+            },
+            {
+                "label": "Known coverage",
+                "value": f"{known_share:.0f}%",
+                "detail": f"{len(known_lines)} known lines out of {total}",
+                "tone": "strong" if known_share >= 35 else "quiet",
+            },
+            {
+                "label": "Review load",
+                "value": review_load,
+                "detail": "suggested focused lines for today's session",
+                "tone": "heavy" if review_load >= 16 else "stable",
+            },
+        ],
+        "games_count": games_count,
+        "win_rate": win_rate,
+        "coverage_by_color": coverage_by_color,
+        "weakest_lines": [
+            {
+                "lesson_id": item["lesson_id"],
+                "line_label": item["line_label"],
+                "recommended_move": item["recommended_move"],
+                "your_repeated_move": item["your_repeated_move"],
+                "repeat_mistake_count": item["repeat_mistake_count"],
+                "value_lost_cp": item["value_lost_cp"],
+                "frequency": item["frequency"],
+            }
+            for item in weakest
+        ],
+        "strongest_lines": [
+            {
+                "lesson_id": item["lesson_id"],
+                "line_label": item["line_label"],
+                "recommended_move": item["recommended_move"],
+                "repeat_count": item["repeat_count"],
+                "confidence": item["confidence"],
+                "frequency": item["frequency"],
+            }
+            for item in strongest
+        ],
+    }
+
+
+def _build_mistake_heatmap(repeated_work_lines: list[dict[str, Any]]) -> dict[str, Any]:
+    square_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"square": "", "score": 0.0, "sources": 0, "targets": 0, "lines": []})
+    for item in repeated_work_lines:
+        uci = str(item.get("your_repeated_move_uci") or item.get("your_top_move_uci") or "")
+        if len(uci) < 4:
+            continue
+        source, target = uci[:2], uci[2:4]
+        severity = max(1.0, float(item.get("value_lost_cp", 0))) * max(1, int(item.get("repeat_mistake_count", 0)))
+        for square, kind in ((source, "sources"), (target, "targets")):
+            bucket = square_totals[square]
+            bucket["square"] = square
+            bucket["score"] += severity
+            bucket[kind] += 1
+            bucket["lines"].append(
+                {
+                    "lesson_id": item.get("lesson_id", ""),
+                    "line_label": item.get("line_label", ""),
+                    "your_repeated_move": item.get("your_repeated_move", ""),
+                    "recommended_move": item.get("recommended_move", ""),
+                    "repeat_mistake_count": item.get("repeat_mistake_count", 0),
+                }
+            )
+    squares = sorted(square_totals.values(), key=lambda item: -item["score"])[:12]
+    max_score = max([item["score"] for item in squares], default=1.0)
+    for item in squares:
+        item["intensity"] = round((item["score"] / max_score) * 100, 1)
+        item["score"] = round(item["score"], 1)
+        item["lines"] = item["lines"][:3]
+    return {
+        "squares": squares,
+        "top_lines": [
+            {
+                "lesson_id": item["lesson_id"],
+                "line_label": item["line_label"],
+                "your_repeated_move": item["your_repeated_move"],
+                "recommended_move": item["recommended_move"],
+                "repeat_mistake_count": item["repeat_mistake_count"],
+                "value_lost_cp": item["value_lost_cp"],
+            }
+            for item in sorted(repeated_work_lines, key=lambda row: (-row["repeat_mistake_count"], -row["value_lost_cp"]))[:8]
+        ],
+    }
+
+
+def _build_transposition_groups(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for lesson in lessons:
+        key = str(lesson.get("transposition_group_id") or lesson.get("position_identifier") or lesson.get("position_fen") or "")
+        if key:
+            grouped[key].append(lesson)
+
+    groups: list[dict[str, Any]] = []
+    for key, items in grouped.items():
+        labels: list[str] = []
+        moves: list[str] = []
+        for item in items:
+            label = str(item.get("line_label") or item.get("opening_name") or "")
+            if label and label not in labels:
+                labels.append(label)
+            for target in item.get("transposition_targets", []) or []:
+                move_label = str(target.get("san") or target.get("uci") or "")
+                if move_label and move_label not in moves:
+                    moves.append(move_label)
+        if len(items) < 2 and len(moves) < 2:
+            continue
+        sample = items[0]
+        groups.append(
+            {
+                "transposition_group_id": key,
+                "position_fen": sample.get("position_fen", ""),
+                "position_identifier": sample.get("position_identifier", ""),
+                "side_to_move": sample.get("side_to_move", ""),
+                "labels": labels[:5],
+                "moves": moves[:6],
+                "positions": len(items),
+                "frequency": sum(int(item.get("frequency", 0)) for item in items),
+                "confidence": round(mean([float(item.get("confidence", 0)) for item in items]), 1),
+                "lesson_ids": [str(item.get("lesson_id", "")) for item in items[:6] if item.get("lesson_id")],
+            }
+        )
+    return sorted(groups, key=lambda item: (-item["frequency"], -item["positions"]))[:18]
+
+
+def _build_review_schedule(
+    queue_due: list[dict[str, Any]],
+    queue_new: list[dict[str, Any]],
+    known_line_archive: list[dict[str, Any]],
+) -> dict[str, Any]:
+    def compact(item: dict[str, Any], bucket: str) -> dict[str, Any]:
+        confidence = float(item.get("confidence", 0))
+        if bucket == "due":
+            interval = "today"
+        elif confidence >= 80:
+            interval = "14 days"
+        elif confidence >= 55:
+            interval = "7 days"
+        else:
+            interval = "3 days"
+        return {
+            "lesson_id": item.get("lesson_id", ""),
+            "line_label": item.get("line_label", ""),
+            "bucket": bucket,
+            "interval": interval,
+            "confidence": confidence,
+            "repeat_count": item.get("repeat_count", 0),
+            "status": item.get("line_status", ""),
+        }
+
+    return {
+        "due_today": [compact(item, "due") for item in queue_due[:16]],
+        "new_later": [compact(item, "new") for item in queue_new[:12]],
+        "known_archive": [compact(item, "known") for item in known_line_archive[:12]],
+    }
+
+
+def _build_database_training(queue_due: list[dict[str, Any]], queue_new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for item in [*queue_due, *queue_new]:
+        replies = item.get("common_replies") or item.get("database_moves") or []
+        if not replies:
+            continue
+        candidates.append(
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "position_fen": item.get("position_fen", ""),
+                "recommended_move": item.get("recommended_move", ""),
+                "recommended_move_uci": item.get("recommended_move_uci") or item.get("best_reply_uci", ""),
+                "top_database_reply": replies[0],
+                "database_moves": replies[:5],
+                "priority": item.get("priority", 0),
+                "frequency": item.get("frequency", 0),
+            }
+        )
+    return sorted(candidates, key=lambda item: (-float(item.get("priority", 0)), -int(item.get("frequency", 0))))[:20]
+
+
 def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str, Any]:
     nodes, _position_counts, _opening_info = _collect_position_nodes(games)
     analyzed_nodes = _rank_nodes_for_analysis(nodes)
@@ -1551,6 +1791,19 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     game_move_tree = _build_game_move_tree(games)
     total_results = Counter(_classify_result(game.result) for game in games)
     win_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
+    health_dashboard = _build_health_dashboard(
+        lessons=lessons,
+        queue_due=queue_due,
+        queue_new=queue_new,
+        known_lines=known_lines,
+        repeated_work_lines=repeated_work_lines,
+        games_count=len(games),
+        win_rate=win_rate,
+    )
+    mistake_heatmap = _build_mistake_heatmap(repeated_work_lines)
+    transposition_groups = _build_transposition_groups(lessons)
+    review_schedule = _build_review_schedule(queue_due, queue_new, known_line_archive)
+    database_training = _build_database_training(queue_due, queue_new)
     prep_summary = (
         f"Bookup found {len(lessons)} repeated repertoire positions, {len(queue_due)} due lines that need work, and {len(known_lines)} known lines already under control. "
         "Import your games, train the branches you actually reach, and let the database plus Stockfish guide the replies."
@@ -1577,6 +1830,11 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "repertoire_tree": repertoire_tree,
         "game_move_tree": game_move_tree,
         "move_tree": game_move_tree,
+        "health_dashboard": health_dashboard,
+        "mistake_heatmap": mistake_heatmap,
+        "transposition_groups": transposition_groups,
+        "review_schedule": review_schedule,
+        "database_training": database_training,
         "known_lines": known_lines,
         "urgent_lines": urgent_lines,
         "needs_work": queue_due,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import atexit
 import ctypes
+import hashlib
+import io
 import json
 import os
 import sys
@@ -11,11 +13,12 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 import chess
+import chess.pgn
 from flask import Flask, jsonify, render_template, request
 import webview
 
 from .analysis import OPENING_PLIES, analyse_games, build_position_insight, configure_engine_cache, configure_lichess, database_context_for_board, generate_theory_line
-from .chesscom import fetch_archives, fetch_games, normalize_time_classes
+from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_class, normalize_time_classes
 from .classifications import book_classification_payload
 from .engine import EngineSession, EngineSettings, default_engine_path
 from .storage import LocalStore, deserialize_games, serialize_games
@@ -29,7 +32,7 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 10
+PROFILE_SCHEMA_VERSION = 11
 ENGINE_DEFAULTS_VERSION = 2
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EngineSession | None = None
@@ -291,6 +294,53 @@ def serialize_legal_moves(board: chess.Board) -> list[dict]:
             }
         )
     return moves
+
+
+def _result_for_color(result: str, color: str) -> str:
+    if result == "1/2-1/2":
+        return "draw"
+    if result == "1-0":
+        return "win" if color == "white" else "loss"
+    if result == "0-1":
+        return "win" if color == "black" else "loss"
+    return result or "unknown"
+
+
+def import_games_from_pgn_text(pgn_text: str, username: str, fallback_color: str = "white") -> list[ImportedGame]:
+    handle = io.StringIO(pgn_text)
+    games: list[ImportedGame] = []
+    username_lc = username.lower().strip()
+    fallback_color = "black" if fallback_color.lower().strip() == "black" else "white"
+    while True:
+        game = chess.pgn.read_game(handle)
+        if game is None:
+            break
+        headers = game.headers
+        white = str(headers.get("White", "") or "")
+        black = str(headers.get("Black", "") or "")
+        result = str(headers.get("Result", "") or "")
+        if username_lc and white.lower() == username_lc:
+            color = "white"
+            opponent = black or "Unknown"
+        elif username_lc and black.lower() == username_lc:
+            color = "black"
+            opponent = white or "Unknown"
+        else:
+            color = fallback_color
+            opponent = black if color == "white" else white
+            opponent = opponent or "Unknown"
+        games.append(
+            ImportedGame(
+                url=str(headers.get("Link", "") or headers.get("Site", "") or "PGN import"),
+                time_class=infer_time_class(headers),
+                player_color=color,
+                result=_result_for_color(result, color),
+                opponent=opponent,
+                pgn=str(game),
+                game=game,
+            )
+        )
+    return games
 
 
 
@@ -561,6 +611,96 @@ def profile() -> tuple:
             lichess_token=lichess_token,
             cached=False,
             reused_games=reused_games,
+        )
+    )
+
+
+@app.post("/api/import-pgn")
+def import_pgn() -> tuple:
+    payload = request.get_json(force=True)
+    username = str(payload.get("username", "")).strip() or "PGN Player"
+    pgn_text = str(payload.get("pgn", "") or "").strip()
+    if not pgn_text:
+        return jsonify({"error": "Paste one or more PGNs first."}), 400
+
+    fallback_color = str(payload.get("player_color", "white") or "white")
+    games = import_games_from_pgn_text(pgn_text, username, fallback_color=fallback_color)
+    if not games:
+        return jsonify({"error": "No valid PGN games were found."}), 400
+
+    config = migrate_engine_defaults(load_config())
+    lichess_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
+    settings = build_engine_settings(payload)
+    engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
+    if not engine_path:
+        return jsonify({"error": "Stockfish path is required."}), 400
+    configure_lichess(lichess_token)
+
+    save_config(
+        apply_engine_settings_to_config(
+            {
+                "username": username,
+                "time_classes": "pgn",
+                "max_games": len(games),
+                "lichess_token": lichess_token,
+                "engine_path": engine_path,
+            },
+            settings,
+        )
+    )
+
+    try:
+        with ENGINE_LOCK:
+            engine = live_engine_for(settings)
+            profile_data = analyse_games(games, engine)
+    except FileNotFoundError:
+        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
+    except Exception as exc:
+        return jsonify({"error": f"PGN analysis failed: {exc}"}), 500
+
+    serialized_games = serialize_games(games)
+    pgn_hash = hashlib.sha256(pgn_text.encode("utf-8")).hexdigest()
+    request_key = json.dumps(
+        {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "source": "pgn",
+            "username": username,
+            "pgn_hash": pgn_hash,
+            "settings": {
+                "path": settings.path,
+                "depth": settings.depth,
+                "threads": settings.threads,
+                "hash_mb": settings.hash_mb,
+                "multipv": settings.multipv,
+                "think_time_sec": settings.think_time_sec,
+            },
+        },
+        sort_keys=True,
+    )
+    STORE.save_snapshot(
+        username,
+        {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "request_key": request_key,
+            "games_request_key": f"pgn:{pgn_hash}",
+            "archives_found": 0,
+            "games_imported": len(games),
+            "games": serialized_games,
+            "profile": profile_data,
+        },
+    )
+    progress = STORE.load_progress(username)
+    return jsonify(
+        profile_response_payload(
+            username=username,
+            normalized_time_classes=["pgn import"],
+            archives_found=0,
+            games=serialized_games,
+            profile_data=profile_data,
+            progress=progress,
+            lichess_token=lichess_token,
+            cached=False,
+            reused_games=False,
         )
     )
 
