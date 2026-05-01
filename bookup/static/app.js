@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 14;
+const PROFILE_SCHEMA_VERSION = 15;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -96,6 +96,10 @@ const el = {
   driftDetectorPanel: document.getElementById("driftDetectorPanel"),
   prepPackPanel: document.getElementById("prepPackPanel"),
   cacheDashboard: document.getElementById("cacheDashboard"),
+  studyPlanPanel: document.getElementById("studyPlanPanel"),
+  confidenceGraphPanel: document.getElementById("confidenceGraphPanel"),
+  driftFixPanel: document.getElementById("driftFixPanel"),
+  importSpeedPanel: document.getElementById("importSpeedPanel"),
   transpositionList: document.getElementById("transpositionList"),
   previewPanel: document.getElementById("previewPanel"),
   knownArchiveList: document.getElementById("knownArchiveList"),
@@ -104,6 +108,10 @@ const el = {
   theoryPly: document.getElementById("theoryPlyInput"),
   generateTheory: document.getElementById("generateTheoryBtn"),
   theoryOutput: document.getElementById("theoryOutput"),
+  theoryPresetPanel: document.getElementById("theoryPresetPanel"),
+  opponentSimulatorPanel: document.getElementById("opponentSimulatorPanel"),
+  trapFinderPanel: document.getElementById("trapFinderPanel"),
+  repertoireExportPanel: document.getElementById("repertoireExportPanel"),
   urgentList: document.getElementById("urgentList"),
   sidelineList: document.getElementById("sidelineList"),
   suggestionList: document.getElementById("suggestionList"),
@@ -111,6 +119,8 @@ const el = {
   mistakeHeatmap: document.getElementById("mistakeHeatmap"),
   mistakeTimeline: document.getElementById("mistakeTimeline"),
   reviewSchedule: document.getElementById("reviewSchedule"),
+  smartRetryPanel: document.getElementById("smartRetryPanel"),
+  premoveQuizPanel: document.getElementById("premoveQuizPanel"),
   databaseTrainingList: document.getElementById("databaseTrainingList"),
   lessonListDue: document.getElementById("lessonListDue"),
   lessonListNew: document.getElementById("lessonListNew"),
@@ -208,6 +218,8 @@ const state = {
   games: [],
   gameMoveTree: null,
   theoryResult: null,
+  repertoireExportText: "",
+  manualDriftChoices: {},
   analysisProgressTimer: 0,
   prepPackText: "",
 };
@@ -278,6 +290,33 @@ async function init() {
     const exportPrepButton = target.closest("[data-export-prep-pack]");
     if (exportPrepButton instanceof HTMLElement) {
       exportPreparationPack(exportPrepButton);
+      return;
+    }
+    const exportRepertoireButton = target.closest("[data-export-repertoire]");
+    if (exportRepertoireButton instanceof HTMLElement) {
+      exportRepertoireLines(exportRepertoireButton);
+      return;
+    }
+    const driftChoiceButton = target.closest("[data-drift-choice]");
+    const driftChoice = driftChoiceButton instanceof HTMLElement ? driftChoiceButton.dataset.driftChoice : "";
+    if (driftChoice) {
+      saveDriftChoice(driftChoice, driftChoiceButton.dataset.driftAction || "adopt", driftChoiceButton);
+      return;
+    }
+    const theorySeedButton = target.closest("[data-theory-seed]");
+    const theorySeed = theorySeedButton instanceof HTMLElement ? theorySeedButton.dataset.theorySeed : "";
+    if (theorySeed) {
+      if (el.theoryMove) el.theoryMove.value = theorySeed;
+      setActiveTab("theory");
+      void generateTheoryLine();
+      return;
+    }
+    const openFenButton = target.closest("[data-open-fen]");
+    const openFen = openFenButton instanceof HTMLElement ? openFenButton.dataset.openFen : "";
+    if (openFen) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openFenOnAnalysisBoard(openFen, openFenButton.dataset.openLabel || "Analysis position");
       return;
     }
     const trainerMoveButton = target.closest("[data-trainer-move]");
@@ -711,7 +750,7 @@ function updateDragGhostPosition(clientX, clientY) {
 
 function beginPieceDrag(squareName, piece, event) {
   const lesson = currentLesson();
-  if (!lesson || !canUserInteract(lesson)) return;
+  if (lesson && !canUserInteract(lesson)) return;
   if (!isSquareMovableByUser(squareName, lesson)) return;
   event.preventDefault();
   event.stopPropagation();
@@ -966,6 +1005,7 @@ async function bootstrapLocalState() {
       state.reviewStats = payload.training_progress || {};
       state.manualNeedsWork = payload.training_summary?.manual_needs_work || [];
       state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
+      state.manualDriftChoices = payload.training_summary?.manual_drift_choices || {};
       state.games = payload.games || [];
       renderProfile(state.payload);
       setProgress(
@@ -1007,6 +1047,7 @@ function renderProfile(payload) {
   state.gameMoveTree = profile.game_move_tree || profile.move_tree || null;
   state.manualNeedsWork = (payload.training_summary?.manual_needs_work || []);
   state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
+  state.manualDriftChoices = payload.training_summary?.manual_drift_choices || {};
   rebuildQueue();
 
   el.heroTitle.textContent = `${payload.username} repertoire ready`;
@@ -1024,6 +1065,10 @@ function renderProfile(payload) {
   renderMemoryScores(profile.memory_scores || null);
   renderOpeningDrift(profile.opening_drift || null);
   renderPrepPack(profile.prep_pack || null);
+  renderStudyPlan(profile.study_plan || null);
+  renderConfidenceGraph(profile.confidence_graph || null);
+  renderDriftFixes(profile.drift_fixes || null);
+  renderImportSpeed(profile.import_speed_report || null);
   void refreshCacheDashboard();
   renderKnownArchive(profile.known_line_archive || []);
   renderTranspositionGroups(profile.transposition_groups || []);
@@ -1035,7 +1080,13 @@ function renderProfile(payload) {
   renderMistakeHeatmap(profile.mistake_heatmap || null);
   renderMistakeTimeline(profile.mistake_timeline || null);
   renderReviewSchedule(profile.review_schedule || null);
+  renderSmartRetry(profile.smart_retry || null);
+  renderPremoveQuiz(profile.premove_quiz || null);
   renderDatabaseTraining(profile.database_training || []);
+  renderTheoryPresets(profile.theory_v2 || null);
+  renderOpponentSimulator(profile.opponent_simulator || null);
+  renderTrapFinder(profile.blunder_traps || null);
+  renderRepertoireExport(profile.repertoire_export || null);
   renderQueue();
   clearPreview();
 
@@ -1470,6 +1521,246 @@ function renderReviewSchedule(schedule) {
   `).join("");
 }
 
+function renderStudyPlan(plan) {
+  if (!el.studyPlanPanel) return;
+  const blocks = plan?.blocks || [];
+  if (!blocks.length) {
+    el.studyPlanPanel.className = "stack empty";
+    el.studyPlanPanel.textContent = "Bookup will build a short session plan after import.";
+    return;
+  }
+  el.studyPlanPanel.className = "stack";
+  el.studyPlanPanel.innerHTML = `
+    <div class="study-plan-summary">
+      <strong>${Number(plan.estimated_minutes || 0)} min</strong>
+      <span>${escapeHtml(plan.summary || "Today's training plan is ready.")}</span>
+    </div>
+    ${blocks.map((block) => `
+      <article class="plan-block">
+        <div class="line-card-header">
+          <div>
+            <div class="line-title">${escapeHtml(block.title || "Study block")}</div>
+            <div class="line-note">${escapeHtml(block.goal || "")}</div>
+          </div>
+          <span class="line-badge">${Number(block.minutes || 0)} min</span>
+        </div>
+        ${(block.items || []).slice(0, 4).map((item) => item.lesson_id ? `
+          <button class="schedule-row" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+            <strong>${escapeHtml(item.line_label || item.opponent_reply || "Study item")}</strong>
+            <span>${escapeHtml(item.recommended_move || item.response || "")}</span>
+          </button>
+        ` : `<div class="line-note">${escapeHtml(item.line_label || item.opponent_reply || "Study item")}</div>`).join("") || `<div class="line-note">Nothing needed in this block yet.</div>`}
+      </article>
+    `).join("")}
+  `;
+}
+
+function renderConfidenceGraph(graph) {
+  if (!el.confidenceGraphPanel) return;
+  const buckets = graph?.buckets || [];
+  if (!buckets.length) {
+    el.confidenceGraphPanel.className = "stack empty";
+    el.confidenceGraphPanel.textContent = "Line confidence distribution will show up here.";
+    return;
+  }
+  el.confidenceGraphPanel.className = "stack";
+  el.confidenceGraphPanel.innerHTML = `
+    <div class="confidence-total">${Number(graph.total || 0)} analyzed repertoire positions</div>
+    <div class="confidence-bars">
+      ${buckets.map((bucket) => `
+        <div class="confidence-row ${escapeHtml(bucket.tone || "")}">
+          <span>${escapeHtml(bucket.label)}</span>
+          <div class="confidence-bar"><b style="width:${Math.max(3, Number(bucket.pct || 0))}%"></b></div>
+          <strong>${Number(bucket.count || 0)}</strong>
+        </div>
+      `).join("")}
+    </div>
+    <div class="mini-card-list">
+      ${(graph.slipping_lines || []).slice(0, 3).map((item) => `
+        <button class="mini-card fragile" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+          <strong>${escapeHtml(item.line_label)}</strong>
+          <span>${Math.round(Number(item.confidence || 0))} confidence · ${escapeHtml(item.recommended_move || "")}</span>
+        </button>
+      `).join("") || `<div class="line-note">No slipping repeated lines.</div>`}
+    </div>
+  `;
+}
+
+function renderDriftFixes(fixes) {
+  if (!el.driftFixPanel) return;
+  const actions = fixes?.actions || [];
+  if (!actions.length) {
+    el.driftFixPanel.className = "stack empty";
+    el.driftFixPanel.textContent = fixes?.summary || "No first-move drift needs action.";
+    return;
+  }
+  el.driftFixPanel.className = "stack";
+  el.driftFixPanel.innerHTML = `
+    <div class="line-note">${escapeHtml(fixes.summary || "")}</div>
+    ${actions.map((action) => {
+      const saved = state.manualDriftChoices?.[action.id] || "";
+      return `
+        <article class="drift-fix-card">
+          <div class="line-card-header">
+            <div>
+              <div class="line-title">${escapeHtml(action.move)} as ${escapeHtml(action.color)}</div>
+              <div class="tree-meta">${Number(action.recent_pct || 0)}% recent · ${Number(action.overall_pct || 0)}% overall · ${Number(action.drift || 0)} drift</div>
+            </div>
+            ${saved ? `<span class="line-badge known">${escapeHtml(saved)}</span>` : ""}
+          </div>
+          <div class="chip-row">
+            <button class="launch-btn" type="button" data-drift-choice="${escapeHtml(action.id)}" data-drift-action="adopt">${escapeHtml(action.adopt_text)}</button>
+            <button class="ghost-btn" type="button" data-drift-choice="${escapeHtml(action.id)}" data-drift-action="repair">${escapeHtml(action.repair_text)}</button>
+          </div>
+        </article>
+      `;
+    }).join("")}
+  `;
+}
+
+function renderImportSpeed(report) {
+  if (!el.importSpeedPanel) return;
+  if (!report) {
+    el.importSpeedPanel.className = "stack empty";
+    el.importSpeedPanel.textContent = "Import and cache diagnostics will show up here.";
+    return;
+  }
+  const cards = [
+    ["Games indexed", report.games_indexed],
+    ["Positions indexed", report.positions_indexed],
+    ["Repeated positions", report.repeated_positions],
+    ["Analyzed", report.positions_analyzed],
+    ["Lessons", report.lessons_created],
+    ["Skipped by filter", report.positions_skipped],
+  ];
+  el.importSpeedPanel.className = "stack";
+  el.importSpeedPanel.innerHTML = `
+    <div class="speed-grid">
+      ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${Number(value || 0)}</strong></div>`).join("")}
+    </div>
+    <div class="line-note">${escapeHtml(report.cache_key || "engine cache")}</div>
+    ${(report.notes || []).map((note) => `<div class="line-note">- ${escapeHtml(note)}</div>`).join("")}
+  `;
+}
+
+function renderSmartRetry(retry) {
+  if (!el.smartRetryPanel) return;
+  const deck = retry?.deck || [];
+  if (!deck.length) {
+    el.smartRetryPanel.className = "stack empty";
+    el.smartRetryPanel.textContent = "Smart retry cards will show up when repeated misses are due.";
+    return;
+  }
+  el.smartRetryPanel.className = "stack";
+  el.smartRetryPanel.innerHTML = deck.slice(0, 10).map((item) => `
+    <button class="line-card retry-card" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+      <div class="line-card-header">
+        <div class="line-title">${escapeHtml(item.line_label)}</div>
+        <span class="line-badge needs-work">${escapeHtml(item.retry_interval || "retry")}</span>
+      </div>
+      <div class="line-note">${escapeHtml(item.reason || "")}</div>
+      <div class="line-preview">Play ${escapeHtml(item.recommended_move || "")}</div>
+    </button>
+  `).join("");
+}
+
+function renderPremoveQuiz(quiz) {
+  if (!el.premoveQuizPanel) return;
+  const cards = quiz?.cards || [];
+  if (!cards.length) {
+    el.premoveQuizPanel.className = "stack empty";
+    el.premoveQuizPanel.textContent = "Pre-move quiz cards will show up here.";
+    return;
+  }
+  el.premoveQuizPanel.className = "stack";
+  el.premoveQuizPanel.innerHTML = cards.slice(0, 10).map((item) => `
+    <article class="quiz-card">
+      <strong>${escapeHtml(item.prompt || "What would you play here?")}</strong>
+      <div class="line-note">Answer: ${escapeHtml(item.answer || "")}</div>
+      <div class="chip-row">
+        <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Try on board</button>
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderTheoryPresets(theory) {
+  if (!el.theoryPresetPanel) return;
+  const seeds = theory?.seeds || [];
+  if (!seeds.length) {
+    el.theoryPresetPanel.className = "stack empty";
+    el.theoryPresetPanel.textContent = "Bookup will suggest theory seeds after import.";
+    return;
+  }
+  el.theoryPresetPanel.className = "stack";
+  el.theoryPresetPanel.innerHTML = seeds.slice(0, 10).map((seed) => `
+    <button class="mini-card theory-seed" type="button" data-theory-seed="${escapeHtml(seed.move || "")}">
+      <strong>${escapeHtml(seed.label || "Generate theory")}</strong>
+      <span>${escapeHtml(seed.line_label || "")} · ${escapeHtml(seed.move || "")}</span>
+    </button>
+  `).join("");
+}
+
+function renderOpponentSimulator(simulator) {
+  if (!el.opponentSimulatorPanel) return;
+  const scenarios = simulator?.scenarios || [];
+  if (!scenarios.length) {
+    el.opponentSimulatorPanel.className = "stack empty";
+    el.opponentSimulatorPanel.textContent = "Opponent simulator scenarios will show up here.";
+    return;
+  }
+  el.opponentSimulatorPanel.className = "stack";
+  el.opponentSimulatorPanel.innerHTML = scenarios.slice(0, 8).map((scenario) => `
+    <article class="line-card simulator-card">
+      <div class="line-card-header">
+        <div class="line-title">${escapeHtml(scenario.line_label || "Scenario")}</div>
+        <span class="line-badge">${Number(scenario.popularity || 0)}%</span>
+      </div>
+      <div class="line-note">Opponent tries <strong>${escapeHtml(scenario.opponent_reply || "common reply")}</strong>; answer <strong>${escapeHtml(scenario.response || "")}</strong>.</div>
+      <button class="launch-btn" type="button" data-work-line="${escapeHtml(scenario.lesson_id)}">Practice scenario</button>
+    </article>
+  `).join("");
+}
+
+function renderTrapFinder(traps) {
+  if (!el.trapFinderPanel) return;
+  const items = traps?.items || [];
+  if (!items.length) {
+    el.trapFinderPanel.className = "stack empty";
+    el.trapFinderPanel.textContent = "No high-signal trap candidates yet.";
+    return;
+  }
+  el.trapFinderPanel.className = "stack";
+  el.trapFinderPanel.innerHTML = items.slice(0, 8).map((item) => `
+    <article class="line-card trap-card">
+      <div class="line-card-header">
+        <div>
+          <div class="line-title">${escapeHtml(item.line_label || "Trap")}</div>
+          <div class="tree-meta">Trigger: ${escapeHtml(item.trigger || "common reply")}</div>
+        </div>
+        <span class="line-badge needs-work">${Number(item.value_lost_cp || 0) || Number(item.frequency || 0)}</span>
+      </div>
+      <div class="line-note">Punish with <strong>${escapeHtml(item.punish_with || "")}</strong>. ${escapeHtml(item.why || "")}</div>
+      <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work trap</button>
+    </article>
+  `).join("");
+}
+
+function renderRepertoireExport(exportPayload) {
+  if (!el.repertoireExportPanel) return;
+  state.repertoireExportText = exportPayload?.text || "";
+  if (!state.repertoireExportText) {
+    el.repertoireExportPanel.className = "stack empty";
+    el.repertoireExportPanel.textContent = "Export will show up here after import.";
+    return;
+  }
+  el.repertoireExportPanel.className = "stack";
+  el.repertoireExportPanel.innerHTML = `
+    <div class="line-note">${Number(exportPayload.line_count || 0)} prepared lines ready to export.</div>
+    <button class="launch-btn" type="button" data-export-repertoire="true">Download repertoire export</button>
+  `;
+}
+
 function renderDatabaseTraining(items) {
   if (!el.databaseTrainingList) return;
   if (!items.length) {
@@ -1664,6 +1955,31 @@ async function openMoveTreePosition(fen, label = "", perspective = "") {
   renderStudyWorkspace();
   el.boardTitle.textContent = label ? `Tree position after ${label}` : "Move tree position";
   el.boardSummary.textContent = "Loaded from your imported move tree. You can now explore it freely on the analysis board.";
+  await refreshLegalMoves(fen);
+  renderBoard(fen, { animate: false });
+  await updateFreeAnalysisInsight();
+}
+
+async function openFenOnAnalysisBoard(fen, label = "Analysis position") {
+  if (!fen) return;
+  state.activeLessonId = "";
+  state.previewLessonId = "";
+  state.boardFen = fen;
+  state.startFen = fen;
+  state.selectedSquare = "";
+  state.dragFrom = "";
+  state.lastMove = null;
+  state.lastMoveClassification = null;
+  state.currentInsight = null;
+  state.currentInsightKey = "";
+  state.playedTrainingLine = [];
+  state.playedTrainingLineSan = [];
+  setActiveTab("trainer");
+  renderCoords();
+  renderBoard(fen, { animate: false });
+  renderStudyWorkspace();
+  if (el.boardTitle) el.boardTitle.textContent = label;
+  if (el.boardSummary) el.boardSummary.textContent = "Loaded as a free analysis position. You can drag or click any legal move for the side to move.";
   await refreshLegalMoves(fen);
   renderBoard(fen, { animate: false });
   await updateFreeAnalysisInsight();
@@ -2754,6 +3070,21 @@ function saveManualRepertoireMove(lessonId) {
   }
 }
 
+function saveDriftChoice(choiceId, action, button) {
+  if (!choiceId) return;
+  state.manualDriftChoices[choiceId] = action === "repair" ? "repair" : "adopt";
+  if (state.payload?.username) {
+    saveReviewStats(state.payload.username);
+    void persistReviewStats(state.payload.username);
+  }
+  if (button instanceof HTMLElement) {
+    const original = button.textContent;
+    button.textContent = "Saved";
+    window.setTimeout(() => { button.textContent = original || "Saved"; }, 1000);
+  }
+  renderDriftFixes(state.payload?.profile?.drift_fixes || null);
+}
+
 function exportPreparationPack(button) {
   const text = state.prepPackText || prepPackToText(state.payload?.profile?.prep_pack || null);
   if (!text) return;
@@ -2768,6 +3099,24 @@ function exportPreparationPack(button) {
   URL.revokeObjectURL(url);
   button.textContent = "Exported";
   setTimeout(() => { button.textContent = "Export prep pack"; }, 1400);
+}
+
+function exportRepertoireLines(button) {
+  const text = state.repertoireExportText || state.payload?.profile?.repertoire_export?.text || "";
+  if (!text) return;
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = state.payload?.profile?.repertoire_export?.filename || `bookup-repertoire-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  if (button instanceof HTMLElement) {
+    button.textContent = "Downloaded";
+    setTimeout(() => { button.textContent = "Download repertoire export"; }, 1400);
+  }
 }
 
 function renderMistakes(items) {
@@ -4156,6 +4505,7 @@ function buildReviewSummary() {
     wrong_attempts: wrong,
     manual_needs_work: state.manualNeedsWork,
     manual_repertoire: state.manualRepertoire,
+    manual_drift_choices: state.manualDriftChoices,
     last_saved_at: new Date().toISOString(),
   };
 }

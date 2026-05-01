@@ -193,6 +193,26 @@
             <div id="cacheDashboard" class="stack empty">Cache stats will show after Bookup loads.</div>
           </article>
         </div>
+        <div class="split-grid intelligence-grid">
+          <article class="card">
+            <h3>Study Plan Generator</h3>
+            <div id="studyPlanPanel" class="stack empty">Bookup will build a short session plan after import.</div>
+          </article>
+          <article class="card">
+            <h3>Confidence Graph</h3>
+            <div id="confidenceGraphPanel" class="stack empty">Line confidence distribution will show up here.</div>
+          </article>
+        </div>
+        <div class="split-grid intelligence-grid">
+          <article class="card">
+            <h3>Drift Fixes</h3>
+            <div id="driftFixPanel" class="stack empty">If your first moves drift, Bookup will suggest whether to adopt or repair them.</div>
+          </article>
+          <article class="card">
+            <h3>Import Speed Dashboard</h3>
+            <div id="importSpeedPanel" class="stack empty">Import and cache diagnostics will show up here.</div>
+          </article>
+        </div>
       </section>
 
       <section class="section-block">
@@ -277,6 +297,18 @@
         <h2 class="section-title">Maintenance schedule</h2>
         <div id="reviewSchedule" class="stack empty">Review schedule will show up here.</div>
       </section>
+
+      <section class="section-block">
+        <div class="section-label">Smart Retry</div>
+        <h2 class="section-title">Repeat the exact positions that are not sticking yet</h2>
+        <div id="smartRetryPanel" class="stack empty">Smart retry cards will show up here.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Pre-Move Quiz</div>
+        <h2 class="section-title">Quick prompts before you enter the trainer</h2>
+        <div id="premoveQuizPanel" class="stack empty">Pre-move quiz cards will show up here.</div>
+      </section>
     </section>
 
     <section class="workspace-panel" data-tab-panel="review">
@@ -316,9 +348,29 @@
           <div id="theoryOutput" class="theory-output empty">Generated theory will show up here.</div>
 
           <div class="section-divider"></div>
+          <div class="section-label">Theory Presets</div>
+          <h2 class="section-title compact-title">One-click seeds from your repertoire</h2>
+          <div id="theoryPresetPanel" class="stack empty">Bookup will suggest theory seeds after import.</div>
+
+          <div class="section-divider"></div>
           <div class="section-label">Response Builder</div>
           <h2 class="section-title compact-title">Prepare against common replies</h2>
           <div id="databaseTrainingList" class="stack empty">Database-weighted training replies will show up here.</div>
+
+          <div class="section-divider"></div>
+          <div class="section-label">Opponent Simulator</div>
+          <h2 class="section-title compact-title">Practice the moves people actually play</h2>
+          <div id="opponentSimulatorPanel" class="stack empty">Opponent simulator scenarios will show up here.</div>
+
+          <div class="section-divider"></div>
+          <div class="section-label">Blunder Trap Finder</div>
+          <h2 class="section-title compact-title">Common replies with concrete punishments</h2>
+          <div id="trapFinderPanel" class="stack empty">Trap candidates will show up here.</div>
+
+          <div class="section-divider"></div>
+          <div class="section-label">Repertoire Export</div>
+          <h2 class="section-title compact-title">Save your prepared lines</h2>
+          <div id="repertoireExportPanel" class="stack empty">Export will show up here after import.</div>
         </aside>
       </div>
     </section>

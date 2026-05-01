@@ -2271,6 +2271,314 @@ def _build_prep_pack(
     }
 
 
+def _compact_training_card(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "lesson_id": item.get("lesson_id", ""),
+        "line_label": item.get("line_label", ""),
+        "opening_name": item.get("opening_name", ""),
+        "opening_code": item.get("opening_code", ""),
+        "position_fen": item.get("position_fen", ""),
+        "recommended_move": item.get("recommended_move", ""),
+        "your_repeated_move": item.get("your_repeated_move", item.get("your_top_move", "")),
+        "continuation_san": item.get("continuation_san", ""),
+        "frequency": item.get("frequency", 0),
+        "priority": item.get("priority", 0),
+        "repeat_count": item.get("repeat_count", 0),
+        "repeat_mistake_count": item.get("repeat_mistake_count", 0),
+        "confidence": item.get("confidence", 0),
+        "memory_score": item.get("memory_score", 0),
+        "line_status": item.get("line_status", ""),
+        "classification": item.get("recommended_classification") or {},
+    }
+
+
+def _build_study_plan(
+    queue_due: list[dict[str, Any]],
+    queue_new: list[dict[str, Any]],
+    known_line_archive: list[dict[str, Any]],
+    memory_scores: dict[str, Any],
+    database_training: list[dict[str, Any]],
+) -> dict[str, Any]:
+    fragile = memory_scores.get("fragile_lines", []) if memory_scores else []
+    focus = fragile[:4] or queue_due[:4]
+    new_preview = queue_new[:3]
+    replies = database_training[:3]
+    maintenance = known_line_archive[:2]
+    minutes = 8 + (len(focus) * 3) + (len(new_preview) * 2) + (len(replies) * 2)
+    blocks = [
+        {
+            "title": "Warm up known lines",
+            "minutes": 4,
+            "goal": "Start with easy wins so the board feels familiar.",
+            "items": [_compact_training_card(item) for item in maintenance],
+        },
+        {
+            "title": "Repair fragile branches",
+            "minutes": max(6, len(focus) * 3),
+            "goal": "Repeat the exact positions that have the lowest memory score or highest priority.",
+            "items": [_compact_training_card(item) for item in focus],
+        },
+        {
+            "title": "Opponent reply simulator",
+            "minutes": max(4, len(replies) * 2),
+            "goal": "Answer common practical replies from the database, not random engine fantasy.",
+            "items": [
+                {
+                    "lesson_id": item.get("lesson_id", ""),
+                    "line_label": item.get("line_label", ""),
+                    "opponent_reply": (item.get("top_database_reply") or {}).get("san") or (item.get("top_database_reply") or {}).get("uci", ""),
+                    "response": item.get("recommended_move", ""),
+                    "popularity": (item.get("top_database_reply") or {}).get("popularity", 0),
+                }
+                for item in replies
+            ],
+        },
+        {
+            "title": "Preview new branches",
+            "minutes": max(4, len(new_preview) * 2),
+            "goal": "Look at new-but-not-urgent positions without polluting the due queue.",
+            "items": [_compact_training_card(item) for item in new_preview],
+        },
+    ]
+    return {
+        "estimated_minutes": minutes,
+        "summary": f"{minutes} minute session: repair {len(focus)} fragile branches, rehearse {len(replies)} common replies, and preview {len(new_preview)} new lines.",
+        "blocks": blocks,
+    }
+
+
+def _build_confidence_graph(lessons: list[dict[str, Any]]) -> dict[str, Any]:
+    buckets = [
+        {"label": "0-30", "min": 0, "max": 30, "count": 0, "tone": "danger"},
+        {"label": "31-50", "min": 31, "max": 50, "count": 0, "tone": "warn"},
+        {"label": "51-70", "min": 51, "max": 70, "count": 0, "tone": "building"},
+        {"label": "71-85", "min": 71, "max": 85, "count": 0, "tone": "stable"},
+        {"label": "86-100", "min": 86, "max": 100, "count": 0, "tone": "strong"},
+    ]
+    by_status = Counter()
+    for item in lessons:
+        confidence = int(round(float(item.get("confidence", 0) or 0)))
+        by_status[str(item.get("line_status", "unknown"))] += 1
+        for bucket in buckets:
+            if bucket["min"] <= confidence <= bucket["max"]:
+                bucket["count"] += 1
+                break
+    total = max(1, len(lessons))
+    for bucket in buckets:
+        bucket["pct"] = round((bucket["count"] / total) * 100, 1)
+    slipping = sorted(
+        [item for item in lessons if item.get("line_status") == "needs_work"],
+        key=lambda row: (float(row.get("memory_score", 100) or 100), -int(row.get("priority", 0) or 0)),
+    )[:6]
+    locked = sorted(
+        [item for item in lessons if item.get("line_status") == "known"],
+        key=lambda row: (-int(row.get("repeat_count", 0) or 0), -float(row.get("confidence", 0) or 0)),
+    )[:6]
+    return {
+        "total": len(lessons),
+        "buckets": buckets,
+        "by_status": dict(by_status),
+        "slipping_lines": [_compact_training_card(item) for item in slipping],
+        "locked_lines": [_compact_training_card(item) for item in locked],
+    }
+
+
+def _build_drift_fixes(opening_drift: dict[str, Any]) -> dict[str, Any]:
+    actions = []
+    for alert in (opening_drift or {}).get("alerts", [])[:8]:
+        move = alert.get("move", "")
+        color = alert.get("color", "")
+        recent_pct = float(alert.get("recent_pct", 0) or 0)
+        overall_pct = float(alert.get("overall_pct", 0) or 0)
+        if not move:
+            continue
+        actions.append(
+            {
+                "id": f"{color}:{move}",
+                "color": color,
+                "move": move,
+                "recent_pct": round(recent_pct, 1),
+                "overall_pct": round(overall_pct, 1),
+                "drift": round(float(alert.get("drift", 0) or 0), 1),
+                "adopt_text": f"Make {move} my current {color} starter",
+                "repair_text": f"Train back to the older {color} starter mix",
+            }
+        )
+    return {
+        "actions": actions,
+        "summary": "No first-move drift needs action." if not actions else f"{len(actions)} first-move drift action{'s' if len(actions) != 1 else ''} ready.",
+    }
+
+
+def _build_import_speed_report(
+    games: list[ImportedGame],
+    nodes: list[PositionNode],
+    analyzed_nodes: list[PositionNode],
+    lessons: list[dict[str, Any]],
+) -> dict[str, Any]:
+    repeated_nodes = len([node for node in nodes if node.occurrences >= REPEATED_MISTAKE_THRESHOLD])
+    skipped = max(0, len(nodes) - len(analyzed_nodes))
+    return {
+        "games_indexed": len(games),
+        "positions_indexed": len(nodes),
+        "repeated_positions": repeated_nodes,
+        "positions_analyzed": len(analyzed_nodes),
+        "lessons_created": len(lessons),
+        "positions_skipped": skipped,
+        "cache_key": f"engine-v{ENGINE_CACHE_SCHEMA_VERSION}",
+        "notes": [
+            "Repeated transpositions are grouped before analysis.",
+            "Only the highest-signal repeated positions get engine work during import.",
+            "Engine cache keys use normalized FEN, depth, MultiPV, and thinking time.",
+        ],
+    }
+
+
+def _build_repertoire_export(lessons: list[dict[str, Any]], game_move_tree: dict[str, Any]) -> dict[str, Any]:
+    lines = [
+        "# Bookup repertoire export",
+        "# Generated locally from imported games.",
+        "",
+    ]
+    for index, item in enumerate(lessons[:80], start=1):
+        label = item.get("line_label") or item.get("opening_name") or "Repertoire line"
+        move = item.get("recommended_move", "")
+        status = item.get("line_status", "")
+        continuation = item.get("continuation_san") or item.get("training_line_san") or ""
+        lines.append(f"{index}. {label}")
+        lines.append(f"   Status: {status} | Move: {move} | Frequency: {item.get('frequency', 0)}")
+        if continuation:
+            lines.append(f"   Line: {continuation}")
+        lines.append("")
+    root_children = (((game_move_tree or {}).get("root") or {}).get("children") or [])[:12]
+    if root_children:
+        lines.append("# First moves from imported games")
+        for child in root_children:
+            lines.append(f"- {child.get('san', '')}: {child.get('count', 0)} games")
+    return {
+        "filename": "bookup-repertoire-export.txt",
+        "line_count": min(len(lessons), 80),
+        "text": "\n".join(lines).strip() + "\n",
+    }
+
+
+def _build_blunder_traps(
+    queue_due: list[dict[str, Any]],
+    queue_new: list[dict[str, Any]],
+    database_training: list[dict[str, Any]],
+) -> dict[str, Any]:
+    traps = []
+    candidates = queue_due + queue_new
+    for item in candidates:
+        value = int(item.get("value_lost_cp", 0) or 0)
+        spread = max([abs(int(line.get("cp", 0) or 0)) for line in item.get("candidate_lines", [])[:5]] or [0])
+        if value < 70 and spread < 180:
+            continue
+        traps.append(
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "trigger": item.get("trigger_move", ""),
+                "punish_with": item.get("recommended_move", ""),
+                "why": item.get("coach_explanation") or item.get("explanation", ""),
+                "value_lost_cp": value,
+                "frequency": item.get("frequency", 0),
+            }
+        )
+    for reply in database_training[:8]:
+        top_reply = reply.get("top_database_reply") or {}
+        if int(top_reply.get("popularity", 0) or 0) >= 20:
+            traps.append(
+                {
+                    "lesson_id": reply.get("lesson_id", ""),
+                    "line_label": reply.get("line_label", ""),
+                    "trigger": top_reply.get("san") or top_reply.get("uci", ""),
+                    "punish_with": reply.get("recommended_move", ""),
+                    "why": "This reply is common in the database, so having the answer ready is practical prep.",
+                    "value_lost_cp": 0,
+                    "frequency": top_reply.get("popularity", 0),
+                }
+            )
+    unique: dict[str, dict[str, Any]] = {}
+    for trap in traps:
+        key = f"{trap.get('lesson_id')}:{trap.get('trigger')}:{trap.get('punish_with')}"
+        unique[key] = trap
+    return {"items": list(unique.values())[:16]}
+
+
+def _build_premove_quiz(queue_due: list[dict[str, Any]], queue_new: list[dict[str, Any]]) -> dict[str, Any]:
+    source = queue_due[:8] + queue_new[:4]
+    return {
+        "cards": [
+            {
+                **_compact_training_card(item),
+                "prompt": f"What would you play after {item.get('trigger_move') or item.get('line_label', 'this position')}?",
+                "answer": item.get("recommended_move", ""),
+                "hint": item.get("coach_explanation", ""),
+            }
+            for item in source
+        ]
+    }
+
+
+def _build_smart_retry(queue_due: list[dict[str, Any]], memory_scores: dict[str, Any]) -> dict[str, Any]:
+    fragile_ids = {item.get("lesson_id") for item in (memory_scores or {}).get("fragile_lines", [])}
+    deck = []
+    for item in queue_due:
+        misses = int(item.get("repeat_mistake_count", 0) or 0)
+        deck.append(
+            {
+                **_compact_training_card(item),
+                "retry_interval": "again now" if item.get("lesson_id") in fragile_ids or misses >= 3 else "later today",
+                "reason": f"{misses} repeated miss{'es' if misses != 1 else ''} in this exact position.",
+            }
+        )
+    return {"deck": deck[:16]}
+
+
+def _build_opponent_simulator(database_training: list[dict[str, Any]]) -> dict[str, Any]:
+    scenarios = []
+    for item in database_training[:16]:
+        reply = item.get("top_database_reply") or {}
+        scenarios.append(
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "opponent_reply": reply.get("san") or reply.get("uci", ""),
+                "response": item.get("recommended_move", ""),
+                "popularity": reply.get("popularity", 0),
+                "mode": "database" if reply.get("popularity", 0) else "fallback",
+            }
+        )
+    return {"scenarios": scenarios}
+
+
+def _build_theory_v2(database_training: list[dict[str, Any]], queue_due: list[dict[str, Any]]) -> dict[str, Any]:
+    seeds = []
+    for item in database_training[:8]:
+        if item.get("recommended_move_uci"):
+            reply = item.get("top_database_reply") or {}
+            seeds.append(
+                {
+                    "label": f"Against {reply.get('san') or reply.get('uci') or 'common reply'}",
+                    "move": item.get("recommended_move_uci", ""),
+                    "lesson_id": item.get("lesson_id", ""),
+                    "line_label": item.get("line_label", ""),
+                }
+            )
+    for item in queue_due[:6]:
+        if item.get("recommended_move_uci"):
+            seeds.append(
+                {
+                    "label": f"Repair {item.get('line_label', 'line')}",
+                    "move": item.get("recommended_move_uci", ""),
+                    "lesson_id": item.get("lesson_id", ""),
+                    "line_label": item.get("line_label", ""),
+                }
+            )
+    return {"seeds": seeds[:12]}
+
+
 def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str, Any]:
     nodes, _position_counts, _opening_info = _collect_position_nodes(games)
     analyzed_nodes = _rank_nodes_for_analysis(nodes)
@@ -2356,6 +2664,16 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     memory_scores = _build_memory_scores(lessons)
     opening_drift = _build_opening_drift(games)
     prep_pack = _build_prep_pack(queue_due, queue_new, database_training, known_line_archive)
+    study_plan = _build_study_plan(queue_due, queue_new, known_line_archive, memory_scores, database_training)
+    confidence_graph = _build_confidence_graph(lessons)
+    drift_fixes = _build_drift_fixes(opening_drift)
+    import_speed_report = _build_import_speed_report(games, nodes, analyzed_nodes, lessons)
+    repertoire_export = _build_repertoire_export(lessons, game_move_tree)
+    blunder_traps = _build_blunder_traps(queue_due, queue_new, database_training)
+    premove_quiz = _build_premove_quiz(queue_due, queue_new)
+    smart_retry = _build_smart_retry(queue_due, memory_scores)
+    opponent_simulator = _build_opponent_simulator(database_training)
+    theory_v2 = _build_theory_v2(database_training, queue_due)
     prep_summary = (
         f"Bookup found {len(lessons)} repeated repertoire positions, {len(queue_due)} due lines that need work, and {len(known_lines)} known lines already under control. "
         "Import your games, train the branches you actually reach, and let the database plus Stockfish guide the replies."
@@ -2391,6 +2709,16 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "memory_scores": memory_scores,
         "opening_drift": opening_drift,
         "prep_pack": prep_pack,
+        "study_plan": study_plan,
+        "confidence_graph": confidence_graph,
+        "drift_fixes": drift_fixes,
+        "import_speed_report": import_speed_report,
+        "repertoire_export": repertoire_export,
+        "blunder_traps": blunder_traps,
+        "premove_quiz": premove_quiz,
+        "smart_retry": smart_retry,
+        "opponent_simulator": opponent_simulator,
+        "theory_v2": theory_v2,
         "known_lines": known_lines,
         "urgent_lines": urgent_lines,
         "needs_work": queue_due,
