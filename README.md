@@ -13,6 +13,8 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - shows a repertoire health dashboard with coverage, due load, weak branches, and known lines
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
 - uses the Lichess opening database when available for practical move popularity and common replies
+- tracks live book state so `Book` labels stop once a line leaves the opening/repertoire context
+- reuses cached Stockfish position analysis for repeated FEN/settings combinations instead of reanalyzing the same position
 - builds a practical theory tree from imported games, split by games where you played White or Black
 - generates on-demand theory lines from the current position or after a move you want to test
 - builds database-weighted response drills so common replies become trainable lines

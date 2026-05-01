@@ -889,6 +889,9 @@ def annotate_candidate_classifications(
         line["expected_points"] = round(expected_points_from_record(line), 4)
         line["expected_points_loss"] = round(max(0.0, best_expected - float(line.get("expected_points", 0.0))), 4)
     for line in candidate_lines:
+        move_uci = str(line.get("uci", "") or "")
+        repeated_count = int(repeated_counts.get(move_uci, 0) or 0)
+        popularity = float(popularity_by_uci.get(move_uci, 0.0) or 0.0)
         line["classification"] = classify_move_record(
             board,
             line,
@@ -897,7 +900,11 @@ def annotate_candidate_classifications(
             second_loss=second_loss,
             great_keeps_advantage_count=great_keeps_advantage_count,
             opening_phase=opening_phase,
-            in_book=_move_results_in_book(board, str(line.get("uci", "") or "")),
+            in_book=(
+                _move_results_in_book(board, move_uci)
+                or repeated_count >= BOOK_REPEAT_THRESHOLD
+                or popularity >= BOOK_POPULARITY_THRESHOLD
+            ),
         )
         line["classification_label"] = line["classification"]["label"]
         line["classification_icon"] = line["classification"]["icon"]

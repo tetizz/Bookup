@@ -47,7 +47,7 @@ REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
-ENGINE_CACHE_SCHEMA_VERSION = 2
+ENGINE_CACHE_SCHEMA_VERSION = 3
 
 
 @dataclass(slots=True)
@@ -736,6 +736,81 @@ def _resulting_position_is_book(board: chess.Board, move_uci: str) -> bool:
     return bool(str(match.get("name", "") or "").strip() or str(match.get("eco", "") or "").strip())
 
 
+def _position_has_book_name(board: chess.Board) -> bool:
+    match = lookup_by_board(board)
+    return bool(str(match.get("name", "") or "").strip() or str(match.get("eco", "") or "").strip())
+
+
+def _book_state_for_line(play_uci: list[str] | None, board: chess.Board | None = None) -> dict[str, Any]:
+    play_uci = [str(item) for item in (play_uci or []) if str(item)]
+    if len(play_uci) >= OPENING_PLIES:
+        return {
+            "active": False,
+            "reason": "outside opening-book ply window",
+            "ply": len(play_uci),
+            "last_book_ply": OPENING_PLIES,
+            "position_matches_prefix": False if board is not None else True,
+        }
+
+    probe = chess.Board()
+    last_book_ply = 0
+    for ply_index, move_uci in enumerate(play_uci, start=1):
+        try:
+            move = chess.Move.from_uci(move_uci)
+        except ValueError:
+            return {
+                "active": False,
+                "reason": f"invalid move {move_uci} in book path",
+                "ply": ply_index - 1,
+                "last_book_ply": last_book_ply,
+                "position_matches_prefix": False,
+            }
+        if move not in probe.legal_moves:
+            return {
+                "active": False,
+                "reason": f"illegal move {move_uci} in book path",
+                "ply": ply_index - 1,
+                "last_book_ply": last_book_ply,
+                "position_matches_prefix": False,
+            }
+        probe.push(move)
+        if ply_index <= 2 or _position_has_book_name(probe):
+            last_book_ply = ply_index
+            continue
+        return {
+            "active": False,
+            "reason": f"left named opening book after ply {ply_index}",
+            "ply": ply_index,
+            "last_book_ply": last_book_ply,
+            "position_matches_prefix": board.epd() == probe.epd() if board is not None else True,
+        }
+
+    return {
+        "active": True,
+        "reason": "still inside opening-book context",
+        "ply": len(play_uci),
+        "last_book_ply": last_book_ply,
+        "position_matches_prefix": board.epd() == probe.epd() if board is not None else True,
+    }
+
+
+def _move_is_book_candidate(
+    board: chess.Board,
+    move_uci: str,
+    *,
+    book_state: dict[str, Any] | None = None,
+    popularity_by_uci: dict[str, float] | None = None,
+    repeated_count: int = 0,
+) -> bool:
+    if not (book_state or {}).get("active", False):
+        return False
+    if repeated_count >= REPEATED_MISTAKE_THRESHOLD:
+        return True
+    if float((popularity_by_uci or {}).get(move_uci, 0.0) or 0.0) >= 3.0:
+        return True
+    return _resulting_position_is_book(board, move_uci)
+
+
 def _move_purpose(board: chess.Board, move: chess.Move) -> str:
     piece = board.piece_at(move.from_square)
     if piece is None:
@@ -770,7 +845,7 @@ def _candidate_lines_for_board(
     play_uci: list[str] | None = None,
     limit: int = 5,
     time_sec: float | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
     play_uci = play_uci or []
     cache_key = _engine_cache_key(
         "candidate-lines",
@@ -782,7 +857,7 @@ def _candidate_lines_for_board(
     )
     cached = _load_engine_cache(cache_key)
     if cached:
-        return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", []))
+        return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", [])), True
 
     root_lines = engine.analyse(
         board,
@@ -822,10 +897,11 @@ def _candidate_lines_for_board(
                 "popularity": next((item["popularity"] for item in database_moves if item.get("uci") == first_move.uci()), 0.0),
             }
         )
+    book_state = _book_state_for_line(play_uci, board)
     candidate_lines = annotate_candidate_classifications(
         board,
         candidate_lines,
-        opening_phase=len(play_uci) < OPENING_PLIES,
+        opening_phase=bool(book_state.get("active")) and len(play_uci) < OPENING_PLIES,
         popularity_by_uci=popularity_by_uci,
     )
 
@@ -833,7 +909,7 @@ def _candidate_lines_for_board(
         "candidate_lines": list(candidate_lines),
         "database_moves": list(database_moves),
     })
-    return candidate_lines, database_moves
+    return candidate_lines, database_moves, False
 
 
 def _threat_lines_for_board(
@@ -927,7 +1003,9 @@ def build_position_insight(
     your_move_count: int = 0,
     time_sec: float | None = None,
 ) -> dict[str, Any]:
-    candidate_lines, database_moves = _candidate_lines_for_board(
+    play_uci = play_uci or []
+    book_state = _book_state_for_line(play_uci, board)
+    candidate_lines, database_moves, cache_hit = _candidate_lines_for_board(
         board,
         engine,
         play_uci=play_uci,
@@ -942,6 +1020,8 @@ def build_position_insight(
             "database_moves": database_moves,
             "database_error": EXPLORER_LAST_ERROR,
             "database_source": "lichess" if database_moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
+            "book_state": book_state,
+            "cache_hit": cache_hit,
             "recommended_move": "",
             "recommended_move_uci": "",
             "recommended_classification": None,
@@ -950,6 +1030,11 @@ def build_position_insight(
             "position_identifier": _analysis_url_for_fen(board.fen()),
         }
     your_move_classification = None
+    popularity_by_uci = {
+        str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
+        for item in database_moves
+        if item.get("uci")
+    }
     if your_move_uci:
         your_line = next((line for line in candidate_lines if line["uci"] == your_move_uci), None)
         if your_line is None:
@@ -972,8 +1057,14 @@ def build_position_insight(
                 second_record=candidate_lines[1] if len(candidate_lines) > 1 else None,
                 second_loss=second_loss,
                 is_player_move=True,
-                opening_phase=len(play_uci or []) < OPENING_PLIES,
-                in_book=_resulting_position_is_book(board, your_move_uci),
+                opening_phase=bool(book_state.get("active")) and len(play_uci) < OPENING_PLIES,
+                in_book=_move_is_book_candidate(
+                    board,
+                    your_move_uci,
+                    book_state=book_state,
+                    popularity_by_uci=popularity_by_uci,
+                    repeated_count=your_move_count,
+                ),
             )
     return {
         "candidate_lines": candidate_lines,
@@ -981,6 +1072,8 @@ def build_position_insight(
         "database_moves": database_moves,
         "database_error": EXPLORER_LAST_ERROR,
         "database_source": "lichess" if database_moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
+        "book_state": book_state,
+        "cache_hit": cache_hit,
         "recommended_move": best_line["move"],
         "recommended_move_uci": best_line["uci"],
         "recommended_classification": best_line.get("classification"),
@@ -1033,7 +1126,7 @@ def generate_theory_line(
     for index in range(requested_plies):
         if work_board.is_game_over(claim_draw=True):
             break
-        candidate_lines, database_moves = _candidate_lines_for_board(
+        candidate_lines, database_moves, cache_hit = _candidate_lines_for_board(
             work_board,
             engine,
             play_uci=[],
@@ -1067,6 +1160,7 @@ def generate_theory_line(
                 "classification": best.get("classification"),
                 "candidate_lines": candidate_lines,
                 "database_moves": database_moves,
+                "cache_hit": cache_hit,
             }
         )
 
@@ -1385,14 +1479,26 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
     if not preferred_branch:
         return {}
     second_loss = candidate_lines[1]["expected_points_loss"] if len(candidate_lines) > 1 else 0.0
+    book_state = _book_state_for_line(node.play_uci, board)
+    popularity_by_uci = {
+        str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
+        for item in database_moves
+        if item.get("uci")
+    }
     recommended_classification = root.get("classification") or classify_move_record(
         board,
         root,
         root,
         second_record=candidate_lines[1] if len(candidate_lines) > 1 else None,
         second_loss=second_loss,
-        opening_phase=node.ply_index < OPENING_PLIES,
-        in_book=_resulting_position_is_book(board, best_move_uci),
+        opening_phase=bool(book_state.get("active")) and node.ply_index < OPENING_PLIES,
+        in_book=_move_is_book_candidate(
+            board,
+            best_move_uci,
+            book_state=book_state,
+            popularity_by_uci=popularity_by_uci,
+            repeated_count=best_repeat_count,
+        ),
     )
     your_branch = branch_by_uci.get(top_played_uci) or next((line for line in candidate_lines if line["uci"] == top_played_uci), None)
     your_move_classification = None
@@ -1404,8 +1510,14 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
             second_record=candidate_lines[1] if len(candidate_lines) > 1 else None,
             second_loss=second_loss,
             is_player_move=True,
-            opening_phase=node.ply_index < OPENING_PLIES,
-            in_book=_resulting_position_is_book(board, top_played_uci),
+            opening_phase=bool(book_state.get("active")) and node.ply_index < OPENING_PLIES,
+            in_book=_move_is_book_candidate(
+                board,
+                top_played_uci,
+                book_state=book_state,
+                popularity_by_uci=popularity_by_uci,
+                repeated_count=top_played_count,
+            ),
         )
 
     locked_training_line_uci = [*node.play_uci, *preferred_branch["line_uci"]]

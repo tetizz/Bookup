@@ -1945,6 +1945,15 @@ function currentEvalCpForStudy(lesson = currentLesson(), insight = currentLiveIn
   );
 }
 
+function insightStatusLabel(insight) {
+  const parts = [];
+  if (insight?.cache_hit) parts.push("cache hit");
+  if (insight?.book_state) {
+    parts.push(insight.book_state.active ? "book active" : "out of book");
+  }
+  return parts.join(" | ");
+}
+
 function renderEmptyStudyWorkspace() {
   state.lastEvalCp = null;
   state.currentInsight = null;
@@ -1980,7 +1989,11 @@ function renderEmptyStudyWorkspace() {
     el.studyPositionLinks.innerHTML = renderStudyLinksMarkup([]);
   }
   if (el.studyAnalysisMeta) {
-    el.studyAnalysisMeta.textContent = `Depth ${el.studyDepth?.value || el.depth?.value || "--"} | ${currentThinkTimeLabel()} | MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`;
+    el.studyAnalysisMeta.textContent = joinMetaParts([
+      `Depth ${el.studyDepth?.value || el.depth?.value || "--"}`,
+      currentThinkTimeLabel(),
+      `MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`,
+    ]);
   }
   if (el.studyDatabaseMeta) {
     el.studyDatabaseMeta.textContent = "No position loaded";
@@ -2049,7 +2062,13 @@ function renderFreeStudyWorkspace() {
     el.studyPositionLinks.innerHTML = renderStudyLinksMarkup(positionLinks);
   }
   if (el.studyAnalysisMeta) {
-    el.studyAnalysisMeta.textContent = `Depth ${el.studyDepth?.value || el.depth?.value || "--"} | ${currentThinkTimeLabel()} | MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`;
+    const status = insightStatusLabel(insight);
+    el.studyAnalysisMeta.textContent = joinMetaParts([
+      `Depth ${el.studyDepth?.value || el.depth?.value || "--"}`,
+      currentThinkTimeLabel(),
+      `MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`,
+      status,
+    ]);
   }
   if (el.studyDatabaseMeta) {
     el.studyDatabaseMeta.textContent = explorerEnabled ? "Lichess practical replies" : "Fallback / cached moves";
@@ -2169,7 +2188,13 @@ function renderStudyWorkspace() {
   }
 
   if (el.studyAnalysisMeta) {
-    el.studyAnalysisMeta.textContent = `Depth ${el.studyDepth?.value || el.depth?.value || "--"} | ${currentThinkTimeLabel()} | MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`;
+    const status = insightStatusLabel(insight);
+    el.studyAnalysisMeta.textContent = joinMetaParts([
+      `Depth ${el.studyDepth?.value || el.depth?.value || "--"}`,
+      currentThinkTimeLabel(),
+      `MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`,
+      status,
+    ]);
   }
 
   if (el.studyDatabaseMeta) {
@@ -2847,11 +2872,23 @@ function localMoveClassification(key, reason) {
   };
 }
 
+function isInstantBookMove(lesson, move) {
+  const insight = currentLiveInsight(lesson);
+  const bookState = insight?.book_state || null;
+  if (bookState && bookState.active === false) return false;
+  const moveUci = String(move?.uci || "");
+  if (!moveUci || currentPlyEstimate(state.boardFen) >= 16) return false;
+  if (lesson && findBranchLine(lesson, moveUci)) return true;
+  const dbMove = (insight?.database_moves || []).find((item) => item?.uci === moveUci);
+  if (dbMove && Number(dbMove.popularity || 0) >= 3) return true;
+  return Boolean(bookState?.active && (insight?.candidate_lines || []).some((line) => line?.uci === moveUci && classificationKey(line?.classification) === "book"));
+}
+
 function instantMoveClassification(lesson, move) {
   const insight = currentLiveInsight(lesson);
   const candidate = (insight?.candidate_lines || []).find((line) => line?.uci === move?.uci);
   if (candidate?.classification) return candidate.classification;
-  if (currentPlyEstimate(state.boardFen) < 16) {
+  if (isInstantBookMove(lesson, move)) {
     return localMoveClassification("book", "opening book move");
   }
   return null;
@@ -3371,10 +3408,31 @@ async function updateFreeAnalysisInsight() {
   const requestId = ++state.insightRequestId;
   const cacheKey = `free:${normalizeFen(state.boardFen)}:${currentPlayedLine().join(" ")}`;
   state.insightLoading = true;
+  const cached = state.positionInsightCache[cacheKey] || null;
+  if (cached) {
+    state.currentInsight = cached;
+    state.currentInsightKey = cacheKey;
+    state.lastEvalCp = Number(
+      cached?.eval_cp_white
+        ?? cached?.candidate_lines?.[0]?.score_cp_white
+        ?? cached?.candidate_lines?.[0]?.score_cp
+        ?? state.lastEvalCp
+        ?? 0
+    );
+    state.insightLoading = false;
+    renderArrows(cached);
+    if (el.trainerInsight) {
+      el.trainerInsight.textContent = cached.coach_explanation || "Loaded cached analysis for this position.";
+      el.trainerInsight.classList.remove("empty");
+    }
+    renderStudyWorkspace();
+    return;
+  }
   renderStudyWorkspace();
   try {
     const insight = await fetchPositionInsight(state.boardFen, currentPlayedLine(), "", "", 0);
     if (state.activeLessonId || requestId !== state.insightRequestId) return;
+    state.positionInsightCache[cacheKey] = insight;
     state.currentInsight = insight;
     state.currentInsightKey = cacheKey;
     state.insightLoading = false;
@@ -3397,6 +3455,7 @@ async function updateFreeAnalysisInsight() {
       if (state.activeLessonId || requestId !== state.insightRequestId) return;
       state.currentInsight = mergeDatabaseContext(state.currentInsight, databaseContext);
       state.currentInsightKey = cacheKey;
+      state.positionInsightCache[cacheKey] = state.currentInsight;
     } catch {
       // Keep the last visible study state when live refreshes fail.
     }
@@ -3776,7 +3835,6 @@ async function submitFreeAnalysisMove(from, to) {
       applyResolvedMoveClassification(move.uci, classification, appliedFen);
     });
     appendPlayedMove(move.uci, payload.played_san || move.san);
-    state.positionInsightCache = {};
     state.currentInsight = null;
     state.currentInsightKey = "";
     el.boardLine.textContent = currentPlayedLineSan().join(" ") || "No line loaded yet.";
