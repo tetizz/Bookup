@@ -111,6 +111,27 @@ class LocalStore:
         cached["saved_at"] = datetime.now(timezone.utc).isoformat()
         self._write_json(self._shared_cache_path("engine", key), cached)
 
+    def cache_stats(self, username: str = "") -> dict[str, Any]:
+        shared_engine_dir = self.root / "_shared" / "cache" / "engine"
+        engine_files = list(shared_engine_dir.glob("*.json")) if shared_engine_dir.exists() else []
+        engine_bytes = sum(path.stat().st_size for path in engine_files if path.exists())
+        user_dir = self._user_dir(username) if username else None
+        profile_dir = user_dir / "cache" / "profiles" if user_dir else None
+        games_dir = user_dir / "cache" / "games" if user_dir else None
+        profile_files = list(profile_dir.glob("*.json")) if profile_dir and profile_dir.exists() else []
+        games_files = list(games_dir.glob("*.json")) if games_dir and games_dir.exists() else []
+        return {
+            "engine_entries": len(engine_files),
+            "engine_bytes": engine_bytes,
+            "profile_entries": len(profile_files),
+            "game_entries": len(games_files),
+            "total_entries": len(engine_files) + len(profile_files) + len(games_files),
+            "total_bytes": engine_bytes
+            + sum(path.stat().st_size for path in profile_files if path.exists())
+            + sum(path.stat().st_size for path in games_files if path.exists()),
+            "cache_root": str(self.root),
+        }
+
 
 def serialize_games(imported_games: list[ImportedGame]) -> list[dict[str, Any]]:
     serialized: list[dict[str, Any]] = []

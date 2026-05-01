@@ -1717,6 +1717,7 @@ def _build_repertoire_map(lessons: list[dict[str, Any]]) -> dict[str, list[dict[
                 "your_top_move_count": lesson["your_top_move_count"],
                 "frequency": lesson["frequency"],
                 "confidence": lesson["confidence"],
+                "memory_score": lesson.get("memory_score", 0),
                 "priority": lesson["priority"],
                 "line_status": lesson["line_status"],
                 "database_moves": lesson["database_moves"],
@@ -2086,6 +2087,190 @@ def _build_database_training(queue_due: list[dict[str, Any]], queue_new: list[di
     return sorted(candidates, key=lambda item: (-float(item.get("priority", 0)), -int(item.get("frequency", 0))))[:20]
 
 
+def _memory_score_for_line(item: dict[str, Any]) -> int:
+    confidence = float(item.get("confidence", 0) or 0)
+    repeats = min(30.0, float(item.get("repeat_count", 0) or 0) / 4)
+    frequency = min(15.0, float(item.get("frequency", 0) or 0) * 1.5)
+    misses = min(35.0, float(item.get("repeat_mistake_count", 0) or 0) * 8)
+    value_loss = min(20.0, float(item.get("value_lost_cp", 0) or 0) / 12)
+    if item.get("line_status") == "known":
+        raw = confidence + repeats + frequency
+    elif item.get("line_status") == "needs_work":
+        raw = confidence + frequency - misses - value_loss
+    else:
+        raw = confidence + frequency - 8
+    return int(max(0, min(100, round(raw))))
+
+
+def _build_memory_scores(lessons: list[dict[str, Any]]) -> dict[str, Any]:
+    scored: list[dict[str, Any]] = []
+    for item in lessons:
+        score = _memory_score_for_line(item)
+        bucket = "strong"
+        if score < 45:
+            bucket = "fragile"
+        elif score < 70:
+            bucket = "building"
+        scored.append(
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "opening_name": item.get("opening_name", ""),
+                "color": item.get("color", ""),
+                "score": score,
+                "bucket": bucket,
+                "status": item.get("line_status", ""),
+                "recommended_move": item.get("recommended_move", ""),
+                "your_repeated_move": item.get("your_repeated_move", ""),
+                "repeat_mistake_count": item.get("repeat_mistake_count", 0),
+                "frequency": item.get("frequency", 0),
+                "confidence": item.get("confidence", 0),
+            }
+        )
+    fragile = sorted([item for item in scored if item["bucket"] == "fragile"], key=lambda row: row["score"])[:8]
+    strong = sorted([item for item in scored if item["bucket"] == "strong"], key=lambda row: -row["score"])[:8]
+    average = round(mean([item["score"] for item in scored]), 1) if scored else 0.0
+    return {
+        "average": average,
+        "fragile_count": len([item for item in scored if item["bucket"] == "fragile"]),
+        "building_count": len([item for item in scored if item["bucket"] == "building"]),
+        "strong_count": len([item for item in scored if item["bucket"] == "strong"]),
+        "fragile_lines": fragile,
+        "strong_lines": strong,
+    }
+
+
+def _first_player_move(imported: ImportedGame) -> tuple[str, str] | None:
+    board = imported.game.board()
+    player_is_white = imported.player_color == "white"
+    for move in imported.game.mainline_moves():
+        if board.turn == player_is_white:
+            san = board.san(move)
+            return san, move.uci()
+        board.push(move)
+    return None
+
+
+def _build_opening_drift(games: list[ImportedGame]) -> dict[str, Any]:
+    by_color: dict[str, list[ImportedGame]] = {"white": [], "black": []}
+    for imported in games:
+        if imported.player_color in by_color:
+            by_color[imported.player_color].append(imported)
+
+    sections: list[dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = []
+    for color, color_games in by_color.items():
+        total_moves: Counter[str] = Counter()
+        recent_moves: Counter[str] = Counter()
+        recent_count = min(len(color_games), max(8, len(color_games) // 4)) if color_games else 0
+        recent_games = color_games[-recent_count:] if recent_count else []
+        uci_by_san: dict[str, str] = {}
+
+        for imported in color_games:
+            first = _first_player_move(imported)
+            if not first:
+                continue
+            san, uci = first
+            total_moves[san] += 1
+            uci_by_san.setdefault(san, uci)
+        for imported in recent_games:
+            first = _first_player_move(imported)
+            if not first:
+                continue
+            san, uci = first
+            recent_moves[san] += 1
+            uci_by_san.setdefault(san, uci)
+
+        total_seen = sum(total_moves.values())
+        recent_seen = sum(recent_moves.values())
+        rows: list[dict[str, Any]] = []
+        for san, recent_n in recent_moves.most_common(8):
+            old_pct = (total_moves[san] / total_seen) * 100 if total_seen else 0.0
+            recent_pct = (recent_n / recent_seen) * 100 if recent_seen else 0.0
+            drift = round(recent_pct - old_pct, 1)
+            row = {
+                "color": color,
+                "move": san,
+                "uci": uci_by_san.get(san, ""),
+                "recent_count": recent_n,
+                "total_count": total_moves[san],
+                "recent_pct": round(recent_pct, 1),
+                "overall_pct": round(old_pct, 1),
+                "drift": drift,
+                "tone": "new" if total_moves[san] <= recent_n and recent_n >= 2 else ("rising" if drift >= 12 else "stable"),
+            }
+            rows.append(row)
+            if row["tone"] in {"new", "rising"}:
+                alerts.append(row)
+
+        sections.append(
+            {
+                "color": color,
+                "games": len(color_games),
+                "recent_games": recent_count,
+                "moves": rows,
+            }
+        )
+
+    return {
+        "sections": sections,
+        "alerts": sorted(alerts, key=lambda row: (-float(row.get("drift", 0)), -int(row.get("recent_count", 0))))[:8],
+    }
+
+
+def _build_prep_pack(
+    queue_due: list[dict[str, Any]],
+    queue_new: list[dict[str, Any]],
+    database_training: list[dict[str, Any]],
+    known_line_archive: list[dict[str, Any]],
+) -> dict[str, Any]:
+    focus = queue_due[:6]
+    next_up = queue_new[:4]
+    replies = database_training[:5]
+    maintenance = known_line_archive[:4]
+    return {
+        "title": "Bookup preparation pack",
+        "focus_lines": [
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "train": item.get("recommended_move", ""),
+                "instead_of": item.get("your_repeated_move", ""),
+                "why": item.get("queue_explainer", {}).get("summary") or item.get("coach_explanation", ""),
+                "continuation": item.get("continuation_san", ""),
+            }
+            for item in focus
+        ],
+        "next_up": [
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "move": item.get("recommended_move", ""),
+                "continuation": item.get("continuation_san", ""),
+            }
+            for item in next_up
+        ],
+        "common_replies": [
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "reply": (item.get("top_database_reply") or {}).get("san") or (item.get("top_database_reply") or {}).get("uci", ""),
+                "response": item.get("recommended_move", ""),
+            }
+            for item in replies
+        ],
+        "maintenance": [
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "move": item.get("recommended_move", ""),
+                "repeat_count": item.get("repeat_count", 0),
+            }
+            for item in maintenance
+        ],
+    }
+
+
 def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str, Any]:
     nodes, _position_counts, _opening_info = _collect_position_nodes(games)
     analyzed_nodes = _rank_nodes_for_analysis(nodes)
@@ -2097,6 +2282,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
             lessons.append(lesson)
 
     lessons.sort(key=lambda item: (-item["priority"], -item["frequency"], item["line_label"]))
+    for lesson in lessons:
+        lesson["memory_score"] = _memory_score_for_line(lesson)
     repertoire_map = _build_repertoire_map(lessons)
     repertoire_tree = _group_repertoire(lessons)
     top_openings_by_color = _opening_lists(repertoire_tree)
@@ -2166,6 +2353,9 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     transposition_groups = _build_transposition_groups(lessons)
     review_schedule = _build_review_schedule(queue_due, queue_new, known_line_archive)
     database_training = _build_database_training(queue_due, queue_new)
+    memory_scores = _build_memory_scores(lessons)
+    opening_drift = _build_opening_drift(games)
+    prep_pack = _build_prep_pack(queue_due, queue_new, database_training, known_line_archive)
     prep_summary = (
         f"Bookup found {len(lessons)} repeated repertoire positions, {len(queue_due)} due lines that need work, and {len(known_lines)} known lines already under control. "
         "Import your games, train the branches you actually reach, and let the database plus Stockfish guide the replies."
@@ -2198,6 +2388,9 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "transposition_groups": transposition_groups,
         "review_schedule": review_schedule,
         "database_training": database_training,
+        "memory_scores": memory_scores,
+        "opening_drift": opening_drift,
+        "prep_pack": prep_pack,
         "known_lines": known_lines,
         "urgent_lines": urgent_lines,
         "needs_work": queue_due,

@@ -32,7 +32,7 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 13
+PROFILE_SCHEMA_VERSION = 14
 ENGINE_DEFAULTS_VERSION = 2
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EngineSession | None = None
@@ -427,6 +427,12 @@ def save_settings() -> tuple:
             "defaults": build_defaults_payload(config),
         }
     )
+
+
+@app.get("/api/cache-stats")
+def cache_stats() -> tuple:
+    username = str(request.args.get("username", "")).strip() or "trixize1234"
+    return jsonify(STORE.cache_stats(username))
 
 
 @app.post("/api/profile")

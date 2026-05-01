@@ -11,6 +11,10 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 - builds a repertoire map from repeated positions you actually reach
 - groups transpositions by position instead of only by opening label
 - shows a repertoire health dashboard with coverage, due load, weak branches, and known lines
+- scores line memory so fragile, building, and strong branches are separated
+- detects opening drift by comparing recent first moves with your long-term imported repertoire
+- exports a compact preparation pack with focus lines, common replies, and maintenance lines
+- shows local engine/profile cache health so repeat analysis is easier to trust
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
 - uses the Lichess opening database when available for practical move popularity and common replies
 - tracks live book state so `Book` labels stop once a line leaves the opening/repertoire context
@@ -30,7 +34,7 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
   Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
 
 - `Repertoire Map`
-  See health, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
+  See health, memory scores, opening drift, cache health, preparation packs, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
 
 - `Needs Work`
   Focus on repeated repertoire mistakes, due lines, fresh lines, queue explainers, suggested repertoire updates, mistake heatmap squares, mistake timelines, and spaced-review buckets.
@@ -73,6 +77,7 @@ The board is still repertoire-first:
 - at decision points, it can classify what you actually play
 - it still shows the recommended repertoire move and continuation
 - engine and database side-panel rows can be played directly onto the board for quick “what if?” study
+- exact branches can be saved as your repertoire move for a position
 
 ## Imported Game Tree Map
 

@@ -482,6 +482,133 @@ select:focus {
   line-height: 0.95;
 }
 
+.intelligence-grid {
+  margin-top: 16px;
+}
+
+.memory-score-hero,
+.cache-meter,
+.drift-alert,
+.prep-pack-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(139, 171, 224, 0.16);
+  border-radius: 16px;
+  background: rgba(8, 14, 22, 0.52);
+}
+
+.memory-score-hero strong,
+.cache-meter strong {
+  color: var(--text-strong);
+  font-size: 42px;
+  line-height: 1;
+}
+
+.memory-score-hero span,
+.cache-meter span,
+.drift-alert span {
+  color: var(--muted);
+}
+
+.memory-buckets,
+.mini-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-buckets {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mini-card {
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 15px;
+  background: rgba(10, 15, 21, 0.78);
+  color: inherit;
+  text-align: left;
+}
+
+.mini-card strong {
+  display: block;
+  color: var(--text-strong);
+}
+
+.mini-card span {
+  color: var(--muted);
+}
+
+.mini-card.fragile {
+  border-color: rgba(255, 111, 122, 0.28);
+}
+
+.mini-card.strong {
+  border-color: rgba(104, 204, 136, 0.28);
+}
+
+.mini-card.prep,
+.mini-card.database {
+  border-color: rgba(125, 162, 255, 0.24);
+}
+
+.drift-alert.active {
+  border-color: rgba(241, 201, 106, 0.34);
+  background: rgba(241, 201, 106, 0.08);
+}
+
+.drift-alert.quiet {
+  border-color: rgba(104, 204, 136, 0.28);
+}
+
+.drift-section {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(10, 15, 21, 0.64);
+}
+
+.drift-row {
+  display: grid;
+  grid-template-columns: minmax(64px, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.drift-row strong {
+  color: var(--text-strong);
+}
+
+.drift-row span {
+  color: var(--muted);
+}
+
+.drift-row b {
+  color: var(--accent);
+}
+
+.drift-row.rising,
+.drift-row.new {
+  background: rgba(241, 201, 106, 0.09);
+}
+
+.cache-meter {
+  align-items: flex-end;
+}
+
+.saved-repertoire-note {
+  border-color: rgba(104, 204, 136, 0.24);
+  background: rgba(104, 204, 136, 0.08);
+}
+
 .health-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2104,6 +2231,11 @@ select:focus {
   }
 
   .health-bar-row {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-buckets,
+  .drift-row {
     grid-template-columns: 1fr;
   }
 
