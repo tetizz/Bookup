@@ -32,8 +32,8 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 15
-ENGINE_DEFAULTS_VERSION = 2
+PROFILE_SCHEMA_VERSION = 16
+ENGINE_DEFAULTS_VERSION = 3
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EngineSession | None = None
 LIVE_ENGINE_KEY = ""
@@ -88,8 +88,8 @@ TOTAL_RAM_MB = system_total_ram_mb()
 
 def recommended_engine_defaults() -> dict:
     # Strong live-analysis defaults without making imports painfully expensive.
-    raw_hash = max(4096, min(32768, TOTAL_RAM_MB // 4))
-    hash_mb = max(4096, (raw_hash // 128) * 128)
+    raw_hash = max(2048, min(4096, TOTAL_RAM_MB // 8))
+    hash_mb = max(2048, (raw_hash // 128) * 128)
     return {
         "depth": 26,
         "threads": max(1, min(CPU_THREADS, 16)),
@@ -130,10 +130,19 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         path=engine_path,
         depth=max(10, min(30, int(payload.get("depth", defaults["depth"])))),
         threads=max(1, min(CPU_THREADS, int(payload.get("threads", defaults["threads"])))),
-        hash_mb=max(256, min(32768, int(payload.get("hash_mb", defaults["hash_mb"])))),
+        hash_mb=max(256, min(4096, int(payload.get("hash_mb", defaults["hash_mb"])))),
         multipv=max(1, min(10, int(payload.get("multipv", defaults["multipv"])))),
         think_time_sec=max(0.0, min(60.0, think_time_sec)),
     )
+
+
+def request_engine_settings(payload: dict, config: dict) -> EngineSettings:
+    overrides = {
+        key: payload.get(key)
+        for key in ("engine_path", "depth", "threads", "hash_mb", "multipv", "think_time_sec")
+        if key in payload and payload.get(key) not in (None, "")
+    }
+    return build_engine_settings({**config, **overrides})
 
 
 def engine_session_key(settings: EngineSettings) -> str:
@@ -414,7 +423,7 @@ def save_settings() -> tuple:
         except (TypeError, ValueError):
             pass
 
-    settings = build_engine_settings(config)
+    settings = request_engine_settings(payload, config)
     config = apply_engine_settings_to_config(config, settings)
     save_config(config)
     configure_lichess(local_lichess_token(config))
@@ -725,7 +734,7 @@ def position_insight() -> tuple:
         return jsonify({"error": "Invalid FEN."}), 400
 
     config = load_config()
-    settings = build_engine_settings(config)
+    settings = request_engine_settings(payload, config)
     request_token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
     configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
@@ -791,7 +800,7 @@ def generate_theory() -> tuple:
         plies = 10
 
     config = load_config()
-    settings = build_engine_settings(config)
+    settings = request_engine_settings(payload, config)
     try:
         with ENGINE_LOCK:
             engine = live_engine_for(settings)

@@ -13,6 +13,10 @@ TEMP_SPEC = ROOT / ".build_spec"
 SOURCE_PACKAGE = TEMP_DIST / "Bookup"
 FINAL_EXE = ROOT / "Bookup.exe"
 FINAL_INTERNAL = ROOT / "_internal"
+WINDOWS_RELEASE_PROCESSES = (
+    "Bookup.exe",
+    "stockfish-windows-x86-64-avx2.exe",
+)
 
 
 def remove_path(path: Path) -> None:
@@ -22,7 +26,23 @@ def remove_path(path: Path) -> None:
         path.unlink()
 
 
+def stop_release_processes() -> None:
+    """Release packaged files before replacing the root-level app bundle."""
+    if sys.platform != "win32":
+        return
+    for image_name in WINDOWS_RELEASE_PROCESSES:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/IM", image_name],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+
 def main() -> int:
+    stop_release_processes()
+
     for path in (TEMP_DIST, TEMP_WORK, TEMP_SPEC):
         remove_path(path)
         path.mkdir(parents=True, exist_ok=True)

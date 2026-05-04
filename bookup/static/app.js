@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 15;
+const PROFILE_SCHEMA_VERSION = 16;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -2895,6 +2895,7 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      ...currentStudySettingsPayload(),
       fen,
       lichess_token: currentLichessToken(),
       play_uci: playUci,
@@ -2935,6 +2936,7 @@ async function generateTheoryLine() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        ...currentStudySettingsPayload(),
         fen: normalizeFen(state.boardFen || START_FEN),
         move_uci: moveUci,
         plies,
