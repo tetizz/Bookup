@@ -202,6 +202,7 @@ const state = {
   playedTrainingLine: [],
   playedTrainingLineSan: [],
   branchLocked: false,
+  freeBranchMode: false,
   trainerPhase: "completed",
   previewLessonId: "",
   previewInsight: null,
@@ -3411,7 +3412,10 @@ function computeTrainerPhase(lesson = currentLesson()) {
   if (!lesson) return "completed";
   const line = lessonTrainingLine(lesson);
   const rootCursor = lessonRootCursor(lesson);
-  if (state.trainingCursor >= line.length) return "completed";
+  if (!state.freeBranchMode && state.trainingCursor >= line.length) return "completed";
+  if (state.freeBranchMode) {
+    return isUsersTurn(lesson) ? "decision_point" : "free_autoplay";
+  }
   if (!state.branchLocked) {
     if (state.trainingCursor < rootCursor) return "intro_autoplay";
     return "decision_point";
@@ -3426,7 +3430,11 @@ function syncTrainerPhase(lesson = currentLesson()) {
 
 function canUserInteract(lesson = currentLesson()) {
   const phase = computeTrainerPhase(lesson);
-  return Boolean(lesson) && isUsersTurn(lesson) && phase !== "intro_autoplay" && phase !== "completed";
+  return Boolean(lesson)
+    && isUsersTurn(lesson)
+    && phase !== "intro_autoplay"
+    && phase !== "free_autoplay"
+    && phase !== "completed";
 }
 
 async function classifyMoveAtCurrentPosition(lesson, moveUci, moveSan, repeatedCount = 0) {
@@ -3514,6 +3522,24 @@ function renderAutoMoveSummary(autoMoves = []) {
     .join(" ");
 }
 
+function setTrainerFeedback(html, { empty = false } = {}) {
+  if (!el.trainerFeedback) return;
+  el.trainerFeedback.innerHTML = html || "";
+  el.trainerFeedback.classList.toggle("empty", empty || !html);
+}
+
+function setTrainerFeedbackText(message, { empty = false } = {}) {
+  if (!el.trainerFeedback) return;
+  el.trainerFeedback.textContent = message || "";
+  el.trainerFeedback.classList.toggle("empty", empty || !message);
+}
+
+function compactMoveStatus(moveSan, classification, message = "") {
+  const movePart = moveSan ? `<strong>${escapeHtml(moveSan)}</strong>${classificationBadge(classification, "inline")}` : "";
+  const textPart = message ? ` ${escapeHtml(message)}` : "";
+  return `${movePart}${textPart}`.trim();
+}
+
 function renderTrainerDecision(lesson) {
   if (!lesson) {
     el.trainerDecision.textContent = "No decision point loaded yet.";
@@ -3531,6 +3557,11 @@ function renderTrainerDecision(lesson) {
     el.trainerDecision.classList.remove("empty");
     return;
   }
+  if (phase === "free_autoplay") {
+    el.trainerDecision.textContent = "Bookup is choosing a practical reply from the live position.";
+    el.trainerDecision.classList.remove("empty");
+    return;
+  }
   if (phase === "locked_line") {
     const recommended = currentRecommendedMoveData(lesson);
     const expectedText = recommended.san || lesson.best_reply || "";
@@ -3538,6 +3569,25 @@ function renderTrainerDecision(lesson) {
       ? (expectedText ? `Recommended move: ${expectedText}. You can play any legal move of your color.` : "You can play any legal move of your color here.")
       : "Bookup is playing the practical reply now.";
     el.trainerDecision.classList.remove("empty");
+    return;
+  }
+  if (state.freeBranchMode) {
+    const liveInsight = currentLiveInsight(lesson);
+    const legalPreview = (state.legalMoves || [])
+      .slice(0, 8)
+      .map((item) => item.san || item.uci)
+      .filter(Boolean)
+      .join(" | ");
+    const practicalMoves = (liveInsight?.database_moves || [])
+      .slice(0, 5)
+      .map((item) => `${escapeHtml(item.san || item.uci)} ${item.popularity || item.percent || 0}%`)
+      .join(" | ");
+    el.trainerDecision.classList.remove("empty");
+    el.trainerDecision.innerHTML = `
+      <div class="trainer-decision-copy">Your move from the live position. Bookup will classify it and keep the board moving.</div>
+      <div class="line-note">Legal moves: ${escapeHtml(legalPreview || "loading...")}</div>
+      <div class="line-note">Lichess moves: ${practicalMoves || "No explorer move data available."}</div>
+    `;
     return;
   }
 
@@ -3620,12 +3670,27 @@ function updateTrainerCopy() {
   const recommended = currentRecommendedMoveData(lesson, liveInsight);
   const engineCoachText = String(liveInsight?.coach_explanation || "").trim();
   const lineCoachText = String(lesson?.coach_explanation || lesson?.explanation || "").trim();
-  const coachText = engineCoachText && engineCoachText !== lineCoachText
+  const coachText = state.freeBranchMode
+    ? engineCoachText
+    : engineCoachText && engineCoachText !== lineCoachText
     ? engineCoachText
     : (lineCoachText || engineCoachText);
   const recommendedLabel = recommended.classification?.label || lesson?.recommended_classification?.label || "Best";
   const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
-  const expectedText = recommended.san || lesson.best_reply || "";
+  const expectedText = state.freeBranchMode
+    ? String(liveInsight?.recommended_move || "").trim()
+    : (recommended.san || lesson.best_reply || "");
+  if (phase === "free_autoplay") {
+    renderTrainerDecision(lesson);
+    el.boardTitle.textContent = "Bookup reply";
+    el.boardSummary.textContent = "Bookup is choosing a practical reply from the live board, then it will hand the move back to you.";
+    el.trainerCoach.textContent = coachText || "The move you chose left the stored line, so Bookup is continuing from the actual position instead of forcing the old prompt.";
+    el.trainerCoach.classList.remove("empty");
+    el.boardLine.textContent = currentPlayedLineSan().join(" ") || "No played line yet.";
+    el.boardLine.classList.toggle("empty", !currentPlayedLineSan().length);
+    renderStudyWorkspace();
+    return;
+  }
   if (phase === "decision_point") {
     const atRootDecision = state.trainingCursor === lessonRootCursor(lesson);
     const discoveryPreview = atRootDecision
@@ -3634,7 +3699,7 @@ function updateTrainerCopy() {
         .map((item) => `${item.san} ${item.count}x`)
         .join(" | ")
       : "";
-    el.boardTitle.textContent = atRootDecision ? "What would you play here?" : "Your move here";
+    el.boardTitle.textContent = atRootDecision && !state.freeBranchMode ? "What would you play here?" : "Your move here";
     el.boardSummary.textContent = expectedText
       ? `Choose any legal move for your color. Recommended move: ${expectedText}.`
       : "Choose any legal move for your color. Bookup will follow repertoire branches and transpositions when they fit.";
@@ -3770,6 +3835,71 @@ async function syncTrainerToPlayableTurn() {
   return { autoMoves };
 }
 
+function choosePracticalReplyMove(lesson) {
+  const legal = state.legalMoves || [];
+  if (!legal.length) return null;
+  const insight = currentLiveInsight(lesson);
+  const candidateUci = [
+    ...(insight?.database_moves || []).map((item) => item?.uci),
+    insight?.recommended_move_uci,
+    ...(insight?.candidate_lines || []).map((item) => item?.uci),
+  ]
+    .filter(Boolean)
+    .map((uci) => String(uci));
+  for (const uci of candidateUci) {
+    const match = legal.find((move) => move.uci === uci);
+    if (match) return match;
+  }
+  return legal[0] || null;
+}
+
+async function syncFreeBranchToPlayableTurn() {
+  const lesson = currentLesson();
+  if (!lesson || !state.freeBranchMode) return { autoMoves: [] };
+  const runToken = lessonRunToken(lesson);
+  const autoMoves = [];
+  while (state.freeBranchMode && !isUsersTurn(lesson)) {
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+    await updateCurrentInsight();
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+    if (!state.legalMoves.length) {
+      await refreshLegalMoves(state.boardFen);
+      if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+    }
+    const reply = choosePracticalReplyMove(lesson);
+    if (!reply) break;
+    const movingColor = moveColorLabel(sideToMove(state.boardFen));
+    const preMoveFen = state.boardFen;
+    const instantClassification = instantMoveClassification(lesson, reply);
+    const moveMetaPromise = classifyMoveAtFen(
+      preMoveFen,
+      lesson,
+      reply.uci,
+      reply.san,
+      moveRepeatedCount(lesson, reply.uci),
+    );
+    await applyMoveToBoard(reply.uci, instantClassification);
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+    const appliedFen = state.boardFen;
+    moveMetaPromise.then((moveMeta) => {
+      applyResolvedMoveClassification(reply.uci, moveMeta?.classification || moveMeta?.recommendedClassification || null, appliedFen);
+    });
+    appendPlayedMove(reply.uci, state.lastMoveSan || reply.san);
+    state.trainingCursor += 1;
+    autoMoves.push({
+      color: movingColor,
+      san: state.lastMoveSan || reply.san,
+      classification: state.lastMoveClassification || instantClassification || null,
+    });
+    updateTrainerCopy();
+  }
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+  updateTrainerCopy();
+  await updateCurrentInsight();
+  if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
+  return { autoMoves };
+}
+
 function completeCurrentLesson(lesson, clean, feedbackHtml = "") {
   if (!lesson) return;
   const line = lessonTrainingLine(lesson);
@@ -3808,6 +3938,7 @@ async function loadLessonById(lessonId) {
   state.playedTrainingLine = [];
   state.playedTrainingLineSan = [];
   state.branchLocked = false;
+  state.freeBranchMode = false;
   state.trainerPhase = "intro_autoplay";
   state.selectedSquare = "";
   state.dragFrom = "";
@@ -3906,6 +4037,7 @@ function clearTrainer() {
   state.playedTrainingLine = [];
   state.playedTrainingLineSan = [];
   state.branchLocked = false;
+  state.freeBranchMode = false;
   state.trainerPhase = "completed";
   state.currentInsight = null;
   state.currentInsightKey = "";
@@ -4311,6 +4443,7 @@ async function submitTrainerMove(from, to) {
     const chosenBranch = findBranchLine(lesson, move.uci) || findBranchLineByFen(lesson, previewPayload?.fen);
     if (chosenBranch) {
       state.branchLocked = true;
+      state.freeBranchMode = false;
       state.activeTrainingLine = [...(lesson.intro_line_uci || []), ...(chosenBranch.line_uci || [])];
       state.activeTrainingLineSan = combineSanSegments(lesson.intro_line_san, chosenBranch.line_san);
       state.trainerPhase = "locked_line";
@@ -4336,7 +4469,7 @@ async function submitTrainerMove(from, to) {
       const syncResult = await syncTrainerToPlayableTurn();
       if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
       if (syncResult?.autoMoves?.length) {
-        el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+        setTrainerFeedback(`${el.trainerFeedback.innerHTML} ${renderAutoMoveSummary(syncResult.autoMoves)}`);
       }
       renderQueue();
       return;
@@ -4355,12 +4488,23 @@ async function submitTrainerMove(from, to) {
     });
     state.trainingCursor += 1;
     state.branchLocked = false;
+    state.freeBranchMode = true;
     syncTrainerPhase(lesson);
-    el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} leaves your known repertoire here. Recommended move: <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}. Play it if you want to continue this repertoire line, or choose another legal move.`;
-    el.trainerFeedback.classList.remove("empty");
+    setTrainerFeedback(compactMoveStatus(
+      move.san,
+      playedClassification,
+      isUsersTurn(lesson)
+        ? `is now your live branch. You can keep choosing moves from this position.`
+        : `left the stored line. Bookup will reply from the actual board instead of forcing the old prompt.`
+    ));
     updateTrainerCopy();
     await updateCurrentInsight();
     if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+    const freeSyncResult = await syncFreeBranchToPlayableTurn();
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+    if (freeSyncResult?.autoMoves?.length) {
+      setTrainerFeedback(renderAutoMoveSummary(freeSyncResult.autoMoves));
+    }
     return;
   }
 
@@ -4403,11 +4547,18 @@ async function submitTrainerMove(from, to) {
     appendPlayedMove(move.uci, state.lastMoveSan || move.san);
     state.trainingCursor += 1;
     state.branchLocked = false;
+    state.freeBranchMode = true;
     syncTrainerPhase(lesson);
     el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
     updateTrainerCopy();
     await updateCurrentInsight();
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+    const freeSyncResult = await syncFreeBranchToPlayableTurn();
+    if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
+    if (freeSyncResult?.autoMoves?.length) {
+      setTrainerFeedback(renderAutoMoveSummary(freeSyncResult.autoMoves));
+    }
     return;
   }
 
@@ -4441,9 +4592,10 @@ async function submitTrainerMove(from, to) {
 
   el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`;
   if (syncResult?.autoMoves?.length) {
-    el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
+    setTrainerFeedback(`${el.trainerFeedback.innerHTML} ${renderAutoMoveSummary(syncResult.autoMoves)}`);
+  } else {
+    el.trainerFeedback.classList.remove("empty");
   }
-  el.trainerFeedback.classList.remove("empty");
   el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
 }
