@@ -1,6 +1,7 @@
 const heroBoard = document.getElementById("heroBoard");
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+const boardSize = 8;
 const position = {
   a8: "bR", b8: "bN", c8: "bB", d8: "bQ", e8: "bK", f8: "bB", h8: "bR",
   a7: "bP", b7: "bP", c7: "bP", e7: "bP", f7: "bP", g7: "bB", h7: "bP",
@@ -10,6 +11,64 @@ const position = {
   a2: "wP", b2: "wP", c2: "wP", f2: "wP", g2: "wP", h2: "wP",
   a1: "wR", c1: "wB", d1: "wQ", e1: "wK", f1: "wB", h1: "wR",
 };
+
+function squareCenter(square) {
+  const file = square[0];
+  const rank = Number(square[1]);
+  return {
+    x: files.indexOf(file) + 0.5,
+    y: boardSize - rank + 0.5,
+  };
+}
+
+function arrowPath(fromSquare, toSquare) {
+  const from = squareCenter(fromSquare);
+  const to = squareCenter(toSquare);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length <= 0.01) return "";
+
+  const unitX = dx / length;
+  const unitY = dy / length;
+  const normalX = -unitY;
+  const normalY = unitX;
+
+  // Board-unit proportions inspired by SVG chessboard annotations:
+  // small enough to show the move without swallowing the pieces.
+  const startInset = 0.32;
+  const tipInset = 0.14;
+  const shaftWidth = 0.16;
+  const headLength = Math.min(0.46, length * 0.28);
+  const headWidth = 0.52;
+
+  const start = {
+    x: from.x + unitX * startInset,
+    y: from.y + unitY * startInset,
+  };
+  const tip = {
+    x: to.x - unitX * tipInset,
+    y: to.y - unitY * tipInset,
+  };
+  const neck = {
+    x: tip.x - unitX * headLength,
+    y: tip.y - unitY * headLength,
+  };
+
+  const points = [
+    [start.x + normalX * shaftWidth, start.y + normalY * shaftWidth],
+    [neck.x + normalX * shaftWidth, neck.y + normalY * shaftWidth],
+    [neck.x + normalX * headWidth, neck.y + normalY * headWidth],
+    [tip.x, tip.y],
+    [neck.x - normalX * headWidth, neck.y - normalY * headWidth],
+    [neck.x - normalX * shaftWidth, neck.y - normalY * shaftWidth],
+    [start.x - normalX * shaftWidth, start.y - normalY * shaftWidth],
+  ];
+
+  return points
+    .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(3)} ${y.toFixed(3)}`)
+    .join(" ") + " Z";
+}
 
 function renderBoard() {
   if (!heroBoard) return;
@@ -54,15 +113,15 @@ function renderBoard() {
   }
   const arrow = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   arrow.setAttribute("class", "board-arrow-svg");
-  arrow.setAttribute("viewBox", "0 0 100 100");
+  arrow.setAttribute("viewBox", "0 0 8 8");
   arrow.setAttribute("aria-hidden", "true");
   arrow.innerHTML = `
     <defs>
-      <marker id="heroArrowHead" markerWidth="6" markerHeight="6" refX="4.7" refY="3" orient="auto" markerUnits="strokeWidth">
-        <path d="M0,0 L6,3 L0,6 Z" fill="rgba(72, 151, 255, 0.74)"></path>
-      </marker>
+      <filter id="heroArrowShadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="0.045" stdDeviation="0.035" flood-color="#0a1c36" flood-opacity="0.32"></feDropShadow>
+      </filter>
     </defs>
-    <line x1="31.25" y1="93.75" x2="54.8" y2="70.2" marker-end="url(#heroArrowHead)"></line>
+    <path class="board-arrow-path" d="${arrowPath("c1", "e3")}"></path>
   `;
   heroBoard.appendChild(arrow);
 }

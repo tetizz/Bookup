@@ -128,6 +128,7 @@ input {
 }
 
 .hero-copy {
+  width: 100%;
   max-width: 940px;
   margin: 0 auto;
   text-align: center;
@@ -399,10 +400,12 @@ p {
   pointer-events: none;
 }
 
-.board-arrow-svg line {
-  stroke: rgba(72, 151, 255, 0.7);
-  stroke-width: 3.4;
-  stroke-linecap: round;
+.board-arrow-path {
+  fill: rgba(72, 151, 255, 0.58);
+  stroke: rgba(174, 211, 255, 0.72);
+  stroke-width: 0.035;
+  stroke-linejoin: round;
+  filter: url(#heroArrowShadow);
 }
 
 .side-panel,
@@ -798,7 +801,9 @@ p {
 
   .hero-lede,
   p {
+    max-width: 100%;
     font-size: 16px;
+    overflow-wrap: break-word;
   }
 
   .primary-action,
