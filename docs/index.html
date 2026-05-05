@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Bookup is a local repertoire trainer that studies your real games with Stockfish and practical database context.">
+    <title>Bookup | Repertoire Trainer</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="site-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Bookup for desktop</p>
+          <h1>Train the openings you actually play.</h1>
+          <p class="hero-lede">
+            Bookup imports your games, builds a repertoire map from repeated positions,
+            and turns weak branches into focused training with Stockfish, Lichess database
+            context, move classifications, and live study tools.
+          </p>
+          <div class="hero-actions">
+            <a class="primary-action" href="https://github.com/tetizz/Bookup/releases/latest">Download latest release</a>
+            <a class="secondary-action" href="https://github.com/tetizz/Bookup">View source on GitHub</a>
+          </div>
+          <p class="local-note">
+            Bookup runs locally so your game cache, engine settings, and review progress stay on your machine.
+          </p>
+        </div>
+        <div class="product-card" aria-label="Bookup product preview">
+          <div class="card-topline">
+            <span>Study Lines</span>
+            <span class="status-pill">Live local engine</span>
+          </div>
+          <div class="preview-layout">
+            <div class="mini-board" aria-label="Chessboard preview">
+              <div class="sq light rook">R</div>
+              <div class="sq dark knight">N</div>
+              <div class="sq light bishop">B</div>
+              <div class="sq dark queen">Q</div>
+              <div class="sq dark pawn">P</div>
+              <div class="sq light pawn">P</div>
+              <div class="sq dark"></div>
+              <div class="sq light"></div>
+              <div class="sq light"></div>
+              <div class="sq dark arrow-blue"></div>
+              <div class="sq light pawn white">P</div>
+              <div class="sq dark"></div>
+              <div class="sq dark"></div>
+              <div class="sq light"></div>
+              <div class="sq dark badge-square"><span class="badge">Book</span></div>
+              <div class="sq light"></div>
+            </div>
+            <div class="analysis-panel">
+              <p class="panel-title">Engine and database</p>
+              <div class="line"><span>+0.32</span><strong>Nf3</strong><small>Book</small></div>
+              <div class="line"><span>+0.28</span><strong>d4</strong><small>Best</small></div>
+              <div class="line"><span>+0.18</span><strong>c4</strong><small>Excellent</small></div>
+              <p class="panel-note">Lichess replies and Stockfish candidate lines update from the live board.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="feature-grid" aria-label="Bookup features">
+        <article>
+          <span class="feature-number">01</span>
+          <h2>Repertoire Map</h2>
+          <p>Groups transpositions by position and shows the moves you repeat, not vague opening-family cards.</p>
+        </article>
+        <article>
+          <span class="feature-number">02</span>
+          <h2>Needs Work</h2>
+          <p>Prioritizes repeated repertoire problems, due reviews, mistake timelines, and queue explainers.</p>
+        </article>
+        <article>
+          <span class="feature-number">03</span>
+          <h2>Study Lines</h2>
+          <p>Lets you play legal moves on the board while Bookup classifies them and keeps the analysis live.</p>
+        </article>
+        <article>
+          <span class="feature-number">04</span>
+          <h2>Theory Generator</h2>
+          <p>Builds move trees from imported games and generates next-move theory with Stockfish support.</p>
+        </article>
+      </section>
+
+      <section class="demo-strip">
+        <div>
+          <p class="eyebrow">Website preview</p>
+          <h2>What the web version can show</h2>
+          <p>
+            This GitHub Pages site is a public preview and documentation surface. The full trainer still needs the
+            local desktop app because Chess.com imports, Stockfish analysis, cache storage, and Lichess token use
+            require a backend running on your machine.
+          </p>
+        </div>
+        <div class="demo-tabs" role="tablist" aria-label="Preview tabs">
+          <button class="demo-tab active" type="button" data-demo-tab="train">Train</button>
+          <button class="demo-tab" type="button" data-demo-tab="review">Review</button>
+          <button class="demo-tab" type="button" data-demo-tab="theory">Theory</button>
+        </div>
+        <div class="demo-output" id="demoOutput">
+          Choose any legal move from your side. Bookup follows your repertoire branch, classifies the move, then replies from the live position.
+        </div>
+      </section>
+
+      <section class="install-card">
+        <div>
+          <p class="eyebrow">Run Bookup</p>
+          <h2>Use the desktop app for the full trainer.</h2>
+          <p>
+            The root-level executable is the main launch path for Windows builds. Developers can also run the Flask app
+            from source with Python and a local Stockfish binary.
+          </p>
+        </div>
+        <pre><code>Bookup.exe
+
+py -3.13 -m pip install -r requirements.txt
+py -3.13 main.py</code></pre>
+      </section>
+    </main>
+    <script src="site.js"></script>
+  </body>
+</html>

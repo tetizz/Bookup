@@ -2,6 +2,20 @@
 
 Bookup is a GPL repertoire trainer built from your real games. It imports your public Chess.com archive, learns the opening positions and branches you actually reach, uses Stockfish plus the Lichess opening database to study those positions, and lets you work through lines on a legal-move board.
 
+## Website
+
+Bookup now includes a GitHub Pages website in `docs/`.
+
+- The site is a public product page and preview for the desktop trainer.
+- GitHub Pages deploys it from `.github/workflows/pages.yml`.
+- The full trainer still runs through the desktop app because Chess.com imports, Stockfish analysis, local caching, and private Lichess tokens require a local Python backend.
+
+Expected public URL after Pages is enabled for the repo:
+
+```text
+https://tetizz.github.io/Bookup/
+```
+
 ## What Bookup Does
 
 - imports public Chess.com games by username and time control
