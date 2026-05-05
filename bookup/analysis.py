@@ -2412,15 +2412,16 @@ def _build_drift_fixes(opening_drift: dict[str, Any]) -> dict[str, Any]:
 
 def _build_import_speed_report(
     games: list[ImportedGame],
-    nodes: list[PositionNode],
+    nodes: dict[str, PositionNode] | list[PositionNode],
     analyzed_nodes: list[PositionNode],
     lessons: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    repeated_nodes = len([node for node in nodes if node.occurrences >= REPEATED_MISTAKE_THRESHOLD])
-    skipped = max(0, len(nodes) - len(analyzed_nodes))
+    node_items = list(nodes.values()) if isinstance(nodes, dict) else list(nodes)
+    repeated_nodes = len([node for node in node_items if node.occurrences >= REPEATED_MISTAKE_THRESHOLD])
+    skipped = max(0, len(node_items) - len(analyzed_nodes))
     return {
         "games_indexed": len(games),
-        "positions_indexed": len(nodes),
+        "positions_indexed": len(node_items),
         "repeated_positions": repeated_nodes,
         "positions_analyzed": len(analyzed_nodes),
         "lessons_created": len(lessons),
