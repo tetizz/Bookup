@@ -887,7 +887,7 @@ async function runAnalysis() {
   try {
     const payload = await fetchProfilePayload(el.username.value.trim());
     state.payload = payload;
-    state.reviewStats = payload.training_progress || loadReviewStats(payload.username);
+    state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
     state.games = payload.games || [];
     renderProfile(payload);
     if (payload.cached) {
@@ -949,7 +949,7 @@ async function importPgnGames() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "PGN import failed.");
     state.payload = payload;
-    state.reviewStats = payload.training_progress || loadReviewStats(payload.username);
+    state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
     state.games = payload.games || [];
     renderProfile(payload);
     setProgress(100, `Imported ${payload.games_imported} PGN game${payload.games_imported === 1 ? "" : "s"} into your local Bookup workspace.`);
@@ -1002,7 +1002,7 @@ async function bootstrapLocalState() {
         games_imported: payload.games_imported || 0,
         archives_found: payload.archives_found || 0,
       };
-      state.reviewStats = payload.training_progress || {};
+      state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
       state.manualNeedsWork = payload.training_summary?.manual_needs_work || [];
       state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
       state.manualDriftChoices = payload.training_summary?.manual_drift_choices || {};
@@ -1015,7 +1015,7 @@ async function bootstrapLocalState() {
           : `Loaded local Bookup data for ${payload.username}.`
       );
     } else if (payload.profile) {
-      state.reviewStats = payload.training_progress || {};
+      state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
       setProgress(0, "Saved data is from an older Bookup version. Rebuild your repertoire to refresh it.");
     } else {
       state.reviewStats = loadReviewStats(username);
@@ -1049,6 +1049,9 @@ function renderProfile(payload) {
   state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
   state.manualDriftChoices = payload.training_summary?.manual_drift_choices || {};
   rebuildQueue();
+  const trainedKnownCount = Object.values(state.reviewStats || {})
+    .filter((item) => item?.line_state === "mastered" || Number(item?.streak || 0) >= 3)
+    .length;
 
   el.heroTitle.textContent = `${payload.username} repertoire ready`;
   el.heroSummary.textContent = summary.prep_summary || "Your repertoire positions are ready to train.";
@@ -1056,7 +1059,7 @@ function renderProfile(payload) {
   el.summaryNeedsWork.textContent = String((profile.needs_work || []).length ?? "--");
   el.summaryQueue.textContent = String(summary.trainable_positions ?? "--");
   el.badgeGames.textContent = String(payload.games_imported ?? "--");
-  el.badgeKnown.textContent = String(summary.known_lines ?? "--");
+  el.badgeKnown.textContent = String(Number(summary.known_lines || 0) + trainedKnownCount || "--");
   el.badgeWinRate.textContent = typeof summary.win_rate === "number" ? `${summary.win_rate}%` : "--";
 
   renderFirstMoves(profile.first_move_repertoire || {});
@@ -1122,13 +1125,14 @@ function renderFirstMoveColumn(node, repertoire) {
 }
 
 function renderKnownArchive(items) {
-  if (!items.length) {
+  const combinedItems = state.knownArchive?.length ? state.knownArchive : items;
+  if (!combinedItems.length) {
     el.knownArchiveList.className = "stack empty";
-    el.knownArchiveList.textContent = "Known lines will show up here once Bookup sees you playing the best move 100+ times.";
+    el.knownArchiveList.textContent = "Known lines will show up here once Bookup sees you playing the best move 100+ times or you complete a line cleanly enough in training.";
     return;
   }
   el.knownArchiveList.className = "stack";
-  el.knownArchiveList.innerHTML = items
+  el.knownArchiveList.innerHTML = combinedItems
     .map((item) => `
       <article class="line-card">
         <div class="line-card-header">
@@ -1136,11 +1140,12 @@ function renderKnownArchive(items) {
             <div class="line-title">${escapeHtml(item.line_label || item.opening_name)}</div>
             ${item.opening_name ? `<div class="tree-meta">${escapeHtml(item.opening_name)}${item.opening_code ? ` | ${escapeHtml(item.opening_code)}` : ""}</div>` : ""}
           </div>
-          <div class="line-badge known">Known</div>
+          <div class="line-badge known">${item.training_known ? "Training known" : "Known"}</div>
         </div>
         <div class="chip-row">
-          <span class="lesson-chip known">Best move played ${item.repeat_count}x</span>
+          <span class="lesson-chip known">${item.training_known ? `Clean streak ${item.review?.streak || 0}` : `Best move played ${item.repeat_count}x`}</span>
           <span class="lesson-chip">Frequency ${item.frequency}</span>
+          ${item.completedCount ? `<span class="lesson-chip">Completed ${item.completedCount}x</span>` : ""}
         </div>
         <div class="line-preview">${escapeHtml(item.continuation_san || item.training_line_san || "")}</div>
       </article>
@@ -3161,11 +3166,26 @@ function rebuildQueue() {
     const due = review.due_at || 0;
     const overdue = due <= Date.now();
     const manualBoost = state.manualNeedsWork.includes(lesson.lesson_id) ? 220 : 0;
-    const score = (overdue ? 1000 : 0) + lesson.priority + manualBoost - (review.streak || 0) * 10 + (review.last_result === "wrong" ? 120 : 0);
-    return { ...lesson, review, dueSoon: overdue, queueScore: score };
+    const completedCount = Number(review.completed_count || 0);
+    const cleanCount = Number(review.clean_completed_count || 0);
+    const mastered = review.line_state === "mastered" || Number(review.streak || 0) >= 3;
+    const completed = completedCount > 0;
+    const score = (overdue ? 1000 : 0) + lesson.priority + manualBoost - (review.streak || 0) * 10 + (review.last_result === "wrong" ? 120 : 0) - (mastered ? 500 : 0);
+    return {
+      ...lesson,
+      review,
+      dueSoon: overdue,
+      queueScore: score,
+      completed,
+      mastered,
+      cleanCount,
+      completedCount,
+      effectiveLineStatus: mastered ? "known" : (completed ? "completed" : lesson.line_status),
+    };
   };
   state.queueDue = (state.payload?.profile?.trainer_queue_due || [])
     .map(enrich)
+    .filter((lesson) => !lesson.mastered)
     .sort((a, b) => b.queueScore - a.queueScore);
   const manualOnly = state.manualNeedsWork
     .map((lessonId) => state.lessonMap[lessonId])
@@ -3176,8 +3196,13 @@ function rebuildQueue() {
   state.queueDue = [...manualOnly, ...state.queueDue];
   state.queueNew = (state.payload?.profile?.trainer_queue_new || [])
     .map(enrich)
+    .filter((lesson) => !lesson.mastered)
     .sort((a, b) => b.priority - a.priority || b.frequency - a.frequency);
-  state.knownArchive = state.payload?.profile?.known_line_archive || [];
+  const learnedArchive = state.lessons
+    .map(enrich)
+    .filter((lesson) => lesson.mastered && !((state.payload?.profile?.known_line_archive || []).some((item) => item.lesson_id === lesson.lesson_id)))
+    .map((lesson) => ({ ...lesson, line_status: "known", training_known: true }));
+  state.knownArchive = [...(state.payload?.profile?.known_line_archive || []), ...learnedArchive];
 }
 
 function renderQueue() {
@@ -3202,13 +3227,15 @@ function renderQueue() {
             <div class="queue-title">${escapeHtml(lesson.line_label || lesson.opening_name)}</div>
             <div class="tree-meta">${escapeHtml(lesson.opening_name || "")} -> ${escapeHtml(lesson.best_reply)}</div>
           </div>
-          <div class="line-badge ${statusClass(lesson.line_status)}">${index === 0 ? "Next" : labelForStatus(lesson.line_status)}</div>
+          <div class="line-badge ${statusClass(lesson.effectiveLineStatus || lesson.line_status)}">${index === 0 ? "Next" : labelForStatus(lesson.effectiveLineStatus || lesson.line_status)}</div>
         </div>
         <div class="chip-row">
           <span class="lesson-chip">Priority ${Math.round(lesson.priority)}</span>
           <span class="lesson-chip">Frequency ${lesson.frequency}</span>
           <span class="lesson-chip">Memory ${Math.round(Number(lesson.memory_score || 0))}</span>
           <span class="lesson-chip">Streak ${lesson.review.streak || 0}</span>
+          ${lesson.completed ? `<span class="lesson-chip known">Completed ${lesson.completedCount}x</span>` : ""}
+          ${lesson.mastered ? `<span class="lesson-chip known">Known from training</span>` : ""}
         </div>
         ${renderQueueExplainer(lesson, "compact")}
       </button>
@@ -3743,6 +3770,27 @@ async function syncTrainerToPlayableTurn() {
   return { autoMoves };
 }
 
+function completeCurrentLesson(lesson, clean, feedbackHtml = "") {
+  if (!lesson) return;
+  const line = lessonTrainingLine(lesson);
+  state.trainingCursor = line.length;
+  state.trainerPhase = "completed";
+  recordLessonCompletion(lesson.lesson_id, clean);
+  rebuildQueue();
+  renderQueue();
+  renderKnownArchive(state.knownArchive);
+  playMoveSound("", { complete: true });
+  updateTrainerCopy();
+  if (feedbackHtml) {
+    el.trainerFeedback.innerHTML = feedbackHtml;
+  } else {
+    el.trainerFeedback.innerHTML = clean
+      ? "Line complete. Clean run saved."
+      : "Line complete. Saved as completed with mistakes, so Bookup will keep it available for review.";
+  }
+  el.trainerFeedback.classList.remove("empty");
+}
+
 async function loadLessonById(lessonId) {
   const lesson = state.lessonMap[lessonId];
   if (!lesson) return;
@@ -3800,6 +3848,9 @@ async function loadLessonById(lessonId) {
     if (syncResult?.autoMoves?.length) {
       el.trainerFeedback.innerHTML = `Bookup played the lead-in to your decision point. ${renderAutoMoveSummary(syncResult.autoMoves)}`;
       el.trainerFeedback.classList.remove("empty");
+    }
+    if (syncTrainerPhase(lesson) === "completed") {
+      completeCurrentLesson(lesson, state.lessonMistakes === 0, "Line complete. Bookup reached the final planned position for this line.");
     }
     renderQueue();
     renderStudyWorkspace();
@@ -4323,7 +4374,16 @@ async function submitTrainerMove(from, to) {
     expectedUci = liveExpectedMoveUci(lesson);
     expectedEntry = (state.legalMoves || []).find((item) => item.uci === expectedUci);
   }
-  if (!expectedUci) return;
+  if (!expectedUci) {
+    completeCurrentLesson(
+      lesson,
+      state.lessonMistakes === 0,
+      state.lessonMistakes === 0
+        ? "Line complete. Clean run saved."
+        : "Line complete. Saved with mistakes, so Bookup will keep it in review."
+    );
+    return;
+  }
   if (move.uci !== expectedUci) {
     state.lessonMistakes += 1;
     recordReview(lesson.lesson_id, false);
@@ -4363,23 +4423,23 @@ async function submitTrainerMove(from, to) {
   const syncResult = await syncTrainerToPlayableTurn();
   if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
 
-  const lineFinished = syncTrainerPhase(lesson) === "completed";
-  if (lineFinished) {
-    if (state.lessonMistakes === 0) {
-      recordReview(lesson.lesson_id, true);
-    }
-    rebuildQueue();
-    renderQueue();
-    playMoveSound("", { complete: true });
-  }
-
   const successExplanation =
     state.trainingCursor - 1 === (lesson.target_ply_index || 0)
       ? lesson.explanation
       : "That keeps the repertoire line on track.";
-  el.trainerFeedback.innerHTML = lineFinished
-    ? `Line complete. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`
-    : `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`;
+  const lineFinished = syncTrainerPhase(lesson) === "completed";
+  if (lineFinished) {
+    completeCurrentLesson(
+      lesson,
+      state.lessonMistakes === 0,
+      state.lessonMistakes === 0
+        ? `Line complete. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)} Clean run saved.`
+        : `Line complete. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)} Saved with mistakes for review.`
+    );
+    return;
+  }
+
+  el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`;
   if (syncResult?.autoMoves?.length) {
     el.trainerFeedback.innerHTML += ` ${renderAutoMoveSummary(syncResult.autoMoves)}`;
   }
@@ -4430,9 +4490,13 @@ function defaultReviewState() {
     seen: 0,
     correct_count: 0,
     wrong_count: 0,
+    completed_count: 0,
+    clean_completed_count: 0,
     worked_on_count: 0,
     last_seen_at: 0,
+    last_completed_at: 0,
     last_result: "",
+    line_state: "",
   };
 }
 
@@ -4443,6 +4507,21 @@ function loadReviewStats(username) {
   } catch {
     return {};
   }
+}
+
+function mergeReviewStats(serverStats = {}, localStats = {}) {
+  const merged = { ...(localStats || {}) };
+  Object.entries(serverStats || {}).forEach(([lessonId, serverItem]) => {
+    const localItem = merged[lessonId] || {};
+    const serverCompleted = Number(serverItem?.completed_count || 0);
+    const localCompleted = Number(localItem?.completed_count || 0);
+    const serverSeen = Number(serverItem?.seen || 0);
+    const localSeen = Number(localItem?.seen || 0);
+    merged[lessonId] = serverCompleted > localCompleted || serverSeen >= localSeen
+      ? { ...localItem, ...serverItem }
+      : { ...serverItem, ...localItem };
+  });
+  return merged;
 }
 
 function saveReviewStats(username) {
@@ -4466,10 +4545,44 @@ function recordReview(lessonId, correct) {
     streak,
     correct_count: Number(current.correct_count || 0) + (correct ? 1 : 0),
     wrong_count: Number(current.wrong_count || 0) + (correct ? 0 : 1),
+    completed_count: Number(current.completed_count || 0),
+    clean_completed_count: Number(current.clean_completed_count || 0),
     worked_on_count: Number(current.worked_on_count || 0) + 1,
     last_seen_at: Date.now(),
+    last_completed_at: Number(current.last_completed_at || 0),
     due_at: dueAt,
     last_result: correct ? "right" : "wrong",
+    line_state: correct ? (streak >= 3 ? "mastered" : "in_progress") : "needs_review",
+  };
+  if (state.payload?.username) {
+    saveReviewStats(state.payload.username);
+    renderMistakeTimeline(state.payload?.profile?.mistake_timeline || null);
+    renderReviewSchedule(state.payload?.profile?.review_schedule || null);
+    void persistReviewStats(state.payload.username);
+  }
+}
+
+function recordLessonCompletion(lessonId, clean) {
+  const current = state.reviewStats[lessonId] || defaultReviewState();
+  const completed = Number(current.completed_count || 0) + 1;
+  const cleanCompleted = Number(current.clean_completed_count || 0) + (clean ? 1 : 0);
+  const streak = clean ? Math.min(Number(current.streak || 0) + 1, REVIEW_INTERVALS.length - 1) : 0;
+  const nextDays = clean ? REVIEW_INTERVALS[streak] : 0;
+  const dueAt = Date.now() + nextDays * 24 * 60 * 60 * 1000;
+  state.reviewStats[lessonId] = {
+    ...current,
+    seen: Number(current.seen || 0) + 1,
+    streak,
+    correct_count: Number(current.correct_count || 0) + (clean ? 1 : 0),
+    wrong_count: Number(current.wrong_count || 0),
+    completed_count: completed,
+    clean_completed_count: cleanCompleted,
+    worked_on_count: Number(current.worked_on_count || 0) + 1,
+    last_seen_at: Date.now(),
+    last_completed_at: Date.now(),
+    due_at: dueAt,
+    last_result: clean ? "completed_clean" : "completed_with_mistakes",
+    line_state: clean && streak >= 3 ? "mastered" : (clean ? "completed" : "completed_with_mistakes"),
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
@@ -4500,11 +4613,19 @@ function buildReviewSummary() {
   const seen = lessons.reduce((sum, item) => sum + Number(item.seen || 0), 0);
   const correct = lessons.reduce((sum, item) => sum + Number(item.correct_count || 0), 0);
   const wrong = lessons.reduce((sum, item) => sum + Number(item.wrong_count || 0), 0);
+  const completed = lessons.reduce((sum, item) => sum + Number(item.completed_count || 0), 0);
+  const cleanCompleted = lessons.reduce((sum, item) => sum + Number(item.clean_completed_count || 0), 0);
+  const mastered = lessons.filter((item) => item.line_state === "mastered" || Number(item.streak || 0) >= 3).length;
+  const completedLessons = lessons.filter((item) => Number(item.completed_count || 0) > 0).length;
   return {
     lessons_tracked: lessons.length,
+    lessons_completed: completedLessons,
+    mastered_lines: mastered,
     attempts_seen: seen,
     correct_attempts: correct,
     wrong_attempts: wrong,
+    completed_runs: completed,
+    clean_completed_runs: cleanCompleted,
     manual_needs_work: state.manualNeedsWork,
     manual_repertoire: state.manualRepertoire,
     manual_drift_choices: state.manualDriftChoices,

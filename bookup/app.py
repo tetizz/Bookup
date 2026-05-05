@@ -267,6 +267,7 @@ def profile_response_payload(
     cached: bool,
     reused_games: bool = False,
 ) -> dict:
+    progress = normalize_training_progress(progress)
     return {
         "username": username,
         "time_classes": sorted(normalized_time_classes) if normalized_time_classes else ["all public games"],
@@ -286,6 +287,63 @@ def profile_response_payload(
         "cached": cached,
         "reused_games": reused_games,
     }
+
+
+def _safe_number(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_training_progress(progress: dict | None) -> dict:
+    progress = progress if isinstance(progress, dict) else {}
+    raw_lessons = progress.get("lessons", {})
+    raw_lessons = raw_lessons if isinstance(raw_lessons, dict) else {}
+    lessons: dict[str, dict] = {}
+    for lesson_id, item in raw_lessons.items():
+        if not isinstance(item, dict):
+            continue
+        lesson_key = str(lesson_id).strip()
+        if not lesson_key:
+            continue
+        streak = max(0, int(_safe_number(item.get("streak"), 0)))
+        completed_count = max(0, int(_safe_number(item.get("completed_count"), 0)))
+        clean_completed_count = max(0, int(_safe_number(item.get("clean_completed_count"), 0)))
+        line_state = str(item.get("line_state", "")).strip()
+        if streak >= 3:
+            line_state = "mastered"
+        elif completed_count and not line_state:
+            line_state = "completed"
+        lessons[lesson_key] = {
+            "streak": streak,
+            "due_at": max(0, int(_safe_number(item.get("due_at"), 0))),
+            "seen": max(0, int(_safe_number(item.get("seen"), 0))),
+            "correct_count": max(0, int(_safe_number(item.get("correct_count"), 0))),
+            "wrong_count": max(0, int(_safe_number(item.get("wrong_count"), 0))),
+            "completed_count": completed_count,
+            "clean_completed_count": clean_completed_count,
+            "worked_on_count": max(0, int(_safe_number(item.get("worked_on_count"), 0))),
+            "last_seen_at": max(0, int(_safe_number(item.get("last_seen_at"), 0))),
+            "last_completed_at": max(0, int(_safe_number(item.get("last_completed_at"), 0))),
+            "last_result": str(item.get("last_result", ""))[:80],
+            "line_state": line_state,
+        }
+    raw_summary = progress.get("summary", {})
+    raw_summary = raw_summary if isinstance(raw_summary, dict) else {}
+    lesson_values = list(lessons.values())
+    summary = {
+        **raw_summary,
+        "lessons_tracked": len(lesson_values),
+        "lessons_completed": sum(1 for item in lesson_values if item.get("completed_count", 0) > 0),
+        "mastered_lines": sum(1 for item in lesson_values if item.get("line_state") == "mastered"),
+        "attempts_seen": sum(int(item.get("seen", 0)) for item in lesson_values),
+        "correct_attempts": sum(int(item.get("correct_count", 0)) for item in lesson_values),
+        "wrong_attempts": sum(int(item.get("wrong_count", 0)) for item in lesson_values),
+        "completed_runs": sum(int(item.get("completed_count", 0)) for item in lesson_values),
+        "clean_completed_runs": sum(int(item.get("clean_completed_count", 0)) for item in lesson_values),
+    }
+    return {"lessons": lessons, "summary": summary}
 
 
 def serialize_legal_moves(board: chess.Board) -> list[dict]:
@@ -951,8 +1009,9 @@ def review_progress() -> tuple:
         return jsonify({"error": "Lesson progress payload must be an object."}), 400
     if not isinstance(summary, dict):
         summary = {}
-    STORE.save_progress(username, {"lessons": lessons, "summary": summary})
-    return jsonify({"ok": True})
+    progress = normalize_training_progress({"lessons": lessons, "summary": summary})
+    STORE.save_progress(username, progress)
+    return jsonify({"ok": True, "summary": progress.get("summary", {})})
 
 
 def run_app() -> None:
