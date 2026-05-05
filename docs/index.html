@@ -5,113 +5,216 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Bookup is a local repertoire trainer that studies your real games with Stockfish and practical database context.">
     <title>Bookup | Repertoire Trainer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <main class="site-shell">
-      <section class="hero">
+    <header class="top-nav">
+      <a class="brand" href="#top" aria-label="Bookup home">
+        <span class="brand-mark">B</span>
+        <span>Bookup</span>
+      </a>
+      <nav aria-label="Page sections">
+        <a href="#repertoire">Repertoire</a>
+        <a href="#study">Study</a>
+        <a href="#theory">Theory</a>
+        <a href="#run">Run</a>
+      </nav>
+    </header>
+
+    <main id="top" class="site-shell">
+      <section class="hero section-panel">
         <div class="hero-copy">
-          <p class="eyebrow">Bookup for desktop</p>
+          <p class="section-kicker">Local repertoire trainer</p>
           <h1>Train the openings you actually play.</h1>
           <p class="hero-lede">
-            Bookup imports your games, builds a repertoire map from repeated positions,
-            and turns weak branches into focused training with Stockfish, Lichess database
-            context, move classifications, and live study tools.
+            Bookup turns your real games into a practical opening workflow: repertoire map,
+            repeated-mistake queue, live Stockfish study board, Lichess database replies,
+            and theory trees built from your own games.
           </p>
           <div class="hero-actions">
             <a class="primary-action" href="https://github.com/tetizz/Bookup/releases/latest">Download latest release</a>
-            <a class="secondary-action" href="https://github.com/tetizz/Bookup">View source on GitHub</a>
+            <a class="secondary-action" href="https://github.com/tetizz/Bookup">View source</a>
           </div>
-          <p class="local-note">
-            Bookup runs locally so your game cache, engine settings, and review progress stay on your machine.
-          </p>
         </div>
-        <div class="product-card" aria-label="Bookup product preview">
-          <div class="card-topline">
+
+        <div class="app-preview" aria-label="Bookup study lines demo">
+          <div class="preview-header">
             <span>Study Lines</span>
-            <span class="status-pill">Live local engine</span>
+            <span>Depth 26 | MultiPV 5</span>
           </div>
-          <div class="preview-layout">
-            <div class="mini-board" aria-label="Chessboard preview">
-              <div class="sq light rook">R</div>
-              <div class="sq dark knight">N</div>
-              <div class="sq light bishop">B</div>
-              <div class="sq dark queen">Q</div>
-              <div class="sq dark pawn">P</div>
-              <div class="sq light pawn">P</div>
-              <div class="sq dark"></div>
-              <div class="sq light"></div>
-              <div class="sq light"></div>
-              <div class="sq dark arrow-blue"></div>
-              <div class="sq light pawn white">P</div>
-              <div class="sq dark"></div>
-              <div class="sq dark"></div>
-              <div class="sq light"></div>
-              <div class="sq dark badge-square"><span class="badge">Book</span></div>
-              <div class="sq light"></div>
+          <div class="study-demo-grid">
+            <div class="board-wrap">
+              <div class="eval-rail" aria-label="Evaluation +0.42">
+                <span>+0.42</span>
+                <div><i style="height:56%"></i></div>
+                <span>White edge</span>
+              </div>
+              <div id="heroBoard" class="chess-board" aria-label="Position after e4 d6 Nf3 Nf6 Nc3 g6 d4 Bg7 Be3 O-O Qd2 a6"></div>
             </div>
-            <div class="analysis-panel">
-              <p class="panel-title">Engine and database</p>
-              <div class="line"><span>+0.32</span><strong>Nf3</strong><small>Book</small></div>
-              <div class="line"><span>+0.28</span><strong>d4</strong><small>Best</small></div>
-              <div class="line"><span>+0.18</span><strong>c4</strong><small>Excellent</small></div>
-              <p class="panel-note">Lichess replies and Stockfish candidate lines update from the live board.</p>
+            <aside class="side-panel">
+              <p class="panel-title">Live engine and database</p>
+              <div class="engine-line">
+                <span class="eval">+0.42</span>
+                <strong>Be2</strong>
+                <span class="class book"><img src="assets/move-classifications/book.png" alt="">Book</span>
+                <small>Be2 Nbd7 O-O e5 Rfd1</small>
+              </div>
+              <div class="engine-line">
+                <span class="eval">+0.39</span>
+                <strong>h3</strong>
+                <span class="class best"><img src="assets/move-classifications/best.png" alt="">Best</span>
+                <small>h3 e5 O-O-O b5</small>
+              </div>
+              <div class="engine-line">
+                <span class="eval">+0.31</span>
+                <strong>O-O-O</strong>
+                <span class="class excellent"><img src="assets/move-classifications/excellent.png" alt="">Excellent</span>
+                <small>O-O-O b5 Bd3 Nbd7</small>
+              </div>
+              <div class="database-card">
+                <span>Lichess replies</span>
+                <b>...e5 41%</b>
+                <b>...b5 23%</b>
+                <b>...Nbd7 18%</b>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section id="repertoire" class="demo-section">
+        <div class="section-heading">
+          <p class="section-kicker">Repertoire Map</p>
+          <h2>Positions and branches you actually reach.</h2>
+          <p>Bookup groups transpositions by board position, then shows your repeated choices beside the recommended continuation.</p>
+        </div>
+        <div class="demo-card map-demo">
+          <div class="node-card selected">
+            <span class="node-path">After e4 d6 Nf3 Nf6 Nc3 g6 d4</span>
+            <h3>White to move: choose your branch</h3>
+            <p>You usually play <strong>Be3</strong>. Stockfish also likes <strong>Be3</strong>, so this branch is marked as book/known.</p>
+            <div class="chip-row">
+              <span>Repeated 37x</span>
+              <span>Confidence 91</span>
+              <span>Transposes: Pirc / KID setups</span>
+            </div>
+          </div>
+          <div class="node-card">
+            <span class="node-path">Common reply: ...Bg7</span>
+            <h3>Prepare the practical response</h3>
+            <p>Lichess shows this reply in 58% of games from the position, so it stays high in the study queue.</p>
+            <div class="mini-lines">
+              <span>Be3 Bg7 Qd2 O-O</span>
+              <span>h3 O-O Be2 e5</span>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="feature-grid" aria-label="Bookup features">
-        <article>
-          <span class="feature-number">01</span>
-          <h2>Repertoire Map</h2>
-          <p>Groups transpositions by position and shows the moves you repeat, not vague opening-family cards.</p>
-        </article>
-        <article>
-          <span class="feature-number">02</span>
-          <h2>Needs Work</h2>
-          <p>Prioritizes repeated repertoire problems, due reviews, mistake timelines, and queue explainers.</p>
-        </article>
-        <article>
-          <span class="feature-number">03</span>
-          <h2>Study Lines</h2>
-          <p>Lets you play legal moves on the board while Bookup classifies them and keeps the analysis live.</p>
-        </article>
-        <article>
-          <span class="feature-number">04</span>
-          <h2>Theory Generator</h2>
-          <p>Builds move trees from imported games and generates next-move theory with Stockfish support.</p>
-        </article>
-      </section>
-
-      <section class="demo-strip">
-        <div>
-          <p class="eyebrow">Website preview</p>
-          <h2>What the web version can show</h2>
-          <p>
-            This GitHub Pages site is a public preview and documentation surface. The full trainer still needs the
-            local desktop app because Chess.com imports, Stockfish analysis, cache storage, and Lichess token use
-            require a backend running on your machine.
-          </p>
+      <section id="needs-work" class="demo-section split">
+        <div class="section-heading">
+          <p class="section-kicker">Needs Work</p>
+          <h2>Only repeated problems become urgent.</h2>
+          <p>No more one-off losses being called “costing points.” The queue explains why each line is due.</p>
         </div>
-        <div class="demo-tabs" role="tablist" aria-label="Preview tabs">
-          <button class="demo-tab active" type="button" data-demo-tab="train">Train</button>
-          <button class="demo-tab" type="button" data-demo-tab="review">Review</button>
-          <button class="demo-tab" type="button" data-demo-tab="theory">Theory</button>
-        </div>
-        <div class="demo-output" id="demoOutput">
-          Choose any legal move from your side. Bookup follows your repertoire branch, classifies the move, then replies from the live position.
+        <div class="demo-card queue-demo">
+          <div class="queue-item hot">
+            <span>Due today</span>
+            <h3>After Be3 O-O Qd2 a6</h3>
+            <p>You missed <strong>h3</strong> in this structure 6 times. Opponent reply ...b5 appears often enough to drill.</p>
+            <div class="chip-row">
+              <span>Repeated miss 6x</span>
+              <span>Database 31%</span>
+              <span>Review streak 0</span>
+            </div>
+          </div>
+          <div class="queue-item">
+            <span>New later</span>
+            <h3>After Nf3 d6 d4 Nf6</h3>
+            <p>Fresh line discovered from imports. It waits until repeated evidence says it matters.</p>
+          </div>
+          <div class="queue-item known">
+            <span>Known archive</span>
+            <h3>After e4 d6 d4 Nf6 Nc3</h3>
+            <p>You already play the book move here consistently, so it stays visible without clogging review.</p>
+          </div>
         </div>
       </section>
 
-      <section class="install-card">
+      <section id="study" class="demo-section">
+        <div class="section-heading centered">
+          <p class="section-kicker">Study Lines</p>
+          <h2>Ask first, then teach.</h2>
+          <p>The board asks what you would play, follows your legal move, replies from the live position, and classifies both sides.</p>
+        </div>
+        <div class="demo-card trainer-demo">
+          <div class="trainer-prompt">
+            <h3>Your move here</h3>
+            <p>Choose any legal move for White. Recommended: <strong>h3</strong>. Bookup will classify the move and keep the position live.</p>
+          </div>
+          <div class="classification-row">
+            <span><img src="assets/move-classifications/book.png" alt="">Be3 is Book</span>
+            <span><img src="assets/move-classifications/best.png" alt="">h3 is Best</span>
+            <span><img src="assets/move-classifications/excellent.png" alt="">O-O-O is Excellent</span>
+          </div>
+          <div class="move-strip">
+            e4 d6 Nf3 Nf6 Nc3 g6 d4 Bg7 Be3 O-O Qd2 a6 h3
+          </div>
+        </div>
+      </section>
+
+      <section id="theory" class="demo-section split reverse">
+        <div class="section-heading">
+          <p class="section-kicker">Theory</p>
+          <h2>A tree from your imported games.</h2>
+          <p>Bookup separates positions where you played White or Black, then opens any tree node on the analysis board.</p>
+        </div>
+        <div class="demo-card tree-demo" aria-label="Theory move tree demo">
+          <div class="tree-root">Start</div>
+          <div class="tree-branch thick"><span>Nf3</span><b>44%</b></div>
+          <div class="tree-branch"><span>d4</span><b>28%</b></div>
+          <div class="tree-branch"><span>e4</span><b>17%</b></div>
+          <div class="tree-branch muted"><span>c4</span><b>7%</b></div>
+          <div class="theory-lines">
+            <strong>Generated theory</strong>
+            <p>Nf3 d5 c4 dxc4 e3 a6 Bxc4 e6 O-O c5</p>
+            <p>d4 Nf6 Nf3 g6 c4 Bg7 Nc3 O-O</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="review" class="demo-section">
+        <div class="section-heading centered">
+          <p class="section-kicker">Review</p>
+          <h2>Know what improved and what still needs reps.</h2>
+        </div>
+        <div class="demo-card review-demo">
+          <div>
+            <span class="review-date">Today</span>
+            <h3>Clean completion saved</h3>
+            <p>Line reached the final planned position with no missed moves.</p>
+          </div>
+          <div>
+            <span class="review-date">Due next</span>
+            <h3>Same position, repeated issue</h3>
+            <p>Move choice drifted from your book branch 4 times this week.</p>
+          </div>
+          <div>
+            <span class="review-date">Archive</span>
+            <h3>Known line</h3>
+            <p>Played correctly 100+ times, removed from active pressure.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="run" class="install-card section-panel">
         <div>
-          <p class="eyebrow">Run Bookup</p>
-          <h2>Use the desktop app for the full trainer.</h2>
-          <p>
-            The root-level executable is the main launch path for Windows builds. Developers can also run the Flask app
-            from source with Python and a local Stockfish binary.
-          </p>
+          <p class="section-kicker">Run Bookup</p>
+          <h2>Use the desktop app for the full local trainer.</h2>
+          <p>The website is a preview. The full app needs local Stockfish, cache storage, game imports, and your private optional Lichess token.</p>
         </div>
         <pre><code>Bookup.exe
 
@@ -119,6 +222,7 @@ py -3.13 -m pip install -r requirements.txt
 py -3.13 main.py</code></pre>
       </section>
     </main>
+
     <script src="site.js"></script>
   </body>
 </html>
