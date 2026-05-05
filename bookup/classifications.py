@@ -23,11 +23,10 @@ MOVE_CLASSIFICATION_LABELS = {
 }
 
 WINTRCHESS_POINT_LOSS_BANDS = (
-    ("best", 0.01),
-    ("excellent", 0.045),
-    ("good", 0.08),
-    ("inaccuracy", 0.12),
-    ("mistake", 0.22),
+    ("excellent", 0.02),
+    ("good", 0.05),
+    ("inaccuracy", 0.10),
+    ("mistake", 0.20),
 )
 
 CLASSIFICATION_VALUES = {
@@ -693,7 +692,7 @@ def _consider_brilliant_classification(
 
 
 def point_loss_classification_key(loss: float, *, is_best_move: bool) -> str:
-    if is_best_move:
+    if is_best_move or loss <= 0.0001:
         return "best"
     for key, limit in WINTRCHESS_POINT_LOSS_BANDS:
         if loss < limit:
