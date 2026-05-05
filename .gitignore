@@ -10,6 +10,7 @@ build/
 dist/
 release/
 *.spec
+!Bookup.spec
 .build_dist/
 .build_work/
 .build_spec/

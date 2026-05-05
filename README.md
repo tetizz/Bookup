@@ -163,6 +163,23 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+## Install The Windows Release
+
+The easiest install path is the GitHub release installer:
+
+1. Open `https://github.com/tetizz/Bookup/releases/latest`.
+2. Download `Bookup-Setup-<version>.exe`.
+3. Run the installer.
+4. Launch Bookup from the Start Menu, the optional desktop shortcut, or the install folder.
+
+The release also includes `Bookup-Windows-<version>-portable.zip` if you prefer a portable folder. Extract it and run:
+
+```powershell
+.\Bookup\Bookup.exe
+```
+
+The installer and portable zip include the desktop app, templates, static assets, board pieces, and bundled Stockfish runtime. They do not include your private `config.json`, Lichess token, or local `bookup_data\` cache.
+
 ## Desktop EXE
 
 The packaged Windows app runs from the top-level Bookup folder:
@@ -195,6 +212,28 @@ That command recreates:
 - `_internal\`
 
 without restoring the old `dist\Bookup\...` layout.
+
+## Build A Release
+
+Maintainers can create the full local release bundle with:
+
+```powershell
+.\scripts\build_release.ps1 -Version 0.1.0
+```
+
+That creates:
+
+- `release\Bookup-Windows-0.1.0-portable.zip`
+- `release\Bookup-Setup-0.1.0.exe` when Inno Setup 6 is installed
+
+To publish an official GitHub release, push a version tag:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The `.github/workflows/release.yml` workflow builds the Windows app, produces both release artifacts, and attaches them to the GitHub release.
 
 ## Local Data
 
