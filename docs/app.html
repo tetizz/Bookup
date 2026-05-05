@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Try a static browser demo of Bookup's desktop repertoire trainer workflow.">
+    <title>Bookup | Web Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="app-page">
+    <header class="top-nav app-nav">
+      <a class="brand" href="index.html" aria-label="Bookup download page">
+        <span class="brand-mark">B</span>
+        <span>Bookup</span>
+      </a>
+      <nav aria-label="Demo navigation">
+        <a href="index.html">Download desktop</a>
+        <a href="#study">Study</a>
+        <a href="#theory">Theory</a>
+        <a href="#review">Review</a>
+      </nav>
+    </header>
+
+    <main class="web-app-shell">
+      <section class="web-app-hero section-panel">
+        <div>
+          <p class="section-kicker">Browser demo</p>
+          <h1>Try the Bookup workflow in the browser.</h1>
+          <p class="hero-lede">
+            This static web version shows the desktop trainer experience with pregenerated positions,
+            engine lines, move classifications, and theory branches. Download the desktop release for
+            live imports, local Stockfish, persistent cache, and private tokens.
+          </p>
+        </div>
+        <a class="primary-action" href="https://github.com/tetizz/Bookup/releases/latest">Download full desktop app</a>
+      </section>
+
+      <section class="desktop-app-frame">
+        <div class="tab-bar" role="tablist" aria-label="Bookup demo sections">
+          <button class="tab-button" type="button" data-demo-tab="setup">Setup</button>
+          <button class="tab-button" type="button" data-demo-tab="map">Repertoire Map</button>
+          <button class="tab-button" type="button" data-demo-tab="work">Needs Work</button>
+          <button class="tab-button active" type="button" data-demo-tab="study">Study Lines</button>
+          <button class="tab-button" type="button" data-demo-tab="theory">Theory</button>
+          <button class="tab-button" type="button" data-demo-tab="review">Review</button>
+        </div>
+
+        <div class="desktop-content">
+          <section class="demo-tab-panel" data-panel="setup">
+            <div class="panel-copy">
+              <p class="section-kicker">Setup</p>
+              <h2>Build from your games.</h2>
+              <p>In the desktop app, Bookup imports public Chess.com archives, stores a local cache, and uses optional Lichess explorer data for practical move weighting.</p>
+              <div class="setup-form-demo">
+                <label>Chess.com username <span>trixize1234</span></label>
+                <label>Import scope <span>All public games</span></label>
+                <label>Stockfish settings <span>Depth 24 | MultiPV 5 | Cache on</span></label>
+              </div>
+            </div>
+            <div class="progress-demo">
+              <span>Import sample</span>
+              <div><i style="width:82%"></i></div>
+              <p>82% - building move tree and cached lessons</p>
+            </div>
+          </section>
+
+          <section class="demo-tab-panel" data-panel="map">
+            <div class="panel-copy">
+              <p class="section-kicker">Repertoire Map</p>
+              <h2>Positions, not random opening labels.</h2>
+              <p>Transpositions collapse into the same node, and known best moves stay out of urgent review.</p>
+            </div>
+            <div class="node-list-demo">
+              <article class="node-card selected">
+                <span class="node-path">After e4 d6 Nf3 Nf6 Nc3 g6 d4</span>
+                <h3>White chooses Be3</h3>
+                <p>Repeated 37x. Classified as <strong>Book</strong> because it belongs to the imported branch.</p>
+              </article>
+              <article class="node-card">
+                <span class="node-path">After Be3 Bg7 Qd2 O-O</span>
+                <h3>Common reply ...a6</h3>
+                <p>Seen in database samples, ready for practical training.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="demo-tab-panel" data-panel="work">
+            <div class="panel-copy">
+              <p class="section-kicker">Needs Work</p>
+              <h2>Queue explainer included.</h2>
+              <p>Bookup explains why a line is due. Repeated misses matter; one-off losses do not become urgent by themselves.</p>
+            </div>
+            <div class="queue-demo">
+              <div class="queue-item hot">
+                <span>Due today</span>
+                <h3>After Qd2 a6</h3>
+                <p>Repeated miss: h3 was skipped 6 times. Practical reply frequency is high enough to drill.</p>
+              </div>
+              <div class="queue-item known">
+                <span>Known archive</span>
+                <h3>After e4 d6 d4 Nf6</h3>
+                <p>Correct 100+ times, archived instead of cluttering the active queue.</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="study" class="demo-tab-panel study-panel active" data-panel="study">
+            <div class="study-board-area">
+              <div class="preview-header">
+                <span>Study Lines</span>
+                <span>Live demo position</span>
+              </div>
+              <div class="board-wrap">
+                <div class="eval-rail" aria-label="Evaluation +0.42">
+                  <span id="webEval">+0.42</span>
+                  <div><i id="webEvalFill" style="height:56%"></i></div>
+                  <span>White edge</span>
+                </div>
+                <div id="webBoard" class="chess-board interactive-board" aria-label="Interactive Bookup study demo"></div>
+              </div>
+              <div class="study-prompt">
+                <h2>Your move here</h2>
+                <p id="studyPrompt">Choose a pregenerated branch below. The board, arrows, classification, engine lines, and database replies update together.</p>
+                <div class="choice-row">
+                  <button type="button" data-demo-choice="book">Play Be3</button>
+                  <button type="button" data-demo-choice="best">Play O-O</button>
+                  <button type="button" data-demo-choice="excellent">Play h3</button>
+                </div>
+              </div>
+            </div>
+            <aside class="analysis-panel">
+              <p class="panel-title">Live engine and database</p>
+              <div id="webLines" class="analysis-lines"></div>
+              <div class="database-card">
+                <span>Lichess replies</span>
+                <b id="replyOne">...e5 41%</b>
+                <b id="replyTwo">...b5 23%</b>
+                <b id="replyThree">...Nbd7 18%</b>
+              </div>
+              <div class="move-review-card">
+                <span>Move review</span>
+                <p id="moveReview">Be3 is a book move because it is part of the imported repertoire branch.</p>
+              </div>
+            </aside>
+          </section>
+
+          <section id="theory" class="demo-tab-panel" data-panel="theory">
+            <div class="panel-copy">
+              <p class="section-kicker">Theory</p>
+              <h2>Tree from imported games.</h2>
+              <p>Click a branch in the desktop app to open that exact position on the analysis board. This demo previews the shape.</p>
+            </div>
+            <div class="theory-tree-panel">
+              <div class="tree-root">Start</div>
+              <button type="button" class="tree-branch thick" data-demo-choice="book"><span>Nf3</span><b>44%</b></button>
+              <button type="button" class="tree-branch" data-demo-choice="best"><span>d4</span><b>28%</b></button>
+              <button type="button" class="tree-branch" data-demo-choice="excellent"><span>e4</span><b>17%</b></button>
+              <button type="button" class="tree-branch muted" data-demo-choice="book"><span>c4</span><b>7%</b></button>
+              <div class="theory-lines">
+                <strong>Generated theory sample</strong>
+                <p>Nf3 d5 c4 dxc4 e3 a6 Bxc4 e6 O-O c5</p>
+                <p>d4 Nf6 Nf3 g6 c4 Bg7 Nc3 O-O</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="review" class="demo-tab-panel" data-panel="review">
+            <div class="panel-copy">
+              <p class="section-kicker">Review</p>
+              <h2>Progress that survives sessions.</h2>
+              <p>The desktop app saves completed lines, known archive entries, miss history, and cached engine context locally.</p>
+            </div>
+            <div class="review-demo">
+              <div>
+                <span class="review-date">Completed</span>
+                <h3>Be3 branch</h3>
+                <p>Finished 3 times this week with no repeat miss.</p>
+              </div>
+              <div>
+                <span class="review-date">Timeline</span>
+                <h3>Mistake trend</h3>
+                <p>Repeated misses dropped from 6 to 2 after focused reps.</p>
+              </div>
+              <div>
+                <span class="review-date">Cache</span>
+                <h3>Ready next</h3>
+                <p>Engine lines and database replies are already stored for the next lesson.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="site.js"></script>
+  </body>
+</html>
