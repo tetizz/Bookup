@@ -175,7 +175,7 @@ const state = {
   lessonIndex: -1,
   activeLessonId: "",
   ratingProgressRange: "90",
-  ratingProgressTimeClass: "all",
+  ratingProgressTimeClass: "",
   ratingProgressPointIndex: null,
   boardOrientation: "white",
   trainingCursor: 0,
@@ -196,6 +196,7 @@ const state = {
   suppressNextClick: false,
   lastMove: null,
   lastMoveClassification: null,
+  lastMoveReaction: null,
   lastMoveSan: "",
   pendingMoveAnimationKey: "",
   renderedMoveAnimationKey: "",
@@ -510,7 +511,7 @@ function rebuildLegalByFrom() {
 }
 
 function applyBoardState(payload, options = {}) {
-  const { classification = null } = options;
+  const { classification = null, reaction = null } = options;
   state.boardFen = normalizeFen(payload?.fen || state.boardFen);
   state.boardPieceMap = pieceMapFromFen(state.boardFen);
   state.legalMoves = Array.isArray(payload?.legal_moves) ? payload.legal_moves : [];
@@ -525,6 +526,7 @@ function applyBoardState(payload, options = {}) {
   if (hasLastMove) {
     state.lastMove = payload?.last_move || null;
     state.lastMoveClassification = classification;
+    state.lastMoveReaction = reaction;
     if (hasPlayedSan) {
       state.lastMoveSan = String(payload?.played_san || "");
     }
@@ -533,6 +535,7 @@ function applyBoardState(payload, options = {}) {
       : "";
   } else if (classification) {
     state.lastMoveClassification = classification;
+    state.lastMoveReaction = reaction || state.lastMoveReaction;
   }
   if (state.selectedSquare && !isSquareMovableByUser(state.selectedSquare, currentLesson(), state.boardFen)) {
     state.selectedSquare = "";
@@ -1233,21 +1236,25 @@ function renderRatingProgress(progress) {
   Object.keys(splitPayloads).forEach((key) => {
     if (!splitKeys.includes(key)) splitKeys.push(key);
   });
-  const timeClassOrder = ["all", ...splitKeys];
-  if (!timeClassOrder.includes(state.ratingProgressTimeClass)) {
-    state.ratingProgressTimeClass = "all";
+  const timeClassOrder = splitKeys;
+  const defaultTimeKey = progress.default_time_class && timeClassOrder.includes(progress.default_time_class)
+    ? progress.default_time_class
+    : (timeClassOrder[0] || "");
+  if (timeClassOrder.length && (!state.ratingProgressTimeClass || !timeClassOrder.includes(state.ratingProgressTimeClass))) {
+    state.ratingProgressTimeClass = defaultTimeKey;
   }
-  const activeTimeKey = timeClassOrder.includes(state.ratingProgressTimeClass)
+  if (!timeClassOrder.length) {
+    state.ratingProgressTimeClass = "";
+  }
+  const activeTimeKey = timeClassOrder.length && timeClassOrder.includes(state.ratingProgressTimeClass)
     ? state.ratingProgressTimeClass
-    : "all";
-  const activeProgress = activeTimeKey === "all"
-    ? progress
-    : splitPayloads[activeTimeKey] || progress;
-  const timeClassLabel = activeTimeKey === "all"
-    ? "All time controls"
-    : activeProgress.time_class_label || activeTimeKey.replace(/_/g, " ");
+    : "";
+  const activeProgress = activeTimeKey ? (splitPayloads[activeTimeKey] || progress) : progress;
+  const timeClassLabel = activeTimeKey
+    ? activeProgress.time_class_label || activeTimeKey.replace(/_/g, " ")
+    : "Rated games";
   const ranges = activeProgress.ranges || {};
-  const rangeOrder = ["30", "90", "all"].filter((key) => ranges[key]);
+  const rangeOrder = ["7", "30", "90", "365", "all"].filter((key) => ranges[key]);
   if (!rangeOrder.includes(state.ratingProgressRange)) {
     state.ratingProgressRange = activeProgress.default_range || progress.default_range || rangeOrder[0] || "90";
   }
@@ -1259,17 +1266,22 @@ function renderRatingProgress(progress) {
     .filter((point) => Number.isFinite(point.graphValue));
   const selectedIndex = pickRatingProgressIndex(graphPoints);
   const selected = graphPoints[selectedIndex] || graphPoints[graphPoints.length - 1] || points[points.length - 1] || null;
-  const chart = buildRatingProgressChart(graphPoints, selected?.index);
+  const isMixedAllChart = false;
+  const chart = buildRatingProgressChart(graphPoints, selected?.index, {
+    dense: graphPoints.length > 130,
+    baselineValue: range.rating_start,
+  });
   const ratingEnd = range.rating_end ?? activeProgress.latest_rating ?? progress.latest_rating ?? null;
   const ratingChange = range.rating_change;
   const changeClass = Number(ratingChange || 0) > 0 ? "up" : Number(ratingChange || 0) < 0 ? "down" : "flat";
+  const gameTypeText = activeTimeKey ? `${timeClassLabel.toLowerCase()} game` : "rated game";
   el.ratingProgress.className = "rating-progress-panel";
   el.ratingProgress.innerHTML = `
     <div class="rating-progress-head">
       <div>
         <div class="line-badge">Imported form tracker</div>
         <h3>${escapeHtml(range.label || "Progress")} · ${escapeHtml(timeClassLabel)}</h3>
-        <p>${Number(range.games || 0)} ${escapeHtml(timeClassLabel.toLowerCase())} game${Number(range.games || 0) === 1 ? "" : "s"} from ${escapeHtml(range.start_date || "")} to ${escapeHtml(range.end_date || "")}</p>
+        <p>${Number(range.games || 0)} ${escapeHtml(gameTypeText)}${Number(range.games || 0) === 1 ? "" : "s"} from ${escapeHtml(range.start_date || "")} to ${escapeHtml(range.end_date || "")}</p>
       </div>
       <div class="progress-filter-stack">
         <div class="progress-range-tabs" role="tablist" aria-label="Progress range">
@@ -1279,18 +1291,18 @@ function renderRatingProgress(progress) {
             </button>
           `).join("")}
         </div>
-        <div class="progress-range-tabs compact" role="tablist" aria-label="Time-control split">
+        ${timeClassOrder.length ? `<div class="progress-range-tabs compact" role="tablist" aria-label="Time-control split">
           ${timeClassOrder.map((key) => {
-            const payload = key === "all" ? progress : splitPayloads[key] || {};
-            const label = key === "all" ? "All" : payload.time_class_label || key.replace(/_/g, " ");
-            const games = key === "all" ? progress.dated_games || progress.total_games || 0 : payload.dated_games || payload.total_games || 0;
+            const payload = splitPayloads[key] || {};
+            const label = payload.time_class_label || key.replace(/_/g, " ");
+            const games = payload.dated_games || payload.total_games || 0;
             return `
               <button class="progress-range-btn ${key === activeTimeKey ? "active" : ""}" type="button" data-progress-time-class="${escapeHtml(key)}">
                 ${escapeHtml(label)} <span>${Number(games || 0)}</span>
               </button>
             `;
           }).join("")}
-        </div>
+        </div>` : ""}
       </div>
     </div>
     <div class="progress-metric-grid">
@@ -1316,7 +1328,7 @@ function renderRatingProgress(progress) {
       </article>
     </div>
     <div class="rating-chart-wrap">
-      <div class="rating-chart">
+      <div class="rating-chart ${chart.dense ? "dense" : ""} ${isMixedAllChart ? "mixed" : ""}">
         ${chart.svg}
         <div class="rating-point-layer">
           ${chart.points.map((point) => `
@@ -1330,8 +1342,23 @@ function renderRatingProgress(progress) {
             ></button>
           `).join("")}
         </div>
+        <div class="rating-result-ribbon" aria-hidden="true">
+          ${chart.resultTicks.map((tick) => `
+            <span
+              class="rating-result-tick ${escapeHtml(tick.tone)}"
+              style="left:${tick.x}%"
+              title="${escapeHtml(tick.title)}"
+            ></span>
+          `).join("")}
+        </div>
+        <div class="rating-chart-legend">
+          <span><i class="win"></i>Win</span>
+          <span><i class="draw"></i>Draw</span>
+          <span><i class="loss"></i>Loss</span>
+        </div>
         <div class="rating-axis top">${chart.maxLabel}</div>
         <div class="rating-axis bottom">${chart.minLabel}</div>
+        <div class="rating-axis baseline">Start ${chart.baselineLabel}</div>
       </div>
       <div class="progress-highlight" data-progress-highlight>
         ${renderRatingProgressHighlight(selected, range)}
@@ -1359,13 +1386,16 @@ function pickRatingProgressIndex(graphPoints) {
   return graphPoints.length - 1;
 }
 
-function buildRatingProgressChart(graphPoints, selectedSourceIndex) {
+function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}) {
   if (!graphPoints.length) {
     return {
       svg: "<div class=\"rating-chart-empty\">No rating points in this range yet.</div>",
       points: [],
+      resultTicks: [],
       minLabel: "--",
       maxLabel: "--",
+      baselineLabel: "--",
+      dense: false,
     };
   }
   const values = graphPoints.map((point) => point.graphValue);
@@ -1375,9 +1405,12 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex) {
     minValue -= 10;
     maxValue += 10;
   }
+  const padding = Math.max(12, Math.min(90, (maxValue - minValue) * 0.08));
+  minValue -= padding;
+  maxValue += padding;
   const span = maxValue - minValue || 1;
   const toX = (index) => graphPoints.length === 1 ? 50 : (index / (graphPoints.length - 1)) * 100;
-  const toY = (value) => 88 - ((value - minValue) / span) * 72;
+  const toY = (value) => 86 - ((value - minValue) / span) * 68;
   const coords = graphPoints.map((point, index) => ({
     x: Number(toX(index).toFixed(3)),
     y: Number(toY(point.graphValue).toFixed(3)),
@@ -1385,21 +1418,52 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex) {
     tone: point.result_tone || "idle",
     title: `${point.label}: ${point.rating_graph ?? point.rating ?? "--"} rating, ${point.summary || ""}`,
   }));
-  const linePath = coords.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
-  const areaPath = `${linePath} L ${coords[coords.length - 1].x} 96 L ${coords[0].x} 96 Z`;
+  const lineStep = Math.max(1, Math.ceil(coords.length / 320));
+  const pathCoords = coords.filter((_point, index) => index % lineStep === 0 || index === coords.length - 1);
+  const linePath = pathCoords.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+  const areaPath = `${linePath} L ${pathCoords[pathCoords.length - 1].x} 96 L ${pathCoords[0].x} 96 Z`;
   const selected = coords.find((point) => Number(point.sourceIndex) === Number(selectedSourceIndex));
   const selectedLine = selected ? `<line class="rating-selected-line" x1="${selected.x}" x2="${selected.x}" y1="8" y2="96"></line>` : "";
+  const baselineValue = Number.isFinite(Number(options.baselineValue))
+    ? Number(options.baselineValue)
+    : Number(graphPoints[0]?.graphValue);
+  const baselineY = Number.isFinite(baselineValue) ? Number(toY(baselineValue).toFixed(3)) : null;
+  const baselineLine = baselineY == null
+    ? ""
+    : `<line class="rating-baseline-line" x1="0" x2="100" y1="${baselineY}" y2="${baselineY}"></line>`;
+  const dense = Boolean(options.dense);
+  const markerLimit = dense ? 72 : 140;
+  const markerStep = Math.max(1, Math.ceil(coords.length / markerLimit));
+  const markerPoints = coords.filter((point, index) => (
+    index % markerStep === 0 ||
+    index === coords.length - 1 ||
+    Number(point.sourceIndex) === Number(selectedSourceIndex)
+  ));
+  const playedCoords = coords
+    .map((point, index) => ({ ...point, games: Number(graphPoints[index]?.games || 0) }))
+    .filter((point) => point.games > 0);
+  const tickLimit = dense ? 86 : 120;
+  const tickStep = Math.max(1, Math.ceil(playedCoords.length / tickLimit));
+  const resultTicks = playedCoords.filter((point, index) => (
+    index % tickStep === 0 ||
+    index === playedCoords.length - 1 ||
+    Number(point.sourceIndex) === Number(selectedSourceIndex)
+  ));
   return {
     svg: `
       <svg viewBox="0 0 100 104" preserveAspectRatio="none" aria-hidden="true">
+        ${baselineLine}
         <path class="rating-area" d="${areaPath}"></path>
         <path class="rating-line" d="${linePath}"></path>
         ${selectedLine}
       </svg>
     `,
-    points: coords,
+    points: markerPoints,
+    resultTicks,
     minLabel: String(Math.round(minValue)),
     maxLabel: String(Math.round(maxValue)),
+    baselineLabel: Number.isFinite(baselineValue) ? String(Math.round(baselineValue)) : "--",
+    dense,
   };
 }
 
@@ -1413,7 +1477,7 @@ function bindRatingProgressEvents() {
   });
   el.ratingProgress.querySelectorAll("[data-progress-time-class]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.ratingProgressTimeClass = button.dataset.progressTimeClass || "all";
+      state.ratingProgressTimeClass = button.dataset.progressTimeClass || "";
       state.ratingProgressPointIndex = null;
       renderRatingProgress(state.payload?.profile?.rating_progress || null);
     });
@@ -1445,6 +1509,10 @@ function renderRatingProgressHighlight(point, range) {
     ? point.opponents.map((name) => escapeHtml(name)).join(", ")
     : "No opponent list for this day";
   const rating = point.rating ?? point.rating_graph ?? range.rating_end ?? "--";
+  const gameLinks = renderRatingProgressGameLinks(point.game_links || []);
+  const openGame = point.last_game_url
+    ? `<a class="tiny-action" href="${escapeHtml(point.last_game_url)}" target="_blank" rel="noreferrer">Open latest game</a>`
+    : "";
   return `
     <div>
       <span class="line-badge">${escapeHtml(point.label || point.date || "Selected day")}</span>
@@ -1457,7 +1525,29 @@ function renderRatingProgressHighlight(point, range) {
       <span><b>${Number(point.draws || 0)}</b> draws</span>
       <span><b>${Number(point.losses || 0)}</b> losses</span>
     </div>
+    ${gameLinks}
     <small>${opponents}</small>
+    ${openGame}
+  `;
+}
+
+function renderRatingProgressGameLinks(items) {
+  if (!Array.isArray(items) || !items.length) return "";
+  return `
+    <div class="progress-game-list">
+      ${items.slice(-5).reverse().map((item) => {
+        const tone = item.result || "idle";
+        const label = item.opponent || "Unknown opponent";
+        const rating = item.rating == null ? "" : ` · ${Number(item.rating)}`;
+        const moves = item.move_count == null ? "" : ` · ${Number(item.move_count)} moves`;
+        const opening = item.opening ? ` · ${item.opening}` : "";
+        const detail = `${item.color || ""}${rating}${moves}${opening}`;
+        const content = `<span class="progress-game-dot ${escapeHtml(tone)}"></span><b>${escapeHtml(label)}</b><small>${escapeHtml(detail)}</small>`;
+        return item.url
+          ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${content}</a>`
+          : `<span>${content}</span>`;
+      }).join("")}
+    </div>
   `;
 }
 
@@ -2229,6 +2319,7 @@ async function openMoveTreePosition(fen, label = "", perspective = "") {
   state.dragFrom = "";
   state.lastMove = null;
   state.lastMoveClassification = null;
+  state.lastMoveReaction = null;
   state.currentInsight = null;
   state.currentInsightKey = "";
   state.playedTrainingLine = [];
@@ -2256,6 +2347,7 @@ async function openFenOnAnalysisBoard(fen, label = "Analysis position") {
   state.dragFrom = "";
   state.lastMove = null;
   state.lastMoveClassification = null;
+  state.lastMoveReaction = null;
   state.currentInsight = null;
   state.currentInsightKey = "";
   state.playedTrainingLine = [];
@@ -2386,6 +2478,7 @@ function renderStudyEngineLine(line, index) {
   const evalText = formatEval(line?.score_cp_white ?? line?.score_cp ?? 0);
   const detail = escapeHtml(line?.purpose || "");
   const preview = escapeHtml(line?.line_san || "");
+  const reaction = line?.reaction?.headline ? `<div class="study-engine-reaction">${escapeHtml(line.reaction.headline)}</div>` : "";
   return `
     <article class="study-engine-line">
       <div class="study-engine-head">
@@ -2396,6 +2489,7 @@ function renderStudyEngineLine(line, index) {
         <div class="line-badge">${Math.round(Number(line?.popularity || 0))}%</div>
       </div>
       <div class="study-engine-preview">${detail}</div>
+      ${reaction}
       <div class="study-engine-preview">${preview || "No continuation loaded yet."}</div>
       ${line?.uci ? `<button class="tiny-action" type="button" data-trainer-move="${escapeHtml(line.uci)}">Try ${escapeHtml(line.move || line.uci)}</button>` : ""}
     </article>
@@ -2438,11 +2532,55 @@ function renderStudyMoveCard(title, san, classification, copy) {
   `;
 }
 
-function renderStudyReviewMarkup(lesson, playedMoveSan, playedClassification, recommendedMove, recommendedClassification, coachText = "") {
+function renderReactionMarkup(reaction) {
+  if (!reaction) return "";
+  const reasons = Array.isArray(reaction?.reasons) ? reaction.reasons.filter(Boolean).slice(0, 3) : [];
+  const features = Array.isArray(reaction?.features) ? reaction.features.filter(Boolean).slice(0, 4) : [];
+  return `
+    <div class="coach-reaction-card">
+      <div class="coach-reaction-head">${escapeHtml(reaction?.headline || "Coach reaction")}</div>
+      ${reasons.length ? `<div class="coach-reaction-reasons">${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}</div>` : ""}
+      ${features.length ? `<div class="coach-reaction-features">${features.map((feature) => `<span>${escapeHtml(feature)}</span>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+function liveReactionFromInsight(insight) {
+  return insight?.your_move_reaction
+    || insight?.coach_reaction
+    || insight?.recommended_reaction
+    || null;
+}
+
+function renderTrainerInsightMarkup(insight) {
+  const reaction = liveReactionFromInsight(insight);
+  const topLine = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines[0] : null;
+  const databaseMoves = Array.isArray(insight?.database_moves) ? insight.database_moves.slice(0, 3) : [];
+  if (!reaction && !topLine && !databaseMoves.length) {
+    return "Blue arrows show top engine moves. Red arrows show threats or practical replies once the live position loads.";
+  }
+  const topCopy = topLine
+    ? `<span>Engine: <strong>${escapeHtml(topLine.move || topLine.uci || "")}</strong>${classificationBadge(topLine.classification, "compact")}</span>`
+    : "";
+  const databaseCopy = databaseMoves.length
+    ? `<span>Database: ${databaseMoves.map((item) => `${escapeHtml(item.san || item.uci || "")} ${escapeHtml(String(item.popularity || item.percent || 0))}%`).join(" / ")}</span>`
+    : "";
+  return `
+    <div class="trainer-live-reaction">
+      ${reaction ? renderReactionMarkup(reaction) : ""}
+      <div class="trainer-live-facts">
+        ${topCopy}
+        ${databaseCopy}
+      </div>
+    </div>
+  `;
+}
+
+function renderStudyReviewMarkup(lesson, playedMoveSan, playedClassification, recommendedMove, recommendedClassification, coachText = "", reaction = null) {
   if (!playedMoveSan) {
     const fallbackMove = recommendedMove || lesson?.best_reply || "No move yet";
     const fallbackCopy = coachText || "Bookup will classify the move you play here, then compare it with the current engine recommendation.";
-    return renderStudyMoveCard("Recommended move", fallbackMove, recommendedClassification, fallbackCopy);
+    return `${renderStudyMoveCard("Recommended move", fallbackMove, recommendedClassification, fallbackCopy)}${renderReactionMarkup(reaction)}`;
   }
   const key = classificationKey(playedClassification);
   const icon = String(playedClassification?.icon || MOVE_CLASSIFICATION_ICONS[key] || "").trim();
@@ -2464,6 +2602,7 @@ function renderStudyReviewMarkup(lesson, playedMoveSan, playedClassification, re
           ${bestAlternative ? `<div class="study-classified-alt">Best was <strong>${escapeHtml(recommendedMove)}</strong>${classificationBadge(recommendedClassification, "compact")}</div>` : ""}
         </div>
       </div>
+      ${renderReactionMarkup(reaction)}
       ${openingFooter}
     </article>
   `;
@@ -2745,6 +2884,7 @@ function renderEmptyStudyWorkspace() {
   state.selectedSquare = "";
   state.lastMove = null;
   state.lastMoveClassification = null;
+  state.lastMoveReaction = null;
   state.lastMoveSan = "";
   state.boardOrientation = "white";
   state.boardFen = START_FEN;
@@ -2895,6 +3035,7 @@ function renderFreeStudyWorkspace() {
       recommendedMove,
       recommendedClassification,
       coachText,
+      state.lastMoveReaction || insight?.your_move_reaction || insight?.coach_reaction || null,
     );
     if (mainReviewMarkup) cards.push(mainReviewMarkup);
     if (playedMoveSan && recommendedMove) {
@@ -3028,6 +3169,7 @@ function renderStudyWorkspace() {
       recommendedMove,
       recommendedClassification,
       coachText,
+      state.lastMoveReaction || insight?.your_move_reaction || insight?.coach_reaction || null,
     );
     if (mainReviewMarkup) {
       cards.push(mainReviewMarkup);
@@ -3728,6 +3870,7 @@ async function classifyMoveAtFen(fen, lesson, moveUci, moveSan, repeatedCount = 
       classification: null,
       recommendedClassification: null,
       recommendedMove: "",
+      reaction: null,
     };
   }
   const insight = await fetchPositionInsight(
@@ -3742,6 +3885,7 @@ async function classifyMoveAtFen(fen, lesson, moveUci, moveSan, repeatedCount = 
     classification: insight?.your_move_classification || null,
     recommendedClassification: insight?.recommended_classification || null,
     recommendedMove: insight?.recommended_move || lesson.best_reply || moveSan || moveUci,
+    reaction: insight?.your_move_reaction || insight?.coach_reaction || null,
   };
 }
 
@@ -3785,12 +3929,13 @@ function instantMoveClassification(lesson, move) {
   return null;
 }
 
-function applyResolvedMoveClassification(moveUci, classification, expectedFen = "") {
+function applyResolvedMoveClassification(moveUci, classification, expectedFen = "", reaction = null) {
   if (!classification) return;
   const lastMoveUci = state.lastMove ? `${state.lastMove.from}${state.lastMove.to}` : "";
   if (lastMoveUci !== String(moveUci || "").slice(0, 4)) return;
   if (expectedFen && normalizeFen(state.boardFen) !== normalizeFen(expectedFen)) return;
   state.lastMoveClassification = classification;
+  state.lastMoveReaction = reaction || state.lastMoveReaction;
   renderBoard(state.boardFen, { animate: false });
   renderStudyWorkspace();
 }
@@ -3948,23 +4093,21 @@ function updateTrainerCopy() {
   const line = lessonTrainingLine(lesson);
   const liveInsight = currentLiveInsight(lesson);
   const recommended = currentRecommendedMoveData(lesson, liveInsight);
-  const engineCoachText = String(liveInsight?.coach_explanation || "").trim();
   const lineCoachText = String(lesson?.coach_explanation || lesson?.explanation || "").trim();
-  const coachText = state.freeBranchMode
-    ? engineCoachText
-    : engineCoachText && engineCoachText !== lineCoachText
-    ? engineCoachText
-    : (lineCoachText || engineCoachText);
   const recommendedLabel = recommended.classification?.label || lesson?.recommended_classification?.label || "Best";
   const progress = `${Math.min(state.trainingCursor, line.length)}/${line.length}`;
   const expectedText = state.freeBranchMode
     ? String(liveInsight?.recommended_move || "").trim()
     : (recommended.san || lesson.best_reply || "");
+  const reaction = state.lastMoveReaction || liveReactionFromInsight(liveInsight);
+  const coachText = String(reaction?.headline || "").trim()
+    || (expectedText ? `Current recommendation: ${expectedText}.` : "")
+    || (lineCoachText ? "Bookup has cached coaching for this position in the review panel." : "");
   if (phase === "free_autoplay") {
     renderTrainerDecision(lesson);
     el.boardTitle.textContent = "Bookup reply";
     el.boardSummary.textContent = "Bookup is choosing a practical reply from the live board, then it will hand the move back to you.";
-    el.trainerCoach.textContent = coachText || "The move you chose left the stored line, so Bookup is continuing from the actual position instead of forcing the old prompt.";
+    el.trainerCoach.textContent = "The stored line is paused. Bookup is replying from the actual board so the prompt stays synced.";
     el.trainerCoach.classList.remove("empty");
     el.boardLine.textContent = currentPlayedLineSan().join(" ") || "No played line yet.";
     el.boardLine.classList.toggle("empty", !currentPlayedLineSan().length);
@@ -3985,7 +4128,7 @@ function updateTrainerCopy() {
       : "Choose any legal move for your color. Bookup will follow repertoire branches and transpositions when they fit.";
     if (discoveryPreview) {
       el.trainerCoach.textContent = coachText
-        ? `Your repeated moves in this position: ${discoveryPreview}. ${coachText}`
+        ? `Your repeated moves here: ${discoveryPreview}. ${coachText}`
         : `Your repeated moves in this position: ${discoveryPreview}. Recommended move: ${expectedText || lesson.best_reply}.`;
     } else {
       el.trainerCoach.textContent = coachText || (expectedText
@@ -4003,7 +4146,9 @@ function updateTrainerCopy() {
   if (phase === "completed") {
     el.boardTitle.textContent = "Line complete";
     el.boardSummary.textContent = "Line complete. Reset it or move on to the next due line.";
-    el.trainerCoach.textContent = coachText || `Bookup ran the line through to the final planned position after ${lesson.trigger_move}.`;
+    el.trainerCoach.textContent = state.lessonMistakes === 0
+      ? "Clean completion saved. This line can move toward Known after enough repeats."
+      : "Completion saved with misses. Bookup will keep this line available for review.";
     el.trainerCoach.classList.remove("empty");
     el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "No line loaded yet.";
     el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
@@ -4013,7 +4158,7 @@ function updateTrainerCopy() {
   if (phase === "intro_autoplay") {
     el.boardTitle.textContent = "Follow the lead-in";
     el.boardSummary.textContent = `Bookup is stepping through the practical setup. Step ${progress}.`;
-    el.trainerCoach.textContent = lineCoachText || engineCoachText || "Watch the lead-in until the board reaches your next real decision point.";
+    el.trainerCoach.textContent = "Watch the lead-in until the board reaches your next real decision point.";
   } else if (trainerUserTurn(lesson)) {
     el.boardTitle.textContent = expectedText ? "Your move here" : "Choose your move";
     el.boardSummary.textContent = expectedText
@@ -4096,7 +4241,7 @@ async function syncTrainerToPlayableTurn() {
     if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
     const appliedFen = state.boardFen;
     moveMetaPromise.then((moveMeta) => {
-      applyResolvedMoveClassification(expectedUci, moveMeta?.classification || moveMeta?.recommendedClassification || null, appliedFen);
+      applyResolvedMoveClassification(expectedUci, moveMeta?.classification || moveMeta?.recommendedClassification || null, appliedFen, moveMeta?.reaction || null);
     });
     state.trainingCursor += 1;
     appendPlayedMove(expectedUci, state.lastMoveSan || expectedSan);
@@ -4162,7 +4307,7 @@ async function syncFreeBranchToPlayableTurn() {
     if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return { autoMoves };
     const appliedFen = state.boardFen;
     moveMetaPromise.then((moveMeta) => {
-      applyResolvedMoveClassification(reply.uci, moveMeta?.classification || moveMeta?.recommendedClassification || null, appliedFen);
+      applyResolvedMoveClassification(reply.uci, moveMeta?.classification || moveMeta?.recommendedClassification || null, appliedFen, moveMeta?.reaction || null);
     });
     appendPlayedMove(reply.uci, state.lastMoveSan || reply.san);
     state.trainingCursor += 1;
@@ -4226,6 +4371,7 @@ async function loadLessonById(lessonId) {
   clearDragState();
   state.lastMove = null;
   state.lastMoveClassification = null;
+  state.lastMoveReaction = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
   state.currentInsight = null;
@@ -4310,6 +4456,7 @@ function clearTrainer() {
   clearDragState();
   state.lastMove = null;
   state.lastMoveClassification = null;
+  state.lastMoveReaction = null;
   state.lastMoveSan = "";
   state.previousRenderedPieces = {};
   state.activeTrainingLine = [];
@@ -4393,7 +4540,7 @@ async function updateCurrentInsight() {
     if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
     state.insightLoading = false;
     renderArrows(cached);
-    el.trainerInsight.textContent = cached.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
+    el.trainerInsight.innerHTML = renderTrainerInsightMarkup(cached);
     el.trainerInsight.classList.remove("empty");
     renderStudyWorkspace();
     return;
@@ -4421,7 +4568,7 @@ async function updateCurrentInsight() {
         ?? 0
     );
     renderArrows(insight);
-    el.trainerInsight.textContent = insight.coach_explanation || "Blue arrows show the top engine moves. Red arrows show the main threats or replies you should expect next.";
+    el.trainerInsight.innerHTML = renderTrainerInsightMarkup(insight);
   } catch (error) {
     if (!isCurrentInsightRequest(lesson, cacheKey, requestId, loadId)) return;
     try {
@@ -4435,8 +4582,9 @@ async function updateCurrentInsight() {
     }
     state.insightLoading = false;
     renderArrows(currentLiveInsight(lesson));
-    el.trainerInsight.textContent = state.currentInsight?.coach_explanation
-      || "Live arrows are unavailable right now. Blue arrows show top engine moves and red arrows show threats when the current position insight loads.";
+    el.trainerInsight.innerHTML = state.currentInsight
+      ? renderTrainerInsightMarkup(state.currentInsight)
+      : "Live arrows are unavailable right now. Blue arrows show top engine moves and red arrows show threats when the current position insight loads.";
   }
   el.trainerInsight.classList.remove("empty");
   renderStudyWorkspace();
@@ -4733,24 +4881,23 @@ async function submitTrainerMove(from, to) {
       renderBoard(state.boardFen, { animate: true });
       const appliedFen = state.boardFen;
       moveMetaPromise.then((moveMeta) => {
-        applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+        applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen, moveMeta?.reaction || null);
       });
       state.trainingCursor = rootCursor + 1;
       syncTrainerPhase(lesson);
+      let branchFeedback = "";
       if (chosenBranch.uci === lesson.preferred_branch_uci) {
-        el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} ${escapeHtml(lesson.explanation)}`;
+        branchFeedback = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} ${escapeHtml(lesson.explanation)}`;
       } else {
         const sourceLabel = move.uci === chosenBranch.uci
           ? (chosenBranch.source === "repertoire" ? "your repeated repertoire branch" : "a known branch in this position")
           : "a transposition back into your repertoire";
-        el.trainerFeedback.innerHTML = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} matches ${escapeHtml(sourceLabel)}. Bookup will follow it, but the preferred move here is <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
+        branchFeedback = `<strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification, "inline")} matches ${escapeHtml(sourceLabel)}. Bookup will follow it, but the preferred move here is <strong>${escapeHtml(recommendedMoveLabel)}</strong>${classificationBadge(recommendedClassification, "inline")}.`;
       }
-      el.trainerFeedback.classList.remove("empty");
       const syncResult = await syncTrainerToPlayableTurn();
       if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
-      if (syncResult?.autoMoves?.length) {
-        setTrainerFeedback(`${el.trainerFeedback.innerHTML} ${renderAutoMoveSummary(syncResult.autoMoves)}`);
-      }
+      setTrainerFeedback(`${branchFeedback}${syncResult?.autoMoves?.length ? ` ${renderAutoMoveSummary(syncResult.autoMoves)}` : ""}`);
+      updateTrainerCopy();
       renderQueue();
       return;
     }
@@ -4764,7 +4911,7 @@ async function submitTrainerMove(from, to) {
     renderBoard(state.boardFen, { animate: true });
     const appliedFen = state.boardFen;
     moveMetaPromise.then((moveMeta) => {
-      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen, moveMeta?.reaction || null);
     });
     state.trainingCursor += 1;
     state.branchLocked = false;
@@ -4822,7 +4969,7 @@ async function submitTrainerMove(from, to) {
     await applyMoveToBoard(move.uci, playedClassification || recommendedClassification || null);
     const appliedFen = state.boardFen;
     moveMetaPromise.then((moveMeta) => {
-      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen, moveMeta?.reaction || null);
     });
     appendPlayedMove(move.uci, state.lastMoveSan || move.san);
     state.trainingCursor += 1;
@@ -4846,7 +4993,7 @@ async function submitTrainerMove(from, to) {
   if (!isLessonRunCurrent(runToken, lesson.lesson_id)) return;
   const appliedFen = state.boardFen;
   moveMetaPromise.then((moveMeta) => {
-    applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen);
+    applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen, moveMeta?.reaction || null);
   });
   appendPlayedMove(move.uci, state.lastMoveSan || move.san);
   state.trainingCursor += 1;
@@ -4870,12 +5017,10 @@ async function submitTrainerMove(from, to) {
     return;
   }
 
-  el.trainerFeedback.innerHTML = `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}`;
-  if (syncResult?.autoMoves?.length) {
-    setTrainerFeedback(`${el.trainerFeedback.innerHTML} ${renderAutoMoveSummary(syncResult.autoMoves)}`);
-  } else {
-    el.trainerFeedback.classList.remove("empty");
-  }
+  setTrainerFeedback(
+    `Correct. <strong>${escapeHtml(move.san)}</strong>${classificationBadge(playedClassification || recommendedClassification, "inline")} ${escapeHtml(successExplanation)}${syncResult?.autoMoves?.length ? ` ${renderAutoMoveSummary(syncResult.autoMoves)}` : ""}`
+  );
+  updateTrainerCopy();
   el.boardLine.textContent = currentPlayedLineSan().join(" ") || lessonTrainingLineSan(lesson).join(" ") || lesson.continuation_san || "";
   el.boardLine.classList.toggle("empty", !el.boardLine.textContent);
 }
@@ -4893,14 +5038,17 @@ async function submitFreeAnalysisMove(from, to) {
   const preMoveFen = state.boardFen;
   const playedClassification = instantMoveClassification(null, move);
   const classificationPromise = fetchPositionInsight(preMoveFen, currentPlayedLine(), move.uci, move.san, 0)
-    .then((moveInsight) => moveInsight?.your_move_classification || moveInsight?.played_classification || null)
+    .then((moveInsight) => ({
+      classification: moveInsight?.your_move_classification || moveInsight?.played_classification || null,
+      reaction: moveInsight?.your_move_reaction || moveInsight?.coach_reaction || null,
+    }))
     .catch(() => null);
 
   try {
     const payload = await applyMoveToBoard(move.uci, playedClassification);
     const appliedFen = state.boardFen;
-    classificationPromise.then((classification) => {
-      applyResolvedMoveClassification(move.uci, classification, appliedFen);
+    classificationPromise.then((moveMeta) => {
+      applyResolvedMoveClassification(move.uci, moveMeta?.classification || null, appliedFen, moveMeta?.reaction || null);
     });
     appendPlayedMove(move.uci, payload.played_san || move.san);
     state.currentInsight = null;

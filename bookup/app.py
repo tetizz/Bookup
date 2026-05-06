@@ -17,10 +17,11 @@ import chess.pgn
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import OPENING_PLIES, analyse_games, build_position_insight, configure_engine_cache, configure_lichess, database_context_for_board, generate_theory_line
+from .analysis import analyse_games, build_position_insight, configure_engine_cache, configure_lichess, database_context_for_board, generate_theory_line
 from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_class, normalize_time_classes
 from .classifications import book_classification_payload
 from .engine import EngineSession, EngineSettings, default_engine_path
+from .opening_names import lookup_by_board
 from .storage import LocalStore, deserialize_games, serialize_games
 
 
@@ -912,11 +913,11 @@ def apply_move() -> tuple:
         return jsonify({"error": "That move is not legal in this position."}), 400
     ply_before_move = max(0, (board.fullmove_number - 1) * 2 + (0 if board.turn == chess.WHITE else 1))
     san = board.san(move)
-    played_classification = (
-        book_classification_payload(0.5, reason="opening book move")
-        if ply_before_move < OPENING_PLIES
-        else None
-    )
+    next_board = board.copy(stack=False)
+    next_board.push(move)
+    opening_match = lookup_by_board(next_board)
+    is_named_or_initial_book = ply_before_move < 2 or bool(opening_match.get("name") or opening_match.get("eco"))
+    played_classification = book_classification_payload(0.5, reason="opening or repertoire book move") if is_named_or_initial_book else None
     board.push(move)
     return jsonify(
         {

@@ -707,6 +707,14 @@ select:focus {
   color: var(--muted);
 }
 
+.progress-context-note {
+  margin-top: 10px;
+  max-width: 640px;
+  color: #d7b86f;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .progress-range-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -766,7 +774,9 @@ select:focus {
   padding: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 18px;
-  background: rgba(7, 11, 16, 0.68);
+  background:
+    linear-gradient(145deg, rgba(125, 162, 255, 0.06), transparent 42%),
+    rgba(7, 11, 16, 0.72);
 }
 
 .progress-metric-grid span,
@@ -784,8 +794,9 @@ select:focus {
 .progress-insight strong {
   display: block;
   color: var(--text-strong);
-  font-size: clamp(22px, 3vw, 34px);
+  font-size: clamp(20px, 2.35vw, 31px);
   line-height: 1;
+  letter-spacing: -0.035em;
 }
 
 .progress-metric-grid small,
@@ -799,6 +810,11 @@ select:focus {
 .progress-metric-grid small.up { color: var(--success); }
 .progress-metric-grid small.down { color: var(--danger); }
 .progress-metric-grid small.flat { color: var(--muted); }
+
+.progress-metric-grid article:nth-child(2) strong {
+  font-size: clamp(18px, 2vw, 28px);
+  white-space: nowrap;
+}
 
 .rating-chart-wrap {
   display: grid;
@@ -814,12 +830,20 @@ select:focus {
   border: 1px solid rgba(139, 171, 224, 0.14);
   border-radius: 24px;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px),
     radial-gradient(circle at 82% 16%, rgba(116, 211, 155, 0.12), transparent 26%),
     rgba(6, 10, 15, 0.78);
-  background-size: 100% 25%, 12.5% 100%, auto, auto;
+  background-size: 100% 33.33%, 16.66% 100%, auto, auto;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.rating-chart.mixed {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+    radial-gradient(circle at 82% 16%, rgba(241, 201, 106, 0.13), transparent 28%),
+    rgba(6, 10, 15, 0.78);
 }
 
 .rating-chart svg {
@@ -831,7 +855,7 @@ select:focus {
 }
 
 .rating-area {
-  fill: rgba(125, 162, 255, 0.16);
+  fill: rgba(125, 162, 255, 0.11);
 }
 
 .rating-line {
@@ -839,14 +863,20 @@ select:focus {
   stroke: #8badff;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.8;
-  filter: drop-shadow(0 0 8px rgba(125, 162, 255, 0.34));
+  stroke-width: 2.25;
+  filter: drop-shadow(0 0 6px rgba(125, 162, 255, 0.28));
 }
 
 .rating-selected-line {
   stroke: rgba(241, 201, 106, 0.55);
   stroke-dasharray: 4 4;
   stroke-width: 1.2;
+}
+
+.rating-baseline-line {
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-dasharray: 2.5 4;
+  stroke-width: 0.9;
 }
 
 .rating-point-layer {
@@ -856,13 +886,21 @@ select:focus {
 
 .rating-point {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border: 2px solid rgba(255, 255, 255, 0.78);
   border-radius: 999px;
   background: var(--accent);
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 0 5px rgba(125, 162, 255, 0.1);
+  box-shadow: 0 0 0 4px rgba(125, 162, 255, 0.08);
+}
+
+.rating-chart.dense .rating-point {
+  width: 7px;
+  height: 7px;
+  border-width: 1px;
+  opacity: 0.68;
+  box-shadow: none;
 }
 
 .rating-point.win { background: var(--success); }
@@ -885,6 +923,65 @@ select:focus {
   box-shadow: 0 0 0 8px rgba(125, 162, 255, 0.18), 0 0 18px rgba(125, 162, 255, 0.38);
 }
 
+.rating-result-ribbon {
+  position: absolute;
+  left: 44px;
+  right: 22px;
+  bottom: 14px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.rating-result-tick {
+  position: absolute;
+  bottom: 0;
+  width: 3px;
+  height: 9px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.rating-result-tick.win { background: var(--success); }
+.rating-result-tick.draw,
+.rating-result-tick.mixed { background: var(--accent-2); }
+.rating-result-tick.loss { background: var(--danger); }
+
+.rating-chart-legend {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid rgba(139, 171, 224, 0.12);
+  border-radius: 999px;
+  background: rgba(6, 10, 15, 0.62);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rating-chart-legend span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.rating-chart-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.rating-chart-legend i.win { background: var(--success); }
+.rating-chart-legend i.draw { background: var(--accent-2); }
+.rating-chart-legend i.loss { background: var(--danger); }
+
 .rating-axis {
   position: absolute;
   left: 14px;
@@ -895,6 +992,15 @@ select:focus {
 
 .rating-axis.top { top: 16px; }
 .rating-axis.bottom { bottom: 18px; }
+.rating-axis.baseline {
+  left: auto;
+  right: 18px;
+  top: 18px;
+  color: rgba(232, 238, 248, 0.62);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
 .rating-chart-empty {
   display: grid;
@@ -949,6 +1055,56 @@ select:focus {
   color: var(--text-strong);
   font-size: 24px;
 }
+
+.progress-game-list {
+  display: grid;
+  gap: 8px;
+}
+
+.progress-game-list a,
+.progress-game-list > span {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px 9px;
+  padding: 9px 10px;
+  border: 1px solid rgba(139, 171, 224, 0.14);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+}
+
+.progress-game-list a:hover {
+  border-color: rgba(125, 162, 255, 0.42);
+  background: rgba(125, 162, 255, 0.08);
+}
+
+.progress-game-list b {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.progress-game-list small {
+  grid-column: 2;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-game-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.progress-game-dot.win { background: var(--success); }
+.progress-game-dot.draw { background: var(--accent-2); }
+.progress-game-dot.loss { background: var(--danger); }
 
 .tiny-action {
   width: fit-content;
@@ -1413,6 +1569,87 @@ select:focus {
 .study-engine-preview {
   color: var(--text);
   font-family: var(--mono);
+}
+
+.study-engine-reaction {
+  margin-top: 8px;
+  color: #93c5fd;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.coach-reaction-card {
+  margin-top: 14px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(14, 165, 233, 0.06)),
+    rgba(8, 13, 20, 0.72);
+  padding: 12px;
+}
+
+.coach-reaction-head {
+  color: var(--text-strong);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.coach-reaction-reasons {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.coach-reaction-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.coach-reaction-features span {
+  border: 1px solid rgba(147, 197, 253, 0.22);
+  border-radius: 999px;
+  background: rgba(147, 197, 253, 0.08);
+  color: #bfdbfe;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.trainer-live-reaction {
+  display: grid;
+  gap: 10px;
+}
+
+.trainer-live-reaction .coach-reaction-card {
+  margin-top: 0;
+}
+
+.trainer-live-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trainer-live-facts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(147, 197, 253, 0.16);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: var(--muted);
+  background: rgba(147, 197, 253, 0.06);
+  line-height: 1.3;
+}
+
+.trainer-live-facts strong {
+  color: var(--text-strong);
 }
 
 .study-move-trail {
@@ -2533,6 +2770,11 @@ select:focus {
 
   .progress-range-tabs {
     justify-content: flex-start;
+  }
+
+  .rating-chart-legend {
+    left: 52px;
+    right: auto;
   }
 }
 

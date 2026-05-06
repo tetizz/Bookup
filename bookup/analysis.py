@@ -362,6 +362,16 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
         result = _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color)
         player_rating = _rating_from_headers(imported, player_color)
         opponent_rating = _rating_from_headers(imported, opponent_color)
+        opening_name = _compose_opening_name(
+            str(imported.game.headers.get("Opening", "") or ""),
+            str(imported.game.headers.get("Variation", "") or ""),
+        )
+        opening_code = str(imported.game.headers.get("ECO", "") or "").strip().upper()
+        ply_count_raw = str(imported.game.headers.get("PlyCount", "") or "").strip()
+        try:
+            move_count = max(0, int(ply_count_raw)) // 2 if ply_count_raw else None
+        except ValueError:
+            move_count = None
         rows.append(
             {
                 "index": index,
@@ -374,6 +384,8 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
                 "opponent": imported.opponent or "Unknown",
                 "color": player_color,
                 "url": imported.url,
+                "opening": opening_name or opening_code or "Unknown opening",
+                "move_count": move_count,
             }
         )
     rows.sort(key=lambda row: (row["date"], row["sort_seconds"], row["index"]))
@@ -404,6 +416,7 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
                 "rating": None,
                 "ratings": [],
                 "opponents": [],
+                "games_detail": [],
                 "time_classes": Counter(),
             },
         )
@@ -415,6 +428,19 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
         else:
             bucket["losses"] += 1
         bucket["opponents"].append(row["opponent"])
+        bucket["games_detail"].append(
+            {
+                "opponent": row["opponent"],
+                "result": row["result"],
+                "rating": row["rating"],
+                "opponent_rating": row["opponent_rating"],
+                "color": row["color"],
+                "time_class": row["time_class"],
+                "url": row["url"],
+                "opening": row["opening"],
+                "move_count": row["move_count"],
+            }
+        )
         bucket["time_classes"][row["time_class"]] += 1
         time_class_counts[row["time_class"]] += 1
         if row["rating"] is not None:
@@ -430,6 +456,13 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
     all_ratings = [int(row["rating"]) for row in rows if row["rating"] is not None]
 
     def build_range(key: str, days: int | None) -> dict[str, Any]:
+        range_labels = {
+            "7": "Last 7 days",
+            "30": "Last 30 days",
+            "90": "Last 90 days",
+            "365": "Last year",
+            "all": "All time",
+        }
         start_date = earliest_date if days is None else max(earliest_date, latest_date - timedelta(days=days - 1))
         points: list[dict[str, Any]] = []
         range_rows = [row for row in rows if row["date"] >= start_date]
@@ -455,6 +488,8 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
                 games_count = int(bucket["games"])
                 common_time_class = bucket["time_classes"].most_common(1)[0][0] if bucket["time_classes"] else "unknown"
                 opponents = bucket["opponents"][:4]
+                game_links = list(bucket.get("games_detail", []))[-8:]
+                last_game_url = next((item.get("url", "") for item in reversed(game_links) if item.get("url")), "")
                 point = {
                     "date": date_cursor.isoformat(),
                     "label": _format_progress_date(date_cursor),
@@ -470,6 +505,8 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
                     "result_tone": _dominant_result(wins, draws, losses),
                     "time_class": common_time_class,
                     "opponents": opponents,
+                    "game_links": game_links,
+                    "last_game_url": last_game_url,
                     "summary": f"{games_count} game{'s' if games_count != 1 else ''}: {_result_record_text(wins, draws, losses)}",
                 }
             else:
@@ -488,6 +525,8 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
                     "result_tone": "idle",
                     "time_class": "",
                     "opponents": [],
+                    "game_links": [],
+                    "last_game_url": "",
                     "summary": "No games imported for this day.",
                 }
             points.append(point)
@@ -506,7 +545,7 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
         )
         return {
             "key": key,
-            "label": "All time" if days is None else f"{days} days",
+            "label": range_labels.get(key, "All time" if days is None else f"{days} days"),
             "days": days,
             "start_date": start_date.isoformat(),
             "end_date": latest_date.isoformat(),
@@ -539,6 +578,7 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
         }
 
     time_class_progress: dict[str, Any] = {}
+    default_time_class = ""
     if split_by_time_class:
         seen_classes = [key for key, _value in time_class_counts.most_common()]
         for time_class in seen_classes:
@@ -555,6 +595,8 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
             class_payload["time_class_key"] = time_class
             class_payload["time_class_label"] = time_class.replace("_", " ").title()
             time_class_progress[time_class] = class_payload
+            if not default_time_class and time_class != "unknown":
+                default_time_class = time_class
 
     return {
         "available": True,
@@ -565,14 +607,17 @@ def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bo
         "best_rating": max(all_ratings) if all_ratings else None,
         "worst_rating": min(all_ratings) if all_ratings else None,
         "default_range": "90",
+        "default_time_class": default_time_class,
         "time_class_breakdown": [
             {"label": key, "games": int(value)}
             for key, value in time_class_counts.most_common()
         ],
         "time_class_progress": time_class_progress,
         "ranges": {
+            "7": build_range("7", 7),
             "30": build_range("30", 30),
             "90": build_range("90", 90),
+            "365": build_range("365", 365),
             "all": build_range("all", None),
         },
     }
@@ -1166,6 +1211,118 @@ def _move_purpose(board: chess.Board, move: chess.Move) -> str:
     return "improves coordination"
 
 
+def _matching_database_move(database_moves: list[dict[str, Any]], move_uci: str, san: str) -> dict[str, Any] | None:
+    for item in database_moves or []:
+        if item.get("uci") == move_uci or item.get("san") == san:
+            return item
+    return None
+
+
+def _move_reaction_for_board(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    classification: dict[str, Any] | None = None,
+    best_line: dict[str, Any] | None = None,
+    database_moves: list[dict[str, Any]] | None = None,
+    book_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a short, concrete coach reaction for a move from the live board."""
+    try:
+        san = board.san(move)
+    except Exception:
+        san = move.uci()
+    moving_piece = board.piece_at(move.from_square)
+    mover = board.turn
+    after = board.copy(stack=False)
+    try:
+        after.push(move)
+    except Exception:
+        after = None
+
+    key = (classification or {}).get("key") or "unknown"
+    label = (classification or {}).get("label") or "Move"
+    from_name = chess.square_name(move.from_square)
+    to_name = chess.square_name(move.to_square)
+    reasons: list[str] = []
+    features: list[str] = []
+    database_hit = _matching_database_move(database_moves or [], move.uci(), san)
+    book_active = (book_state or {}).get("active", True)
+
+    if moving_piece:
+        piece_name = chess.piece_name(moving_piece.piece_type)
+        features.append(piece_name)
+        if moving_piece.piece_type in (chess.KNIGHT, chess.BISHOP) and from_name in {"b1", "g1", "b8", "g8"}:
+            reasons.append(f"Develops the {piece_name} from {from_name} to {to_name}.")
+        elif moving_piece.piece_type == chess.PAWN and chess.square_file(move.to_square) in (2, 3, 4):
+            reasons.append(f"Claims space or opens lines with the pawn on {to_name}.")
+        elif moving_piece.piece_type in (chess.ROOK, chess.QUEEN):
+            reasons.append(f"Moves a heavy piece onto {to_name}.")
+
+    if board.is_castling(move):
+        features.append("castle")
+        reasons.insert(0, "Castles to improve king safety and connect the rooks.")
+    if board.is_capture(move):
+        features.append("capture")
+        captured = board.piece_at(move.to_square)
+        if captured:
+            reasons.insert(0, f"Captures the {chess.piece_name(captured.piece_type)} on {to_name}.")
+        else:
+            reasons.insert(0, f"Captures on {to_name}.")
+    if after is not None and after.is_checkmate():
+        features.append("checkmate")
+        reasons.insert(0, "Gives checkmate.")
+    elif after is not None and after.is_check():
+        features.append("check")
+        reasons.insert(0, "Gives check and forces a reply.")
+
+    if database_hit:
+        features.append("database")
+        pct = database_hit.get("percent")
+        if isinstance(pct, (int, float)):
+            reasons.append(f"Database move from this position, seen about {pct:.1f}% of the time.")
+        else:
+            reasons.append("Database move from this position.")
+
+    if key == "book":
+        headline = f"{san} is a book move." if book_active else f"{san} is no longer in book."
+        reasons.insert(0, "Still follows your repertoire or opening database." if book_active else "This branch has left the known book position.")
+    elif key == "brilliant":
+        headline = f"{san} is a brilliant resource."
+        reasons.insert(0, "It keeps the position sound while investing material for a tactic.")
+    elif key == "great":
+        headline = f"{san} is the only move that keeps the advantage."
+        reasons.insert(0, "Other candidate moves drop the result much more clearly.")
+    elif key == "best":
+        headline = f"{san} is the engine top move."
+    elif key in {"excellent", "good"}:
+        headline = f"{san} is {label.lower()}."
+    elif key in {"inaccuracy", "mistake", "blunder", "miss"}:
+        headline = f"{san} is a {label.lower()}."
+        best_san = best_line.get("move") if best_line else ""
+        if best_san and best_line.get("uci") != move.uci():
+            reasons.insert(0, f"The engine prefers {best_san} from this exact position.")
+    else:
+        headline = f"{san} was played."
+
+    if best_line and best_line.get("uci") == move.uci() and key not in {"book", "great", "brilliant"}:
+        reasons.append("It starts the top Stockfish continuation.")
+
+    while len(reasons) < 2:
+        reasons.append(_move_purpose(board, move).capitalize() + ".")
+
+    return {
+        "move": san,
+        "uci": move.uci(),
+        "label": label,
+        "classification_key": key,
+        "headline": headline,
+        "reasons": reasons[:4],
+        "features": features[:6],
+        "side": "white" if mover == chess.WHITE else "black",
+    }
+
+
 def _candidate_lines_for_board(
     board: chess.Board,
     engine: EngineSession,
@@ -1185,7 +1342,27 @@ def _candidate_lines_for_board(
     )
     cached = _load_engine_cache(cache_key)
     if cached:
-        return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", [])), True
+        cached_lines = list(cached.get("candidate_lines", []))
+        cached_database = list(cached.get("database_moves", []))
+        if cached_lines and any("reaction" not in line for line in cached_lines):
+            cached_book_state = _book_state_for_line(play_uci, board)
+            cached_best = cached_lines[0]
+            for line in cached_lines:
+                try:
+                    first_move = chess.Move.from_uci(str(line.get("uci") or ""))
+                except ValueError:
+                    continue
+                if first_move not in board.legal_moves:
+                    continue
+                line["reaction"] = _move_reaction_for_board(
+                    board,
+                    first_move,
+                    classification=line.get("classification"),
+                    best_line=cached_best,
+                    database_moves=cached_database,
+                    book_state=cached_book_state,
+                )
+        return cached_lines, cached_database, True
 
     root_lines = engine.analyse(
         board,
@@ -1232,6 +1409,22 @@ def _candidate_lines_for_board(
         opening_phase=bool(book_state.get("active")) and len(play_uci) < OPENING_PLIES,
         popularity_by_uci=popularity_by_uci,
     )
+    best_line = candidate_lines[0] if candidate_lines else None
+    for line in candidate_lines:
+        try:
+            first_move = chess.Move.from_uci(str(line.get("uci") or ""))
+        except ValueError:
+            continue
+        if first_move not in board.legal_moves:
+            continue
+        line["reaction"] = _move_reaction_for_board(
+            board,
+            first_move,
+            classification=line.get("classification"),
+            best_line=best_line,
+            database_moves=database_moves,
+            book_state=book_state,
+        )
 
     _save_engine_cache(cache_key, {
         "candidate_lines": list(candidate_lines),
@@ -1354,10 +1547,15 @@ def build_position_insight(
             "recommended_move_uci": "",
             "recommended_classification": None,
             "your_move_classification": None,
+            "recommended_reaction": None,
+            "your_move_reaction": None,
+            "coach_reaction": None,
             "coach_explanation": "No engine line is available for this position yet.",
             "position_identifier": _analysis_url_for_fen(board.fen()),
         }
     your_move_classification = None
+    your_move_reaction = None
+    your_line = None
     popularity_by_uci = {
         str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
         for item in database_moves
@@ -1394,6 +1592,33 @@ def build_position_insight(
                     repeated_count=your_move_count,
                 ),
             )
+            try:
+                reaction_move = chess.Move.from_uci(your_move_uci)
+            except ValueError:
+                reaction_move = None
+            if reaction_move is not None and reaction_move in board.legal_moves:
+                your_move_reaction = _move_reaction_for_board(
+                    board,
+                    reaction_move,
+                    classification=your_move_classification,
+                    best_line=best_line,
+                    database_moves=database_moves,
+                    book_state=book_state,
+                )
+    recommended_reaction = None
+    try:
+        best_move = chess.Move.from_uci(str(best_line.get("uci") or ""))
+    except ValueError:
+        best_move = None
+    if best_move is not None and best_move in board.legal_moves:
+        recommended_reaction = _move_reaction_for_board(
+            board,
+            best_move,
+            classification=best_line.get("classification"),
+            best_line=best_line,
+            database_moves=database_moves,
+            book_state=book_state,
+        )
     return {
         "candidate_lines": candidate_lines,
         "threat_lines": _threat_lines_for_board(board, candidate_lines),
@@ -1406,6 +1631,9 @@ def build_position_insight(
         "recommended_move_uci": best_line["uci"],
         "recommended_classification": best_line.get("classification"),
         "your_move_classification": your_move_classification,
+        "recommended_reaction": recommended_reaction,
+        "your_move_reaction": your_move_reaction,
+        "coach_reaction": your_move_reaction or recommended_reaction,
         "eval_cp_white": best_line.get("score_cp_white", best_line.get("score_cp", 0)),
         "eval_cp_turn": best_line.get("score_cp", 0),
         "coach_explanation": _build_coach_explanation(

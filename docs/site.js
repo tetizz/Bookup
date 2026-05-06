@@ -64,6 +64,53 @@ const demoStates = {
   },
 };
 
+const ratingRangeLabels = {
+  "7": "Last 7 days",
+  "30": "Last 30 days",
+  "90": "Last 90 days",
+  "365": "Last year",
+  all: "All time",
+};
+
+const ratingDemoProfiles = {
+  rapid: {
+    label: "Rapid",
+    base: 1328,
+    current: 1494,
+    records: {
+      "7": { games: 21, wins: 13, draws: 1, losses: 7, delta: 18 },
+      "30": { games: 74, wins: 43, draws: 5, losses: 26, delta: 61 },
+      "90": { games: 227, wins: 121, draws: 14, losses: 92, delta: 166 },
+      "365": { games: 612, wins: 337, draws: 31, losses: 244, delta: 241 },
+      all: { games: 1167, wins: 620, draws: 57, losses: 490, delta: 327 },
+    },
+  },
+  blitz: {
+    label: "Blitz",
+    base: 1184,
+    current: 1276,
+    records: {
+      "7": { games: 16, wins: 8, draws: 1, losses: 7, delta: 7 },
+      "30": { games: 58, wins: 31, draws: 2, losses: 25, delta: 36 },
+      "90": { games: 181, wins: 96, draws: 7, losses: 78, delta: 92 },
+      "365": { games: 496, wins: 257, draws: 18, losses: 221, delta: 133 },
+      all: { games: 842, wins: 434, draws: 31, losses: 377, delta: 188 },
+    },
+  },
+  bullet: {
+    label: "Bullet",
+    base: 1002,
+    current: 1098,
+    records: {
+      "7": { games: 33, wins: 17, draws: 0, losses: 16, delta: 4 },
+      "30": { games: 122, wins: 66, draws: 2, losses: 54, delta: 28 },
+      "90": { games: 298, wins: 159, draws: 4, losses: 135, delta: 96 },
+      "365": { games: 708, wins: 371, draws: 9, losses: 328, delta: 118 },
+      all: { games: 1044, wins: 545, draws: 11, losses: 488, delta: 142 },
+    },
+  },
+};
+
 function squareCenter(square) {
   const file = square[0];
   const rank = Number(square[1]);
@@ -86,11 +133,11 @@ function arrowPath(fromSquare, toSquare) {
   const normalX = -unitY;
   const normalY = unitX;
 
-  const startInset = 0.32;
-  const tipInset = 0.14;
-  const shaftWidth = 0.1;
-  const headLength = Math.min(0.36, length * 0.24);
-  const headWidth = 0.32;
+  const startInset = 0.42;
+  const tipInset = 0.22;
+  const shaftWidth = 0.07;
+  const headLength = Math.min(0.3, length * 0.2);
+  const headWidth = 0.22;
 
   const start = {
     x: from.x + unitX * startInset,
@@ -258,7 +305,113 @@ function bindChoices() {
   });
 }
 
+function makeRatingPoints(profile, record, count) {
+  const points = [];
+  const usableCount = Math.max(6, count);
+  const start = profile.current - record.delta;
+  const volatility = profile.label === "Bullet" ? 9 : profile.label === "Blitz" ? 7 : 5;
+  for (let index = 0; index < usableCount; index += 1) {
+    const progress = index / Math.max(1, usableCount - 1);
+    const wave = Math.sin(progress * Math.PI * 4.2) * volatility;
+    const noise = Math.cos(progress * Math.PI * 8.5) * (volatility * 0.42);
+    const recovery = Math.sin(progress * Math.PI) * Math.max(10, record.delta * 0.08);
+    const value = Math.round(start + record.delta * progress + wave + noise + recovery);
+    const result = index % 9 === 0 ? "loss" : index % 5 === 0 ? "draw" : "win";
+    points.push({ value, result, index });
+  }
+  points[points.length - 1].value = profile.current;
+  return points;
+}
+
+function renderRatingDemo(rangeKey = "90", timeKey = "rapid") {
+  const profile = ratingDemoProfiles[timeKey] || ratingDemoProfiles.rapid;
+  const record = profile.records[rangeKey] || profile.records["90"];
+  const svg = document.getElementById("ratingDemoSvg");
+  if (!svg) return;
+
+  const pointCount = rangeKey === "7" ? 12 : rangeKey === "30" ? 22 : rangeKey === "90" ? 34 : rangeKey === "365" ? 48 : 58;
+  const points = makeRatingPoints(profile, record, pointCount);
+  const values = points.map((point) => point.value);
+  const minValue = Math.min(...values) - 18;
+  const maxValue = Math.max(...values) + 18;
+  const width = 720;
+  const height = 260;
+  const padX = 34;
+  const padY = 28;
+  const chartW = width - padX * 2;
+  const chartH = height - padY * 2;
+  const toX = (index) => padX + (index / Math.max(1, points.length - 1)) * chartW;
+  const toY = (value) => padY + ((maxValue - value) / Math.max(1, maxValue - minValue)) * chartH;
+  const lineD = points.map((point, index) => `${index === 0 ? "M" : "L"} ${toX(index).toFixed(1)} ${toY(point.value).toFixed(1)}`).join(" ");
+  const areaD = `${lineD} L ${toX(points.length - 1).toFixed(1)} ${height - padY} L ${padX} ${height - padY} Z`;
+  const yTicks = [maxValue, Math.round((maxValue + minValue) / 2), minValue];
+
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="ratingAreaGradient" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0%" stop-color="#7da2ff" stop-opacity="0.42"></stop>
+        <stop offset="100%" stop-color="#7da2ff" stop-opacity="0.04"></stop>
+      </linearGradient>
+      <filter id="ratingGlow" x="-10%" y="-30%" width="120%" height="160%">
+        <feGaussianBlur stdDeviation="3.2" result="blur"></feGaussianBlur>
+        <feMerge>
+          <feMergeNode in="blur"></feMergeNode>
+          <feMergeNode in="SourceGraphic"></feMergeNode>
+        </feMerge>
+      </filter>
+    </defs>
+    ${yTicks.map((tick) => `<g class="rating-gridline"><line x1="${padX}" x2="${width - padX}" y1="${toY(tick).toFixed(1)}" y2="${toY(tick).toFixed(1)}"></line><text x="8" y="${(toY(tick) + 4).toFixed(1)}">${tick}</text></g>`).join("")}
+    <path class="rating-demo-area" d="${areaD}"></path>
+    <path class="rating-demo-line" d="${lineD}" filter="url(#ratingGlow)"></path>
+    ${points.map((point, index) => {
+      const x = toX(index).toFixed(1);
+      const y = toY(point.value).toFixed(1);
+      return `<circle class="rating-demo-point ${point.result}" cx="${x}" cy="${y}" r="4.8"><title>${profile.label} ${point.value} · ${point.result}</title></circle>`;
+    }).join("")}
+  `;
+
+  const winrate = record.games ? ((record.wins / record.games) * 100).toFixed(1) : "0.0";
+  const title = document.getElementById("ratingDemoTitle");
+  const copy = document.getElementById("ratingDemoCopy");
+  const rating = document.getElementById("ratingDemoRating");
+  const recordNode = document.getElementById("ratingDemoRecord");
+  const winrateNode = document.getElementById("ratingDemoWinrate");
+  const highlight = document.getElementById("ratingDemoHighlight");
+  if (title) title.textContent = `${profile.label} · ${ratingRangeLabels[rangeKey] || ratingRangeLabels["90"]}`;
+  if (copy) copy.textContent = `${profile.current} current rating, ${record.delta >= 0 ? "+" : ""}${record.delta} over the selected range, and ${record.games} games tracked.`;
+  if (rating) rating.textContent = profile.current;
+  if (recordNode) recordNode.textContent = `${record.wins}W ${record.draws}D ${record.losses}L`;
+  if (winrateNode) winrateNode.textContent = `${winrate}%`;
+  if (highlight) highlight.textContent = `Sample highlight: ${profile.label} had ${record.wins} wins, ${record.draws} draws, and ${record.losses} losses across ${record.games} games.`;
+}
+
+function bindRatingDemo() {
+  const rangeButtons = document.querySelectorAll("[data-rating-range]");
+  const timeButtons = document.querySelectorAll("[data-rating-time]");
+  const current = { range: "7", time: "rapid" };
+  const refresh = () => renderRatingDemo(current.range, current.time);
+
+  rangeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      current.range = button.dataset.ratingRange || "90";
+      rangeButtons.forEach((item) => item.classList.toggle("active", item === button));
+      refresh();
+    });
+  });
+
+  timeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      current.time = button.dataset.ratingTime || "rapid";
+      timeButtons.forEach((item) => item.classList.toggle("active", item === button));
+      refresh();
+    });
+  });
+
+  refresh();
+}
+
 renderBoard(document.getElementById("landingBoard"), "book");
 updateStudy("book");
 bindTabs();
 bindChoices();
+bindRatingDemo();
