@@ -1,14 +1,16 @@
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const boardSize = 8;
 
+// Legal demo position after:
+// 1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Nf3 Bg7 5. Be2 O-O
 const basePosition = {
-  a8: "bR", b8: "bN", c8: "bB", d8: "bQ", e8: "bK", f8: "bB", h8: "bR",
+  a8: "bR", b8: "bN", c8: "bB", d8: "bQ", f8: "bR", g8: "bK",
   a7: "bP", b7: "bP", c7: "bP", e7: "bP", f7: "bP", g7: "bB", h7: "bP",
   d6: "bP", f6: "bN", g6: "bP",
   d4: "wP", e4: "wP",
   c3: "wN", f3: "wN",
-  a2: "wP", b2: "wP", c2: "wP", f2: "wP", g2: "wP", h2: "wP",
-  a1: "wR", c1: "wB", d1: "wQ", e1: "wK", f1: "wB", h1: "wR",
+  a2: "wP", b2: "wP", c2: "wP", e2: "wB", f2: "wP", g2: "wP", h2: "wP",
+  a1: "wR", c1: "wB", d1: "wQ", e1: "wK", h1: "wR",
 };
 
 const demoStates = {
@@ -17,47 +19,47 @@ const demoStates = {
     to: "e3",
     move: "Be3",
     icon: "book",
-    eval: "+0.42",
+    eval: "+0.56",
     fill: "56%",
-    prompt: "Be3 stays inside your imported repertoire and is marked as a book move.",
+    prompt: "Be3 is legal here, stays inside the imported repertoire, and is the top checked candidate in this demo.",
     review: "Be3 is Book because it is part of the imported branch before engine coaching takes over.",
-    replies: ["...e5 41%", "...b5 23%", "...Nbd7 18%"],
+    replies: ["...e5 41%", "...c6 23%", "...a6 18%"],
     lines: [
-      { eval: "+0.42", move: "Be3", label: "Book", icon: "book", text: "Be3 O-O Qd2 a6 h3" },
-      { eval: "+0.39", move: "O-O", label: "Best", icon: "best", text: "O-O O-O Re1 c6 h3" },
-      { eval: "+0.31", move: "h3", label: "Excellent", icon: "excellent", text: "h3 O-O Be2 e5" },
+      { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5 Nxe5 Nxe4" },
+      { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7 O-O e5" },
+      { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5 Qxd8 Rxd8" },
     ],
   },
-  best: {
+  castle: {
     from: "e1",
     to: "g1",
     move: "O-O",
-    icon: "best",
-    eval: "+0.39",
+    icon: "excellent",
+    eval: "+0.53",
     fill: "55%",
-    prompt: "O-O is the engine top move here, but Bookup still lets you choose any legal move in your color.",
-    review: "O-O is Best because it is the top Stockfish line from this position.",
-    replies: ["...O-O 38%", "...c6 22%", "...a6 15%"],
+    prompt: "O-O is legal because the bishop has already moved from f1. It keeps the position close to the top line.",
+    review: "O-O is Excellent here: legal, safe, and nearly tied with the top candidate.",
+    replies: ["...e5 38%", "...c6 22%", "...Nbd7 15%"],
     lines: [
-      { eval: "+0.39", move: "O-O", label: "Best", icon: "best", text: "O-O O-O Re1 c6 h3" },
-      { eval: "+0.37", move: "Be3", label: "Book", icon: "book", text: "Be3 Bg7 Qd2 O-O" },
-      { eval: "+0.29", move: "h3", label: "Excellent", icon: "excellent", text: "h3 O-O Be2 e5" },
+      { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5 Qxd8 Rxd8" },
+      { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5" },
+      { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7" },
     ],
   },
-  excellent: {
-    from: "h2",
-    to: "h3",
-    move: "h3",
+  bg5: {
+    from: "c1",
+    to: "g5",
+    move: "Bg5",
     icon: "excellent",
-    eval: "+0.31",
+    eval: "+0.54",
     fill: "54%",
-    prompt: "h3 is close to the top engine line and keeps normal plans available.",
-    review: "h3 is Excellent because the expected-points loss is tiny compared with the best move.",
-    replies: ["...O-O 45%", "...e5 29%", "...a6 11%"],
+    prompt: "Bg5 is a legal developing move from c1 to g5 and stays in the same practical setup.",
+    review: "Bg5 is Excellent because it is very close to the top engine line in this validated position.",
+    replies: ["...c6 45%", "...Nbd7 29%", "...e5 11%"],
     lines: [
-      { eval: "+0.31", move: "h3", label: "Excellent", icon: "excellent", text: "h3 O-O Be2 e5" },
-      { eval: "+0.30", move: "Be3", label: "Book", icon: "book", text: "Be3 O-O Qd2 a6" },
-      { eval: "+0.28", move: "O-O", label: "Best", icon: "best", text: "O-O O-O Re1 c6" },
+      { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7 O-O e5" },
+      { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5" },
+      { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5" },
     ],
   },
 };
@@ -220,11 +222,13 @@ function updateStudy(stateKey = "book") {
   const review = document.getElementById("moveReview");
   const evalText = document.getElementById("webEval");
   const evalFill = document.getElementById("webEvalFill");
+  const evalRail = evalText?.closest(".eval-rail");
   const replies = [document.getElementById("replyOne"), document.getElementById("replyTwo"), document.getElementById("replyThree")];
 
   if (prompt) prompt.textContent = state.prompt;
   if (review) review.textContent = state.review;
   if (evalText) evalText.textContent = state.eval;
+  if (evalRail) evalRail.setAttribute("aria-label", `Evaluation ${state.eval}`);
   if (evalFill) evalFill.style.height = state.fill;
   replies.forEach((node, index) => {
     if (node) node.textContent = state.replies[index];
@@ -255,7 +259,6 @@ function bindChoices() {
 }
 
 renderBoard(document.getElementById("landingBoard"), "book");
-renderBoard(document.getElementById("webBoard"), "book");
-renderAnalysisLines("book");
+updateStudy("book");
 bindTabs();
 bindChoices();

@@ -75,14 +75,14 @@
             </div>
             <div class="node-list-demo">
               <article class="node-card selected">
-                <span class="node-path">After e4 d6 Nf3 Nf6 Nc3 g6 d4</span>
+                <span class="node-path">After e4 d6 d4 Nf6 Nc3 g6 Nf3 Bg7 Be2 O-O</span>
                 <h3>White chooses Be3</h3>
                 <p>Repeated 37x. Classified as <strong>Book</strong> because it belongs to the imported branch.</p>
               </article>
               <article class="node-card">
-                <span class="node-path">After Be3 Bg7 Qd2 O-O</span>
-                <h3>Common reply ...a6</h3>
-                <p>Seen in database samples, ready for practical training.</p>
+                <span class="node-path">After Be3 e5 dxe5 dxe5</span>
+                <h3>Common reply ...e5</h3>
+                <p>Seen in database samples, legal from the shown position, and ready for practical training.</p>
               </article>
             </div>
           </section>
@@ -114,8 +114,8 @@
                 <span>Live demo position</span>
               </div>
               <div class="board-wrap">
-                <div class="eval-rail" aria-label="Evaluation +0.42">
-                  <span id="webEval">+0.42</span>
+                <div class="eval-rail" aria-label="Evaluation +0.56">
+                  <span id="webEval">+0.56</span>
                   <div><i id="webEvalFill" style="height:56%"></i></div>
                   <span>White edge</span>
                 </div>
@@ -126,8 +126,8 @@
                 <p id="studyPrompt">Choose a pregenerated branch below. The board, arrows, classification, engine lines, and database replies update together.</p>
                 <div class="choice-row">
                   <button type="button" data-demo-choice="book">Play Be3</button>
-                  <button type="button" data-demo-choice="best">Play O-O</button>
-                  <button type="button" data-demo-choice="excellent">Play h3</button>
+                  <button type="button" data-demo-choice="castle">Play O-O</button>
+                  <button type="button" data-demo-choice="bg5">Play Bg5</button>
                 </div>
               </div>
             </div>
@@ -137,8 +137,8 @@
               <div class="database-card">
                 <span>Lichess replies</span>
                 <b id="replyOne">...e5 41%</b>
-                <b id="replyTwo">...b5 23%</b>
-                <b id="replyThree">...Nbd7 18%</b>
+                <b id="replyTwo">...c6 23%</b>
+                <b id="replyThree">...a6 18%</b>
               </div>
               <div class="move-review-card">
                 <span>Move review</span>
@@ -155,9 +155,9 @@
             </div>
             <div class="theory-tree-panel">
               <div class="tree-root">Start</div>
-              <button type="button" class="tree-branch thick" data-demo-choice="book"><span>Nf3</span><b>44%</b></button>
-              <button type="button" class="tree-branch" data-demo-choice="best"><span>d4</span><b>28%</b></button>
-              <button type="button" class="tree-branch" data-demo-choice="excellent"><span>e4</span><b>17%</b></button>
+              <button type="button" class="tree-branch thick" data-demo-choice="book"><span>Be3</span><b>44%</b></button>
+              <button type="button" class="tree-branch" data-demo-choice="castle"><span>O-O</span><b>28%</b></button>
+              <button type="button" class="tree-branch" data-demo-choice="bg5"><span>Bg5</span><b>17%</b></button>
               <button type="button" class="tree-branch muted" data-demo-choice="book"><span>c4</span><b>7%</b></button>
               <div class="theory-lines">
                 <strong>Generated theory sample</strong>
