@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 16;
+const PROFILE_SCHEMA_VERSION = 18;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -92,6 +92,7 @@ const el = {
   repertoireMapWhite: document.getElementById("repertoireMapWhite"),
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
   healthDashboard: document.getElementById("healthDashboard"),
+  ratingProgress: document.getElementById("ratingProgressPanel"),
   memoryScorePanel: document.getElementById("memoryScorePanel"),
   driftDetectorPanel: document.getElementById("driftDetectorPanel"),
   prepPackPanel: document.getElementById("prepPackPanel"),
@@ -173,6 +174,9 @@ const state = {
   knownArchive: [],
   lessonIndex: -1,
   activeLessonId: "",
+  ratingProgressRange: "90",
+  ratingProgressTimeClass: "all",
+  ratingProgressPointIndex: null,
   boardOrientation: "white",
   trainingCursor: 0,
   lessonMistakes: 0,
@@ -1066,6 +1070,7 @@ function renderProfile(payload) {
   renderFirstMoves(profile.first_move_repertoire || {});
   renderRepertoireMap(profile.repertoire_map || {});
   renderHealthDashboard(profile.health_dashboard || null);
+  renderRatingProgress(profile.rating_progress || null);
   renderMemoryScores(profile.memory_scores || null);
   renderOpeningDrift(profile.opening_drift || null);
   renderPrepPack(profile.prep_pack || null);
@@ -1209,6 +1214,281 @@ function renderHealthDashboard(dashboard) {
         `).join("") || "<p>Known lines unlock once you repeatedly play the best move.</p>"}
       </article>
     </div>
+  `;
+}
+
+function renderRatingProgress(progress) {
+  if (!el.ratingProgress) return;
+  if (!progress?.available || !progress.ranges || !Object.keys(progress.ranges).length) {
+    el.ratingProgress.className = "rating-progress-panel empty";
+    el.ratingProgress.textContent = progress?.message || "Import rated Chess.com games to see rating, record, and form over time.";
+    return;
+  }
+  const splitPayloads = progress.time_class_progress || {};
+  const splitKeys = [];
+  (progress.time_class_breakdown || []).forEach((item) => {
+    const key = String(item.label || item.key || "").trim();
+    if (key && splitPayloads[key] && !splitKeys.includes(key)) splitKeys.push(key);
+  });
+  Object.keys(splitPayloads).forEach((key) => {
+    if (!splitKeys.includes(key)) splitKeys.push(key);
+  });
+  const timeClassOrder = ["all", ...splitKeys];
+  if (!timeClassOrder.includes(state.ratingProgressTimeClass)) {
+    state.ratingProgressTimeClass = "all";
+  }
+  const activeTimeKey = timeClassOrder.includes(state.ratingProgressTimeClass)
+    ? state.ratingProgressTimeClass
+    : "all";
+  const activeProgress = activeTimeKey === "all"
+    ? progress
+    : splitPayloads[activeTimeKey] || progress;
+  const timeClassLabel = activeTimeKey === "all"
+    ? "All time controls"
+    : activeProgress.time_class_label || activeTimeKey.replace(/_/g, " ");
+  const ranges = activeProgress.ranges || {};
+  const rangeOrder = ["30", "90", "all"].filter((key) => ranges[key]);
+  if (!rangeOrder.includes(state.ratingProgressRange)) {
+    state.ratingProgressRange = activeProgress.default_range || progress.default_range || rangeOrder[0] || "90";
+  }
+  const activeKey = ranges[state.ratingProgressRange] ? state.ratingProgressRange : rangeOrder[0];
+  const range = ranges[activeKey] || {};
+  const points = Array.isArray(range.points) ? range.points : [];
+  const graphPoints = points
+    .map((point, index) => ({ ...point, index, graphValue: Number(point.rating_graph ?? point.rating) }))
+    .filter((point) => Number.isFinite(point.graphValue));
+  const selectedIndex = pickRatingProgressIndex(graphPoints);
+  const selected = graphPoints[selectedIndex] || graphPoints[graphPoints.length - 1] || points[points.length - 1] || null;
+  const chart = buildRatingProgressChart(graphPoints, selected?.index);
+  const ratingEnd = range.rating_end ?? activeProgress.latest_rating ?? progress.latest_rating ?? null;
+  const ratingChange = range.rating_change;
+  const changeClass = Number(ratingChange || 0) > 0 ? "up" : Number(ratingChange || 0) < 0 ? "down" : "flat";
+  el.ratingProgress.className = "rating-progress-panel";
+  el.ratingProgress.innerHTML = `
+    <div class="rating-progress-head">
+      <div>
+        <div class="line-badge">Imported form tracker</div>
+        <h3>${escapeHtml(range.label || "Progress")} · ${escapeHtml(timeClassLabel)}</h3>
+        <p>${Number(range.games || 0)} ${escapeHtml(timeClassLabel.toLowerCase())} game${Number(range.games || 0) === 1 ? "" : "s"} from ${escapeHtml(range.start_date || "")} to ${escapeHtml(range.end_date || "")}</p>
+      </div>
+      <div class="progress-filter-stack">
+        <div class="progress-range-tabs" role="tablist" aria-label="Progress range">
+          ${rangeOrder.map((key) => `
+            <button class="progress-range-btn ${key === activeKey ? "active" : ""}" type="button" data-progress-range="${escapeHtml(key)}">
+              ${escapeHtml(ranges[key]?.label || key)}
+            </button>
+          `).join("")}
+        </div>
+        <div class="progress-range-tabs compact" role="tablist" aria-label="Time-control split">
+          ${timeClassOrder.map((key) => {
+            const payload = key === "all" ? progress : splitPayloads[key] || {};
+            const label = key === "all" ? "All" : payload.time_class_label || key.replace(/_/g, " ");
+            const games = key === "all" ? progress.dated_games || progress.total_games || 0 : payload.dated_games || payload.total_games || 0;
+            return `
+              <button class="progress-range-btn ${key === activeTimeKey ? "active" : ""}" type="button" data-progress-time-class="${escapeHtml(key)}">
+                ${escapeHtml(label)} <span>${Number(games || 0)}</span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    </div>
+    <div class="progress-metric-grid">
+      <article>
+        <span>Rating now</span>
+        <strong>${ratingEnd == null ? "--" : Number(ratingEnd)}</strong>
+        <small class="${changeClass}">${formatRatingDelta(ratingChange)}</small>
+      </article>
+      <article>
+        <span>Record</span>
+        <strong>${escapeHtml(range.record || "0W 0D 0L")}</strong>
+        <small>${Number(range.win_rate || 0).toFixed(1)}% wins</small>
+      </article>
+      <article>
+        <span>Score rate</span>
+        <strong>${Number(range.score_rate || 0).toFixed(1)}%</strong>
+        <small>${Number(range.games || 0)} games</small>
+      </article>
+      <article>
+        <span>Peak</span>
+        <strong>${range.best_rating == null ? "--" : Number(range.best_rating)}</strong>
+        <small>${range.worst_rating == null ? "No rating floor yet" : `low ${Number(range.worst_rating)}`}</small>
+      </article>
+    </div>
+    <div class="rating-chart-wrap">
+      <div class="rating-chart">
+        ${chart.svg}
+        <div class="rating-point-layer">
+          ${chart.points.map((point) => `
+            <button
+              class="rating-point ${escapeHtml(point.tone)} ${point.sourceIndex === selected?.index ? "active" : ""}"
+              type="button"
+              style="left:${point.x}%; top:${point.y}%"
+              title="${escapeHtml(point.title)}"
+              data-progress-index="${point.sourceIndex}"
+              aria-label="${escapeHtml(point.title)}"
+            ></button>
+          `).join("")}
+        </div>
+        <div class="rating-axis top">${chart.maxLabel}</div>
+        <div class="rating-axis bottom">${chart.minLabel}</div>
+      </div>
+      <div class="progress-highlight" data-progress-highlight>
+        ${renderRatingProgressHighlight(selected, range)}
+      </div>
+    </div>
+    <div class="progress-insights">
+      ${renderRatingProgressInsight("Busiest day", range.busiest_day)}
+      ${renderRatingProgressInsight("Best scoring day", range.best_score_day)}
+      ${renderTimeClassBreakdown(activeProgress.time_class_breakdown || progress.time_class_breakdown || [])}
+    </div>
+  `;
+  bindRatingProgressEvents();
+}
+
+function pickRatingProgressIndex(graphPoints) {
+  if (!graphPoints.length) return -1;
+  const requested = Number(state.ratingProgressPointIndex);
+  if (Number.isInteger(requested)) {
+    const found = graphPoints.findIndex((point) => Number(point.index) === requested);
+    if (found >= 0) return found;
+  }
+  for (let index = graphPoints.length - 1; index >= 0; index -= 1) {
+    if (Number(graphPoints[index].games || 0) > 0) return index;
+  }
+  return graphPoints.length - 1;
+}
+
+function buildRatingProgressChart(graphPoints, selectedSourceIndex) {
+  if (!graphPoints.length) {
+    return {
+      svg: "<div class=\"rating-chart-empty\">No rating points in this range yet.</div>",
+      points: [],
+      minLabel: "--",
+      maxLabel: "--",
+    };
+  }
+  const values = graphPoints.map((point) => point.graphValue);
+  let minValue = Math.min(...values);
+  let maxValue = Math.max(...values);
+  if (minValue === maxValue) {
+    minValue -= 10;
+    maxValue += 10;
+  }
+  const span = maxValue - minValue || 1;
+  const toX = (index) => graphPoints.length === 1 ? 50 : (index / (graphPoints.length - 1)) * 100;
+  const toY = (value) => 88 - ((value - minValue) / span) * 72;
+  const coords = graphPoints.map((point, index) => ({
+    x: Number(toX(index).toFixed(3)),
+    y: Number(toY(point.graphValue).toFixed(3)),
+    sourceIndex: point.index,
+    tone: point.result_tone || "idle",
+    title: `${point.label}: ${point.rating_graph ?? point.rating ?? "--"} rating, ${point.summary || ""}`,
+  }));
+  const linePath = coords.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+  const areaPath = `${linePath} L ${coords[coords.length - 1].x} 96 L ${coords[0].x} 96 Z`;
+  const selected = coords.find((point) => Number(point.sourceIndex) === Number(selectedSourceIndex));
+  const selectedLine = selected ? `<line class="rating-selected-line" x1="${selected.x}" x2="${selected.x}" y1="8" y2="96"></line>` : "";
+  return {
+    svg: `
+      <svg viewBox="0 0 100 104" preserveAspectRatio="none" aria-hidden="true">
+        <path class="rating-area" d="${areaPath}"></path>
+        <path class="rating-line" d="${linePath}"></path>
+        ${selectedLine}
+      </svg>
+    `,
+    points: coords,
+    minLabel: String(Math.round(minValue)),
+    maxLabel: String(Math.round(maxValue)),
+  };
+}
+
+function bindRatingProgressEvents() {
+  el.ratingProgress.querySelectorAll("[data-progress-range]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.ratingProgressRange = button.dataset.progressRange || "90";
+      state.ratingProgressPointIndex = null;
+      renderRatingProgress(state.payload?.profile?.rating_progress || null);
+    });
+  });
+  el.ratingProgress.querySelectorAll("[data-progress-time-class]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.ratingProgressTimeClass = button.dataset.progressTimeClass || "all";
+      state.ratingProgressPointIndex = null;
+      renderRatingProgress(state.payload?.profile?.rating_progress || null);
+    });
+  });
+  el.ratingProgress.querySelectorAll("[data-progress-index]").forEach((button) => {
+    const update = () => {
+      state.ratingProgressPointIndex = Number(button.dataset.progressIndex);
+      renderRatingProgress(state.payload?.profile?.rating_progress || null);
+    };
+    button.addEventListener("click", update);
+    button.addEventListener("focus", update);
+    button.addEventListener("mouseenter", update);
+  });
+}
+
+function formatRatingDelta(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "no rating change yet";
+  const numeric = Number(value);
+  if (numeric > 0) return `+${numeric} over range`;
+  if (numeric < 0) return `${numeric} over range`;
+  return "even over range";
+}
+
+function renderRatingProgressHighlight(point, range) {
+  if (!point) {
+    return "<strong>No day selected</strong><span>Hover a chart marker to inspect that day.</span>";
+  }
+  const opponents = Array.isArray(point.opponents) && point.opponents.length
+    ? point.opponents.map((name) => escapeHtml(name)).join(", ")
+    : "No opponent list for this day";
+  const rating = point.rating ?? point.rating_graph ?? range.rating_end ?? "--";
+  return `
+    <div>
+      <span class="line-badge">${escapeHtml(point.label || point.date || "Selected day")}</span>
+      <strong>${escapeHtml(point.summary || "No games imported for this day.")}</strong>
+      <p>${Number(point.score_rate || 0).toFixed(1)}% score · ${Number(point.win_rate || 0).toFixed(1)}% wins · rating ${escapeHtml(rating)}</p>
+    </div>
+    <div class="progress-highlight-grid">
+      <span><b>${Number(point.games || 0)}</b> games</span>
+      <span><b>${Number(point.wins || 0)}</b> wins</span>
+      <span><b>${Number(point.draws || 0)}</b> draws</span>
+      <span><b>${Number(point.losses || 0)}</b> losses</span>
+    </div>
+    <small>${opponents}</small>
+  `;
+}
+
+function renderRatingProgressInsight(label, item) {
+  if (!item) {
+    return `
+      <article class="progress-insight">
+        <span>${escapeHtml(label)}</span>
+        <strong>Waiting for games</strong>
+        <small>No day data in this range yet.</small>
+      </article>
+    `;
+  }
+  const score = item.score_rate == null ? "" : ` · ${Number(item.score_rate).toFixed(1)}% score`;
+  return `
+    <article class="progress-insight">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(item.label || item.date || "")}</strong>
+      <small>${Number(item.games || 0)} games · ${escapeHtml(item.record || "")}${score}</small>
+    </article>
+  `;
+}
+
+function renderTimeClassBreakdown(items) {
+  const top = items.slice(0, 3);
+  return `
+    <article class="progress-insight">
+      <span>Time controls</span>
+      <strong>${top.length ? escapeHtml(top.map((item) => item.label).join(" / ")) : "No split yet"}</strong>
+      <small>${top.length ? escapeHtml(top.map((item) => `${item.label}: ${item.games}`).join(" · ")) : "Import games to see the mix."}</small>
+    </article>
   `;
 }
 

@@ -27,6 +27,7 @@ https://tetizz.github.io/Bookup/
 - shows a repertoire health dashboard with coverage, due load, weak branches, and known lines
 - scores line memory so fragile, building, and strong branches are separated
 - detects opening drift by comparing recent first moves with your long-term imported repertoire
+- charts rating progress, win/loss/draw record, score rate, win rate, and separate rapid/blitz/bullet time-control graphs across 30 days, 90 days, and all time
 - exports a compact preparation pack with focus lines, common replies, and maintenance lines
 - shows local engine/profile cache health so repeat analysis is easier to trust
 - generates a short study plan from due lines, fragile memory scores, common replies, and new branches
@@ -54,7 +55,7 @@ https://tetizz.github.io/Bookup/
   Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
 
 - `Repertoire Map`
-  See health, study plan, memory scores, confidence graph, opening drift, drift fixes, cache health, preparation packs, import speed, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
+  See health, rating progress, result trends, study plan, memory scores, confidence graph, opening drift, drift fixes, cache health, preparation packs, import speed, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
 
 - `Needs Work`
   Focus on repeated repertoire mistakes, due lines, fresh lines, queue explainers, suggested repertoire updates, mistake heatmap squares, mistake timelines, spaced-review buckets, smart retry cards, and pre-move quizzes.
@@ -246,6 +247,7 @@ That includes:
 - cached analyzed repertoires keyed by request/settings
 - imported-game move-tree payloads
 - health dashboard, heatmap, mistake timeline, response-builder, and transposition payloads inside the saved profile snapshot
+- rating progress snapshots from imported game headers, including daily W/D/L, win rate, score rate, rating changes, and separate time-control breakdowns
 - study plan, confidence graph, smart retry, pre-move quiz, opponent simulator, blunder traps, and repertoire export payloads
 - snapshot state for the latest profile
 - training progress and review stats

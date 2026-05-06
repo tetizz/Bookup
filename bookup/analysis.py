@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import date, timedelta
 import json
 import math
 from statistics import mean
@@ -233,11 +234,18 @@ def _safe_mean(values: list[float]) -> float:
     return mean(values) if values else 0.0
 
 
-def _classify_result(result: str) -> str:
+def _classify_result(result: str, player_color: str = "") -> str:
     lowered = (result or "").lower()
+    color = (player_color or "").lower()
+    if lowered in {"1/2-1/2", "1/2", "draw"}:
+        return "draw"
+    if lowered == "1-0":
+        return "win" if color != "black" else "loss"
+    if lowered == "0-1":
+        return "win" if color == "black" else "loss"
     if lowered == "win":
         return "win"
-    if lowered in {"agreed", "stalemate", "repetition", "timevsinsufficient", "insufficient", "50move"}:
+    if lowered in {"agreed", "stalemate", "repetition", "timevsinsufficient", "timeoutvsinsufficient", "insufficient", "50move"}:
         return "draw"
     return "loss"
 
@@ -248,6 +256,326 @@ def _game_date_label(imported: ImportedGame, fallback_index: int) -> str:
     if date and date not in {"?", "????.??.??"}:
         return date.replace("????", "unknown").replace(".??", "")
     return f"Game {fallback_index}"
+
+
+def _header_text(imported: ImportedGame, *names: str) -> str:
+    headers = imported.game.headers
+    for name in names:
+        value = str(headers.get(name, "") or "").strip()
+        if value and value not in {"?", "-", "????.??.??"}:
+            return value
+    return ""
+
+
+def _parse_game_date(imported: ImportedGame) -> date | None:
+    raw_date = _header_text(imported, "EndDate", "UTCDate", "Date").replace(".", "-")
+    if not raw_date:
+        return None
+    date_part = raw_date.split(" ", 1)[0]
+    parts = date_part.split("-")
+    if len(parts) < 3 or any(not part.isdigit() for part in parts[:3]):
+        return None
+    try:
+        return date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+
+
+def _parse_game_time_seconds(imported: ImportedGame) -> int:
+    raw_time = _header_text(imported, "EndTime", "UTCTime", "Time")
+    if not raw_time:
+        return 0
+    time_part = raw_time.split(" ", 1)[0]
+    pieces = time_part.split(":")
+    if len(pieces) < 2 or any(not piece.isdigit() for piece in pieces[:2]):
+        return 0
+    try:
+        hours = int(pieces[0])
+        minutes = int(pieces[1])
+        seconds = int(pieces[2]) if len(pieces) > 2 and pieces[2].isdigit() else 0
+    except ValueError:
+        return 0
+    return max(0, min(86399, hours * 3600 + minutes * 60 + seconds))
+
+
+def _rating_from_headers(imported: ImportedGame, color: str) -> int | None:
+    color_prefix = "White" if color == "white" else "Black"
+    for name in (f"{color_prefix}Elo", f"{color_prefix}Rating"):
+        raw = _header_text(imported, name)
+        if not raw:
+            continue
+        try:
+            value = int(float(raw))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _format_progress_date(value: date) -> str:
+    return f"{value.strftime('%b')} {value.day}"
+
+
+def _rating_delta(start: int | None, end: int | None) -> int | None:
+    if start is None or end is None:
+        return None
+    return int(end) - int(start)
+
+
+def _result_record_text(wins: int, draws: int, losses: int) -> str:
+    return f"{wins}W {draws}D {losses}L"
+
+
+def _score_rate(wins: int, draws: int, losses: int) -> float:
+    games = wins + draws + losses
+    if not games:
+        return 0.0
+    return round(((wins + 0.5 * draws) / games) * 100, 1)
+
+
+def _win_rate(wins: int, draws: int, losses: int) -> float:
+    games = wins + draws + losses
+    if not games:
+        return 0.0
+    return round((wins / games) * 100, 1)
+
+
+def _dominant_result(wins: int, draws: int, losses: int) -> str:
+    values = {"win": wins, "draw": draws, "loss": losses}
+    if not any(values.values()):
+        return "idle"
+    ordered = sorted(values.items(), key=lambda item: (-item[1], item[0]))
+    if len([value for value in values.values() if value == ordered[0][1]]) > 1:
+        return "mixed"
+    return ordered[0][0]
+
+
+def _build_rating_progress(games: list[ImportedGame], *, split_by_time_class: bool = True) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for index, imported in enumerate(games, start=1):
+        played_on = _parse_game_date(imported)
+        if played_on is None:
+            continue
+        player_color = imported.player_color if imported.player_color in {"white", "black"} else "white"
+        opponent_color = "black" if player_color == "white" else "white"
+        result = _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color)
+        player_rating = _rating_from_headers(imported, player_color)
+        opponent_rating = _rating_from_headers(imported, opponent_color)
+        rows.append(
+            {
+                "index": index,
+                "date": played_on,
+                "sort_seconds": _parse_game_time_seconds(imported),
+                "rating": player_rating,
+                "opponent_rating": opponent_rating,
+                "result": result,
+                "time_class": imported.time_class or "unknown",
+                "opponent": imported.opponent or "Unknown",
+                "color": player_color,
+                "url": imported.url,
+            }
+        )
+    rows.sort(key=lambda row: (row["date"], row["sort_seconds"], row["index"]))
+
+    if not rows:
+        return {
+            "available": False,
+            "message": "No dated games with rating headers were available yet.",
+            "total_games": len(games),
+            "dated_games": 0,
+            "ranges": {},
+            "default_range": "90",
+        }
+
+    daily: dict[date, dict[str, Any]] = {}
+    time_class_counts: Counter[str] = Counter()
+    last_rating: int | None = None
+    for row in rows:
+        day = row["date"]
+        bucket = daily.setdefault(
+            day,
+            {
+                "date": day,
+                "games": 0,
+                "wins": 0,
+                "draws": 0,
+                "losses": 0,
+                "rating": None,
+                "ratings": [],
+                "opponents": [],
+                "time_classes": Counter(),
+            },
+        )
+        bucket["games"] += 1
+        if row["result"] == "win":
+            bucket["wins"] += 1
+        elif row["result"] == "draw":
+            bucket["draws"] += 1
+        else:
+            bucket["losses"] += 1
+        bucket["opponents"].append(row["opponent"])
+        bucket["time_classes"][row["time_class"]] += 1
+        time_class_counts[row["time_class"]] += 1
+        if row["rating"] is not None:
+            bucket["rating"] = row["rating"]
+            bucket["ratings"].append(row["rating"])
+            last_rating = row["rating"]
+    if last_rating is None:
+        last_rating = next((row["rating"] for row in reversed(rows) if row["rating"] is not None), None)
+
+    all_dates = sorted(daily)
+    earliest_date = all_dates[0]
+    latest_date = all_dates[-1]
+    all_ratings = [int(row["rating"]) for row in rows if row["rating"] is not None]
+
+    def build_range(key: str, days: int | None) -> dict[str, Any]:
+        start_date = earliest_date if days is None else max(earliest_date, latest_date - timedelta(days=days - 1))
+        points: list[dict[str, Any]] = []
+        range_rows = [row for row in rows if row["date"] >= start_date]
+        carry_rating = next((row["rating"] for row in reversed(rows) if row["date"] < start_date and row["rating"] is not None), None)
+        active_dates = []
+        if days is None:
+            date_sequence = [day for day in all_dates if day >= start_date]
+        else:
+            date_sequence = []
+            date_cursor = start_date
+            while date_cursor <= latest_date:
+                date_sequence.append(date_cursor)
+                date_cursor += timedelta(days=1)
+        for date_cursor in date_sequence:
+            bucket = daily.get(date_cursor)
+            if bucket:
+                active_dates.append(date_cursor)
+                if bucket["rating"] is not None:
+                    carry_rating = bucket["rating"]
+                wins = int(bucket["wins"])
+                draws = int(bucket["draws"])
+                losses = int(bucket["losses"])
+                games_count = int(bucket["games"])
+                common_time_class = bucket["time_classes"].most_common(1)[0][0] if bucket["time_classes"] else "unknown"
+                opponents = bucket["opponents"][:4]
+                point = {
+                    "date": date_cursor.isoformat(),
+                    "label": _format_progress_date(date_cursor),
+                    "games": games_count,
+                    "wins": wins,
+                    "draws": draws,
+                    "losses": losses,
+                    "record": _result_record_text(wins, draws, losses),
+                    "score_rate": _score_rate(wins, draws, losses),
+                    "win_rate": _win_rate(wins, draws, losses),
+                    "rating": bucket["rating"],
+                    "rating_graph": carry_rating,
+                    "result_tone": _dominant_result(wins, draws, losses),
+                    "time_class": common_time_class,
+                    "opponents": opponents,
+                    "summary": f"{games_count} game{'s' if games_count != 1 else ''}: {_result_record_text(wins, draws, losses)}",
+                }
+            else:
+                point = {
+                    "date": date_cursor.isoformat(),
+                    "label": _format_progress_date(date_cursor),
+                    "games": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "record": "0W 0D 0L",
+                    "score_rate": 0.0,
+                    "win_rate": 0.0,
+                    "rating": None,
+                    "rating_graph": carry_rating,
+                    "result_tone": "idle",
+                    "time_class": "",
+                    "opponents": [],
+                    "summary": "No games imported for this day.",
+                }
+            points.append(point)
+
+        wins = sum(1 for row in range_rows if row["result"] == "win")
+        draws = sum(1 for row in range_rows if row["result"] == "draw")
+        losses = sum(1 for row in range_rows if row["result"] == "loss")
+        range_ratings = [int(row["rating"]) for row in range_rows if row["rating"] is not None]
+        first_rating = range_ratings[0] if range_ratings else carry_rating
+        final_rating = range_ratings[-1] if range_ratings else carry_rating
+        busiest = max((daily[day] for day in active_dates), key=lambda item: (int(item["games"]), item["date"]), default=None)
+        best_score_day = max(
+            (daily[day] for day in active_dates if int(daily[day]["games"]) > 0),
+            key=lambda item: (_score_rate(int(item["wins"]), int(item["draws"]), int(item["losses"])), int(item["games"])),
+            default=None,
+        )
+        return {
+            "key": key,
+            "label": "All time" if days is None else f"{days} days",
+            "days": days,
+            "start_date": start_date.isoformat(),
+            "end_date": latest_date.isoformat(),
+            "games": len(range_rows),
+            "wins": wins,
+            "draws": draws,
+            "losses": losses,
+            "record": _result_record_text(wins, draws, losses),
+            "score_rate": _score_rate(wins, draws, losses),
+            "win_rate": _win_rate(wins, draws, losses),
+            "rating_start": first_rating,
+            "rating_end": final_rating,
+            "rating_change": _rating_delta(first_rating, final_rating),
+            "best_rating": max(range_ratings) if range_ratings else final_rating,
+            "worst_rating": min(range_ratings) if range_ratings else final_rating,
+            "points": points,
+            "busiest_day": {
+                "date": busiest["date"].isoformat(),
+                "label": _format_progress_date(busiest["date"]),
+                "games": int(busiest["games"]),
+                "record": _result_record_text(int(busiest["wins"]), int(busiest["draws"]), int(busiest["losses"])),
+            } if busiest else None,
+            "best_score_day": {
+                "date": best_score_day["date"].isoformat(),
+                "label": _format_progress_date(best_score_day["date"]),
+                "games": int(best_score_day["games"]),
+                "record": _result_record_text(int(best_score_day["wins"]), int(best_score_day["draws"]), int(best_score_day["losses"])),
+                "score_rate": _score_rate(int(best_score_day["wins"]), int(best_score_day["draws"]), int(best_score_day["losses"])),
+            } if best_score_day else None,
+        }
+
+    time_class_progress: dict[str, Any] = {}
+    if split_by_time_class:
+        seen_classes = [key for key, _value in time_class_counts.most_common()]
+        for time_class in seen_classes:
+            class_games = [
+                imported
+                for imported in games
+                if (imported.time_class or "unknown") == time_class
+            ]
+            if not class_games:
+                continue
+            class_payload = _build_rating_progress(class_games, split_by_time_class=False)
+            if not class_payload.get("available"):
+                continue
+            class_payload["time_class_key"] = time_class
+            class_payload["time_class_label"] = time_class.replace("_", " ").title()
+            time_class_progress[time_class] = class_payload
+
+    return {
+        "available": True,
+        "total_games": len(games),
+        "dated_games": len(rows),
+        "latest_date": latest_date.isoformat(),
+        "latest_rating": last_rating,
+        "best_rating": max(all_ratings) if all_ratings else None,
+        "worst_rating": min(all_ratings) if all_ratings else None,
+        "default_range": "90",
+        "time_class_breakdown": [
+            {"label": key, "games": int(value)}
+            for key, value in time_class_counts.most_common()
+        ],
+        "time_class_progress": time_class_progress,
+        "ranges": {
+            "30": build_range("30", 30),
+            "90": build_range("90", 90),
+            "all": build_range("all", None),
+        },
+    }
 
 
 def _normalize_position_key(board: chess.Board) -> str:
@@ -639,7 +967,7 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
         play_uci: list[str] = []
         last_san = "Start position"
         seen_label = _game_date_label(imported, game_index)
-        game_result = _classify_result(imported.result)
+        game_result = _classify_result(imported.result, imported.player_color)
 
         for ply_index, move in enumerate(imported.game.mainline_moves()):
             if ply_index >= OPENING_PLIES:
@@ -2646,8 +2974,10 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     white_first = _first_move_repertoire(games, "white")
     black_first = _first_move_repertoire(games, "black")
     game_move_tree = _build_game_move_tree(games)
-    total_results = Counter(_classify_result(game.result) for game in games)
-    win_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
+    rating_progress = _build_rating_progress(games)
+    total_results = Counter(_classify_result(game.result, game.player_color) for game in games)
+    win_rate = round((total_results["win"] / len(games)) * 100, 1) if games else 0.0
+    score_rate = round(((total_results["win"] + 0.5 * total_results["draw"]) / len(games)) * 100, 1) if games else 0.0
     health_dashboard = _build_health_dashboard(
         lessons=lessons,
         queue_due=queue_due,
@@ -2684,6 +3014,8 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "games_analyzed": len(games),
         "summary": {
             "win_rate": win_rate,
+            "score_rate": score_rate,
+            "record": _result_record_text(total_results["win"], total_results["draw"], total_results["loss"]),
             "positions": len(lessons),
             "positions_indexed": len(nodes),
             "positions_analyzed": len(analyzed_nodes),
@@ -2701,6 +3033,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "repertoire_tree": repertoire_tree,
         "game_move_tree": game_move_tree,
         "move_tree": game_move_tree,
+        "rating_progress": rating_progress,
         "health_dashboard": health_dashboard,
         "mistake_heatmap": mistake_heatmap,
         "mistake_timeline": mistake_timeline,

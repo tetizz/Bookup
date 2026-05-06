@@ -32,7 +32,7 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 16
+PROFILE_SCHEMA_VERSION = 18
 ENGINE_DEFAULTS_VERSION = 3
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EngineSession | None = None
