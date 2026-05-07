@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 18;
+const PROFILE_SCHEMA_VERSION = 19;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -891,11 +891,11 @@ function startAnalysisProgress() {
     }
     if (elapsed >= 20000) {
       target = 84;
-      message = "Finalizing trainer lines...";
+      message = "Classifying Brilliant moves from your imported games...";
     }
     if (elapsed >= 32000) {
       target = 96;
-      message = "Still working. Stockfish is finishing the first lesson cache...";
+      message = "Still working. Stockfish is storing Brilliant stats and lesson cache...";
     }
     const current = parseInt((el.progressFill?.style.width || "0").replace("%", ""), 10) || 0;
     if (current < target) {
@@ -1353,7 +1353,8 @@ function renderBrilliantTracker(tracker) {
   const bestGame = tracker?.best_game || games[0] || null;
   const summary = tracker?.summary || {};
   const progress = tracker?.progress || null;
-  if (!high.length && !watch.length && !games.length) {
+  const hasScanData = Boolean(progress?.available || Number(summary.games_scanned || 0) || Number(summary.moves_scanned || 0));
+  if (!high.length && !watch.length && !games.length && !hasScanData) {
     el.brilliantTracker.className = "brilliant-tracker-panel empty";
     el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported games with cached Stockfish lines first, then spends a small live-analysis budget so imports stay fast.";
     return;
@@ -1366,6 +1367,7 @@ function renderBrilliantTracker(tracker) {
       <article><span>Best game</span><strong>${bestGame ? `${Number(bestGame.brilliants || 0)}×` : "0×"}</strong><p>${escapeHtml(bestGame ? `${bestGame.opponent || "Opponent"} · ${bestGame.date_label || ""}` : "No Brilliant game found yet.")}</p></article>
       <article><span>Scan coverage</span><strong>${Number(summary.games_scanned || 0)}</strong><p>All imported games · ${Number(summary.moves_scanned || 0)} moves · ${Number(summary.cached_hits || 0)} cache hits.</p></article>
     </div>
+    ${renderBrilliantClassificationStatus(tracker)}
     ${renderBrilliantProgress(progress)}
     <div class="brilliant-tracker-grid">
       <section>
@@ -1385,6 +1387,33 @@ function renderBrilliantTracker(tracker) {
     ` : ""}
   `;
   bindBrilliantProgressEvents();
+}
+
+function renderBrilliantClassificationStatus(tracker) {
+  const status = tracker?.classification_status || {};
+  const summary = tracker?.summary || {};
+  const engine = status.engine || {};
+  const stored = status.stored_with_profile || summary.stored_with_profile;
+  const duringImport = status.classified_during_import || summary.classified_during_import;
+  return `
+    <section class="brilliant-scan-status">
+      <div>
+        <span class="line-badge">Classification proof</span>
+        <h3>Brilliant scan runs during profile import</h3>
+        <p>Results are saved inside the local profile cache, so the Brilliant chart and clickable game list reload without rescanning unless settings or the cache schema changes.</p>
+      </div>
+      <div class="brilliant-scan-grid">
+        <article><span>Stored</span><strong>${stored ? "Yes" : "No"}</strong><small>Profile cache payload</small></article>
+        <article><span>Import pass</span><strong>${duringImport ? "Yes" : "No"}</strong><small>${escapeHtml(status.scope || "all imported games")}</small></article>
+        <article><span>Move scan</span><strong>${Number(status.moves_scanned || summary.moves_scanned || 0)}</strong><small>${Number(status.games_scanned || summary.games_scanned || 0)} games scanned</small></article>
+        <article><span>Cache/live</span><strong>${Number(status.cached_hits || summary.cached_hits || 0)}/${Number(status.live_hits || summary.live_hits || 0)}</strong><small>cached hits / live Stockfish</small></article>
+        <article><span>Depth</span><strong>${Number(engine.depth || 0) || "--"}</strong><small>Stockfish depth</small></article>
+        <article><span>MultiPV</span><strong>${Number(engine.multipv || 0) || "--"}</strong><small>candidate lines</small></article>
+        <article><span>Think time</span><strong>${engine.think_time_sec == null ? "--" : `${Number(engine.think_time_sec)}s`}</strong><small>per live scan</small></article>
+        <article><span>Scope</span><strong>${Number(status.scan_ply_limit || summary.scan_ply_limit || 0)}</strong><small>opening plies per game</small></article>
+      </div>
+    </section>
+  `;
 }
 
 function renderBrilliantProgress(progress) {

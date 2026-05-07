@@ -3356,6 +3356,26 @@ def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[
     brilliant_games.sort(key=lambda item: (-int(item.get("brilliants", 0) or 0), str(item.get("date_label", ""))), reverse=False)
     best_game = brilliant_games[0] if brilliant_games else None
     progress = _build_brilliant_progress(game_rows)
+    classification_status = {
+        "stored_with_profile": True,
+        "classified_during_import": True,
+        "scope": "all imported games",
+        "scan_mode": "cache-first Stockfish classification, then a small live-analysis budget",
+        "player_move_scope": "your moves only",
+        "games_scanned": games_scanned,
+        "moves_scanned": moves_scanned,
+        "cached_hits": cached_hits,
+        "live_hits": live_hits,
+        "remaining_live_budget": live_budget[0],
+        "scan_ply_limit": BRILLIANT_TRACKER_MAX_PLIES,
+        "engine": {
+            "depth": int(engine.settings.depth),
+            "multipv": int(engine.settings.multipv),
+            "think_time_sec": float(engine.settings.think_time_sec),
+            "threads": int(engine.settings.threads),
+            "hash_mb": int(engine.settings.hash_mb),
+        },
+    }
     return {
         "summary": {
             "total_brilliants": len(brilliant_moves),
@@ -3370,12 +3390,15 @@ def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[
             "remaining_live_budget": live_budget[0],
             "counts": dict(counts),
             "watchlist": len(repertoire_watchlist.get("watchlist", [])),
+            "stored_with_profile": True,
+            "classified_during_import": True,
         },
         "high_confidence": brilliant_moves[:32],
         "recent_brilliants": brilliant_moves[:24],
         "games": brilliant_games,
         "best_game": best_game,
         "progress": progress,
+        "classification_status": classification_status,
         "watchlist": repertoire_watchlist.get("watchlist", [])[:24],
     }
 

@@ -611,6 +611,60 @@ select:focus {
   padding-top: 1.25rem;
 }
 
+.brilliant-scan-status {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(125, 162, 255, 0.18);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 90% 8%, rgba(125, 162, 255, 0.16), transparent 30%),
+    rgba(7, 11, 16, 0.62);
+}
+
+.brilliant-scan-status h3 {
+  margin: 8px 0 6px;
+  color: var(--text-strong);
+  font-size: clamp(22px, 2.6vw, 32px);
+}
+
+.brilliant-scan-status p {
+  max-width: 900px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.brilliant-scan-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.brilliant-scan-grid article {
+  padding: 13px;
+  border: 1px solid rgba(139, 171, 224, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.brilliant-scan-grid span,
+.brilliant-scan-grid small {
+  display: block;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.brilliant-scan-grid strong {
+  display: block;
+  margin: 7px 0;
+  color: var(--text-strong);
+  font-size: clamp(20px, 2vw, 28px);
+}
+
 .brilliant-progress-panel {
   display: grid;
   gap: 16px;
@@ -2973,6 +3027,7 @@ select:focus {
   .heatmap-grid,
   .progress-metric-grid,
   .progress-insights,
+  .brilliant-scan-grid,
   .timeline-summary {
     grid-template-columns: 1fr;
   }
