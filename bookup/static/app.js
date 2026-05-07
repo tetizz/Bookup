@@ -71,6 +71,7 @@ const el = {
   thinkTime: document.getElementById("thinkTimeInput"),
   multiPv: document.getElementById("multiPvInput"),
   threads: document.getElementById("threadsInput"),
+  parallelWorkers: document.getElementById("parallelWorkersInput"),
   hash: document.getElementById("hashInput"),
   analyze: document.getElementById("analyzeBtn"),
   pgnImport: document.getElementById("pgnImportInput"),
@@ -154,6 +155,7 @@ const el = {
   studyThinkTime: document.getElementById("studyThinkTimeInput"),
   studyMultiPv: document.getElementById("studyMultiPvInput"),
   studyThreads: document.getElementById("studyThreadsInput"),
+  studyParallelWorkers: document.getElementById("studyParallelWorkersInput"),
   studyHash: document.getElementById("studyHashInput"),
   studyApplySettings: document.getElementById("studyApplySettingsBtn"),
   studySettingsStatus: document.getElementById("studySettingsStatus"),
@@ -250,6 +252,7 @@ async function init() {
   if (el.thinkTime) el.thinkTime.value = String(defaults.think_time_sec ?? 5);
   el.multiPv.value = defaults.multipv || 5;
   el.threads.value = defaults.threads || 8;
+  if (el.parallelWorkers) el.parallelWorkers.value = defaults.parallel_workers || 1;
   el.hash.value = defaults.hash_mb || 2048;
   syncStudySettingsFromSetup();
 
@@ -261,7 +264,7 @@ async function init() {
   el.trainerNext?.addEventListener("click", nextLesson);
   el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
   el.generateTheory?.addEventListener("click", () => { void generateTheoryLine(); });
-  [el.lichessToken, el.enginePath, el.depth, el.multiPv, el.threads, el.hash].forEach((input) => {
+  [el.lichessToken, el.enginePath, el.depth, el.multiPv, el.threads, el.parallelWorkers, el.hash].forEach((input) => {
     input?.addEventListener("change", syncStudySettingsFromSetup);
   });
   el.thinkTime?.addEventListener("change", syncStudySettingsFromSetup);
@@ -386,6 +389,7 @@ function syncStudySettingsFromSetup() {
   if (el.studyThinkTime) el.studyThinkTime.value = String(el.thinkTime?.value || defaults.think_time_sec || 5);
   if (el.studyMultiPv) el.studyMultiPv.value = el.multiPv?.value || defaults.multipv || 5;
   if (el.studyThreads) el.studyThreads.value = el.threads?.value || defaults.threads || 8;
+  if (el.studyParallelWorkers) el.studyParallelWorkers.value = el.parallelWorkers?.value || defaults.parallel_workers || 1;
   if (el.studyHash) el.studyHash.value = el.hash?.value || defaults.hash_mb || 2048;
 }
 
@@ -396,6 +400,7 @@ function applyStudySettingsToSetup(saved = {}) {
   if (el.thinkTime && Object.prototype.hasOwnProperty.call(saved, "think_time_sec")) el.thinkTime.value = String(saved.think_time_sec);
   if (el.multiPv && Object.prototype.hasOwnProperty.call(saved, "multipv")) el.multiPv.value = saved.multipv;
   if (el.threads && Object.prototype.hasOwnProperty.call(saved, "threads")) el.threads.value = saved.threads;
+  if (el.parallelWorkers && Object.prototype.hasOwnProperty.call(saved, "parallel_workers")) el.parallelWorkers.value = saved.parallel_workers;
   if (el.hash && Object.prototype.hasOwnProperty.call(saved, "hash_mb")) el.hash.value = saved.hash_mb;
   syncStudySettingsFromSetup();
 }
@@ -443,6 +448,7 @@ function currentStudySettingsPayload() {
     think_time_sec: Number(el.studyThinkTime?.value || el.thinkTime?.value || defaults.think_time_sec || 5),
     multipv: Number(el.studyMultiPv?.value || el.multiPv?.value || defaults.multipv || 5),
     threads: Number(el.studyThreads?.value || el.threads?.value || defaults.threads || 8),
+    parallel_workers: Number(el.studyParallelWorkers?.value || el.parallelWorkers?.value || defaults.parallel_workers || 1),
     hash_mb: Number(el.studyHash?.value || el.hash?.value || defaults.hash_mb || 2048),
   };
 }
@@ -1018,6 +1024,7 @@ async function importPgnGames() {
         depth: Number(el.depth.value || defaults.depth || 24),
         multipv: Number(el.multiPv.value || defaults.multipv || 5),
         threads: Number(el.threads.value || defaults.threads || 8),
+        parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
         hash_mb: Number(el.hash.value || defaults.hash_mb || 2048),
         think_time_sec: Number(el.thinkTime.value || defaults.think_time_sec || 5),
       }),
@@ -1055,6 +1062,7 @@ async function fetchProfilePayload(username, options = {}) {
       think_time_sec: Number(el.thinkTime?.value || defaults.think_time_sec || 5),
       multipv: Number(el.multiPv.value),
       threads: Number(el.threads.value),
+      parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
       hash_mb: Number(el.hash.value),
     }),
   });
@@ -3401,6 +3409,7 @@ function renderEmptyStudyWorkspace() {
       `Depth ${el.studyDepth?.value || el.depth?.value || "--"}`,
       currentThinkTimeLabel(),
       `MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`,
+      `Workers ${el.studyParallelWorkers?.value || el.parallelWorkers?.value || "--"}`,
     ]);
   }
   if (el.studyDatabaseMeta) {
@@ -3475,6 +3484,7 @@ function renderFreeStudyWorkspace() {
       `Depth ${el.studyDepth?.value || el.depth?.value || "--"}`,
       currentThinkTimeLabel(),
       `MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`,
+      `Workers ${el.studyParallelWorkers?.value || el.parallelWorkers?.value || "--"}`,
       status,
     ]);
   }
@@ -3602,6 +3612,7 @@ function renderStudyWorkspace() {
       `Depth ${el.studyDepth?.value || el.depth?.value || "--"}`,
       currentThinkTimeLabel(),
       `MultiPV ${el.studyMultiPv?.value || el.multiPv?.value || "--"}`,
+      `Workers ${el.studyParallelWorkers?.value || el.parallelWorkers?.value || "--"}`,
       status,
     ]);
   }

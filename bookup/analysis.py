@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, timedelta
 import json
@@ -3605,10 +3606,22 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     analyzed_nodes = _rank_nodes_for_analysis(nodes)
     quick_time_sec = max(0.35, min(PROFILE_ANALYSIS_TIME_SEC, float(engine.settings.think_time_sec or PROFILE_ANALYSIS_TIME_SEC)))
     lessons = []
-    for node in analyzed_nodes:
-        lesson = _build_lesson_from_node(node, engine, time_sec=quick_time_sec)
-        if lesson:
-            lessons.append(lesson)
+    worker_count = max(1, int(getattr(engine, "worker_count", 1) or 1))
+    if worker_count > 1 and len(analyzed_nodes) > 1:
+        with ThreadPoolExecutor(max_workers=min(worker_count, len(analyzed_nodes)), thread_name_prefix="bookup-stockfish") as executor:
+            futures = [
+                executor.submit(_build_lesson_from_node, node, engine, time_sec=quick_time_sec)
+                for node in analyzed_nodes
+            ]
+            for future in as_completed(futures):
+                lesson = future.result()
+                if lesson:
+                    lessons.append(lesson)
+    else:
+        for node in analyzed_nodes:
+            lesson = _build_lesson_from_node(node, engine, time_sec=quick_time_sec)
+            if lesson:
+                lessons.append(lesson)
 
     lessons.sort(key=lambda item: (-item["priority"], -item["frequency"], item["line_label"]))
     for lesson in lessons:

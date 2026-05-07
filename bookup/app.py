@@ -20,7 +20,7 @@ import webview
 from .analysis import analyse_games, build_position_insight, configure_engine_cache, configure_lichess, database_context_for_board, generate_theory_line
 from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_class, normalize_time_classes
 from .classifications import book_classification_payload
-from .engine import EngineSession, EngineSettings, default_engine_path
+from .engine import EnginePool, EngineSettings, default_engine_path
 from .opening_names import lookup_by_board
 from .storage import LocalStore, deserialize_games, serialize_games
 
@@ -36,7 +36,7 @@ configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
 PROFILE_SCHEMA_VERSION = 19
 ENGINE_DEFAULTS_VERSION = 3
 ENGINE_LOCK = threading.Lock()
-LIVE_ENGINE_SESSION: EngineSession | None = None
+LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
 
 app = Flask(
@@ -91,12 +91,14 @@ def recommended_engine_defaults() -> dict:
     # Strong live-analysis defaults without making imports painfully expensive.
     raw_hash = max(2048, min(4096, TOTAL_RAM_MB // 8))
     hash_mb = max(2048, (raw_hash // 128) * 128)
+    workers = max(1, min(4, CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
     return {
         "depth": 26,
         "threads": max(1, min(CPU_THREADS, 16)),
         "hash_mb": hash_mb,
         "multipv": 5,
         "think_time_sec": 5.0,
+        "parallel_workers": workers,
     }
 
 
@@ -134,13 +136,14 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         hash_mb=max(256, min(4096, int(payload.get("hash_mb", defaults["hash_mb"])))),
         multipv=max(1, min(10, int(payload.get("multipv", defaults["multipv"])))),
         think_time_sec=max(0.0, min(60.0, think_time_sec)),
+        parallel_workers=max(1, min(6, int(payload.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"]))),
     )
 
 
 def request_engine_settings(payload: dict, config: dict) -> EngineSettings:
     overrides = {
         key: payload.get(key)
-        for key in ("engine_path", "depth", "threads", "hash_mb", "multipv", "think_time_sec")
+        for key in ("engine_path", "depth", "threads", "hash_mb", "multipv", "think_time_sec", "parallel_workers")
         if key in payload and payload.get(key) not in (None, "")
     }
     return build_engine_settings({**config, **overrides})
@@ -154,6 +157,7 @@ def engine_session_key(settings: EngineSettings) -> str:
             "threads": settings.threads,
             "hash_mb": settings.hash_mb,
             "multipv": settings.multipv,
+            "parallel_workers": settings.parallel_workers,
         },
         sort_keys=True,
     )
@@ -170,15 +174,20 @@ def close_live_engine() -> None:
     LIVE_ENGINE_KEY = ""
 
 
-def live_engine_for(settings: EngineSettings) -> EngineSession:
+def live_engine_for(settings: EngineSettings) -> EnginePool:
     global LIVE_ENGINE_KEY, LIVE_ENGINE_SESSION
     key = engine_session_key(settings)
     if LIVE_ENGINE_SESSION is None or LIVE_ENGINE_KEY != key:
         close_live_engine()
-        LIVE_ENGINE_SESSION = EngineSession(settings)
+        LIVE_ENGINE_SESSION = EnginePool(settings)
         LIVE_ENGINE_SESSION.open()
         LIVE_ENGINE_KEY = key
     return LIVE_ENGINE_SESSION
+
+
+def shared_engine_for(settings: EngineSettings) -> EnginePool:
+    with ENGINE_LOCK:
+        return live_engine_for(settings)
 
 
 atexit.register(close_live_engine)
@@ -192,6 +201,7 @@ def apply_engine_settings_to_config(config: dict, settings: EngineSettings) -> d
     updated["threads"] = settings.threads
     updated["hash_mb"] = settings.hash_mb
     updated["think_time_sec"] = settings.think_time_sec
+    updated["parallel_workers"] = settings.parallel_workers
     updated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
     return updated
 
@@ -211,6 +221,7 @@ def build_defaults_payload(config: dict) -> dict:
         "hash_mb": settings.hash_mb,
         "multipv": settings.multipv,
         "think_time_sec": settings.think_time_sec,
+        "parallel_workers": settings.parallel_workers,
     }
 
 
@@ -496,6 +507,11 @@ def save_settings() -> tuple:
             config["think_time_sec"] = float(payload.get("think_time_sec", config.get("think_time_sec", 5.0)))
         except (TypeError, ValueError):
             pass
+    if "parallel_workers" in payload:
+        try:
+            config["parallel_workers"] = int(payload.get("parallel_workers", config.get("parallel_workers", recommended_engine_defaults()["parallel_workers"])))
+        except (TypeError, ValueError):
+            pass
     if "auto_import_on_startup" in payload:
         config["auto_import_on_startup"] = bool(payload.get("auto_import_on_startup"))
 
@@ -749,9 +765,8 @@ def profile() -> tuple:
         return jsonify({"error": "No matching public games were found for that username and time control."}), 404
 
     try:
-        with ENGINE_LOCK:
-            engine = live_engine_for(settings)
-            profile_data = analyse_games(games, engine)
+        engine = shared_engine_for(settings)
+        profile_data = analyse_games(games, engine)
     except FileNotFoundError:
         return jsonify({"error": "The Stockfish executable could not be opened."}), 400
     except Exception as exc:
@@ -846,9 +861,8 @@ def import_pgn() -> tuple:
     )
 
     try:
-        with ENGINE_LOCK:
-            engine = live_engine_for(settings)
-            profile_data = analyse_games(games, engine)
+        engine = shared_engine_for(settings)
+        profile_data = analyse_games(games, engine)
     except FileNotFoundError:
         return jsonify({"error": "The Stockfish executable could not be opened."}), 400
     except Exception as exc:
@@ -923,17 +937,16 @@ def position_insight() -> tuple:
     your_move_san = str(payload.get("your_move_san", "")).strip()
     your_move_count = int(payload.get("your_move_count", 0) or 0)
     try:
-        with ENGINE_LOCK:
-            engine = live_engine_for(settings)
-            insight = build_position_insight(
-                board,
-                engine,
-                play_uci=play_uci,
-                your_move_uci=your_move_uci,
-                your_move_san=your_move_san,
-                your_move_count=your_move_count,
-                time_sec=settings.think_time_sec,
-            )
+        engine = shared_engine_for(settings)
+        insight = build_position_insight(
+            board,
+            engine,
+            play_uci=play_uci,
+            your_move_uci=your_move_uci,
+            your_move_san=your_move_san,
+            your_move_count=your_move_count,
+            time_sec=settings.think_time_sec,
+        )
     except FileNotFoundError:
         return jsonify({"error": "The Stockfish executable could not be opened."}), 400
     except Exception as exc:
@@ -983,15 +996,14 @@ def generate_theory() -> tuple:
     config = load_config()
     settings = request_engine_settings(payload, config)
     try:
-        with ENGINE_LOCK:
-            engine = live_engine_for(settings)
-            theory = generate_theory_line(
-                board,
-                engine,
-                seed_move_uci=seed_move_uci,
-                plies=plies,
-                time_sec=settings.think_time_sec,
-            )
+        engine = shared_engine_for(settings)
+        theory = generate_theory_line(
+            board,
+            engine,
+            seed_move_uci=seed_move_uci,
+            plies=plies,
+            time_sec=settings.think_time_sec,
+        )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except FileNotFoundError:

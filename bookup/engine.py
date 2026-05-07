@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty, Queue
 import subprocess
 import sys
+import threading
+import time
 
 import chess
 import chess.engine
@@ -53,12 +56,14 @@ class EngineSettings:
     hash_mb: int = 2048
     multipv: int = 5
     think_time_sec: float = 5.0
+    parallel_workers: int = 1
 
 
 class EngineSession:
     def __init__(self, settings: EngineSettings) -> None:
         self.settings = settings
         self._engine: chess.engine.SimpleEngine | None = None
+        self._lock = threading.Lock()
 
     def __enter__(self) -> "EngineSession":
         self.open()
@@ -84,8 +89,10 @@ class EngineSession:
     def close(self) -> None:
         if self._engine is None:
             return
-        self._engine.quit()
-        self._engine = None
+        try:
+            self._engine.quit()
+        finally:
+            self._engine = None
 
     @property
     def engine(self) -> chess.engine.SimpleEngine:
@@ -101,17 +108,108 @@ class EngineSession:
         multipv: int | None = None,
         time_sec: float | None = None,
     ) -> list[dict]:
-        limit_kwargs: dict[str, float | int] = {
-            "depth": depth or self.settings.depth,
-        }
-        if time_sec is not None and float(time_sec) > 0:
-            limit_kwargs["time"] = float(time_sec)
-        info = self.engine.analyse(
-            board,
-            chess.engine.Limit(**limit_kwargs),
-            multipv=max(1, int(multipv or self.settings.multipv)),
-            info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
+        # python-chess engines are not safe to use concurrently from one process.
+        # Keep each Stockfish locked, and use EnginePool when we want real parallelism.
+        with self._lock:
+            limit_kwargs: dict[str, float | int] = {
+                "depth": depth or self.settings.depth,
+            }
+            if time_sec is not None and float(time_sec) > 0:
+                limit_kwargs["time"] = float(time_sec)
+            info = self.engine.analyse(
+                board,
+                chess.engine.Limit(**limit_kwargs),
+                multipv=max(1, int(multipv or self.settings.multipv)),
+                info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
+            )
+            if isinstance(info, dict):
+                return [info]
+            return list(info)
+
+
+class EnginePool:
+    """A small pool of independent Stockfish processes.
+
+    MultiPV searches several lines from one position. This pool is for the other
+    bottleneck: analyzing several different positions at the same time while
+    sharing CPU/hash budgets responsibly.
+    """
+
+    def __init__(self, settings: EngineSettings) -> None:
+        self.settings = settings
+        self.worker_count = max(1, int(settings.parallel_workers or 1))
+        self._available: Queue[EngineSession] = Queue()
+        self._sessions: list[EngineSession] = []
+        self._open_lock = threading.Lock()
+        self._closed = False
+
+    def __enter__(self) -> "EnginePool":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def _worker_settings(self) -> EngineSettings:
+        worker_threads = max(1, int(self.settings.threads) // self.worker_count)
+        worker_hash = max(128, int(self.settings.hash_mb) // self.worker_count)
+        return EngineSettings(
+            path=self.settings.path,
+            depth=self.settings.depth,
+            threads=worker_threads,
+            hash_mb=worker_hash,
+            multipv=self.settings.multipv,
+            think_time_sec=self.settings.think_time_sec,
+            parallel_workers=1,
         )
-        if isinstance(info, dict):
-            return [info]
-        return list(info)
+
+    def open(self) -> None:
+        if self._sessions:
+            return
+        with self._open_lock:
+            if self._sessions:
+                return
+            self._closed = False
+            for _index in range(self.worker_count):
+                session = EngineSession(self._worker_settings())
+                session.open()
+                self._sessions.append(session)
+                self._available.put(session)
+
+    def close(self) -> None:
+        with self._open_lock:
+            self._closed = True
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        returned_sessions: list[EngineSession] = []
+        deadline = time.monotonic() + 5.0
+        while len(returned_sessions) < len(sessions):
+            try:
+                returned_sessions.append(self._available.get(timeout=0.1))
+            except Empty:
+                if time.monotonic() >= deadline:
+                    break
+        for session in set(returned_sessions):
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def analyse(
+        self,
+        board: chess.Board,
+        depth: int | None = None,
+        multipv: int | None = None,
+        time_sec: float | None = None,
+    ) -> list[dict]:
+        self.open()
+        if self._closed:
+            raise RuntimeError("Stockfish pool is closed.")
+        session = self._available.get()
+        try:
+            return session.analyse(board, depth=depth, multipv=multipv, time_sec=time_sec)
+        finally:
+            if self._closed:
+                session.close()
+            else:
+                self._available.put(session)
