@@ -49,6 +49,10 @@ MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
 ENGINE_CACHE_SCHEMA_VERSION = 3
+BRILLIANT_TRACKER_GAME_LIMIT = 120
+BRILLIANT_TRACKER_MAX_PLIES = 48
+BRILLIANT_TRACKER_LIVE_BUDGET = 80
+BRILLIANT_TRACKER_TIME_SEC = 0.22
 
 
 @dataclass(slots=True)
@@ -2939,6 +2943,228 @@ def _build_confidence_graph(lessons: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _classification_key(record: dict[str, Any] | None) -> str:
+    return str((record or {}).get("key") or (record or {}).get("label") or "").strip().lower()
+
+
+def _build_repertoire_brilliant_watchlist(lessons: list[dict[str, Any]]) -> dict[str, Any]:
+    watchlist: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_candidate(lesson: dict[str, Any], *, role: str, move: str, uci: str, classification: dict[str, Any] | None) -> None:
+        key = _classification_key(classification)
+        if not key:
+            return
+        counts[key] += 1
+        if key not in {"brilliant", "great", "best", "excellent"}:
+            return
+        unique_key = (str(lesson.get("lesson_id", "")), role, uci or move)
+        if unique_key in seen:
+            return
+        seen.add(unique_key)
+        item = {
+            "lesson_id": lesson.get("lesson_id", ""),
+            "line_label": lesson.get("line_label", ""),
+            "opening_name": lesson.get("opening_name", ""),
+            "opening_code": lesson.get("opening_code", ""),
+            "position_fen": lesson.get("position_fen", ""),
+            "position_identifier": lesson.get("position_identifier", ""),
+            "role": role,
+            "move": move,
+            "uci": uci,
+            "classification": classification or {},
+            "reason": (classification or {}).get("reason", ""),
+            "priority": int(lesson.get("priority", 0) or 0),
+            "frequency": int(lesson.get("frequency", 0) or 0),
+        }
+        watchlist.append(item)
+
+    for lesson in lessons:
+        add_candidate(
+            lesson,
+            role="recommended move",
+            move=str(lesson.get("recommended_move", "") or ""),
+            uci=str(lesson.get("best_reply_uci", "") or ""),
+            classification=lesson.get("recommended_classification"),
+        )
+        add_candidate(
+            lesson,
+            role="your repeated move",
+            move=str(lesson.get("your_repeated_move", "") or ""),
+            uci=str(lesson.get("your_top_move_uci", "") or ""),
+            classification=lesson.get("your_move_classification"),
+        )
+        for index, line in enumerate((lesson.get("candidate_lines") or [])[:5], start=1):
+            add_candidate(
+                lesson,
+                role=f"engine line {index}",
+                move=str(line.get("move", "") or ""),
+                uci=str(line.get("uci", "") or ""),
+                classification=line.get("classification"),
+            )
+
+    sort_key = lambda item: (-int(item.get("priority", 0) or 0), -int(item.get("frequency", 0) or 0), str(item.get("line_label", "")))
+    watchlist.sort(key=sort_key)
+    return {
+        "summary": {
+            "lessons_scanned": len(lessons),
+            "watchlist": len(watchlist),
+            "counts": dict(counts),
+        },
+        "watchlist": watchlist[:32],
+    }
+
+
+def _cached_candidate_lines_for_brilliant_scan(
+    board: chess.Board,
+    engine: EngineSession,
+    *,
+    live_budget: list[int],
+) -> tuple[list[dict[str, Any]], bool]:
+    cache_key = _engine_cache_key(
+        "candidate-lines",
+        board,
+        engine,
+        play_uci=[],
+        limit=5,
+        time_sec=BRILLIANT_TRACKER_TIME_SEC,
+    )
+    cached = _load_engine_cache(cache_key)
+    if cached:
+        return list(cached.get("candidate_lines", [])), True
+    if live_budget[0] <= 0:
+        return [], False
+    live_budget[0] -= 1
+    candidate_lines, _database_moves, _cache_hit = _candidate_lines_for_board(
+        board,
+        engine,
+        play_uci=[],
+        limit=5,
+        time_sec=BRILLIANT_TRACKER_TIME_SEC,
+    )
+    return candidate_lines, False
+
+
+def _game_url_label(imported: ImportedGame, index: int) -> str:
+    if imported.url:
+        return imported.url.rsplit("/", 1)[-1] or imported.url
+    site = _header_text(imported, "Site")
+    if site:
+        return site.rsplit("/", 1)[-1] or site
+    return f"game-{index}"
+
+
+def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[str, Any]], engine: EngineSession) -> dict[str, Any]:
+    repertoire_watchlist = _build_repertoire_brilliant_watchlist(lessons)
+    live_budget = [BRILLIANT_TRACKER_LIVE_BUDGET]
+    brilliant_moves: list[dict[str, Any]] = []
+    brilliant_games: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    games_scanned = 0
+    moves_scanned = 0
+    cached_hits = 0
+    live_hits = 0
+
+    def sort_date_key(imported: ImportedGame) -> tuple[date, int]:
+        return (_parse_game_date(imported) or date.min, _parse_game_time_seconds(imported))
+
+    ordered_games = sorted(games, key=sort_date_key, reverse=True)[:BRILLIANT_TRACKER_GAME_LIMIT]
+    for game_index, imported in enumerate(ordered_games, start=1):
+        player_color = imported.player_color if imported.player_color in {"white", "black"} else "white"
+        player_turn = chess.WHITE if player_color == "white" else chess.BLACK
+        board = imported.game.board()
+        path_san: list[str] = []
+        game_brilliants: list[dict[str, Any]] = []
+        games_scanned += 1
+        for ply_index, move in enumerate(imported.game.mainline_moves(), start=1):
+            if move not in board.legal_moves:
+                break
+            san = board.san(move)
+            should_scan = board.turn == player_turn and ply_index <= BRILLIANT_TRACKER_MAX_PLIES
+            if should_scan:
+                moves_scanned += 1
+                candidate_lines, from_cache = _cached_candidate_lines_for_brilliant_scan(board, engine, live_budget=live_budget)
+                if from_cache:
+                    cached_hits += 1
+                elif candidate_lines:
+                    live_hits += 1
+                played_uci = move.uci()
+                played_line = next((line for line in candidate_lines if str(line.get("uci") or "") == played_uci), None)
+                classification = (played_line or {}).get("classification") if played_line else None
+                key = _classification_key(classification)
+                if key:
+                    counts[key] += 1
+                if key == "brilliant":
+                    before_path = list(path_san)
+                    item = {
+                        "game_id": _game_url_label(imported, game_index),
+                        "game_url": imported.url,
+                        "date_label": _game_date_label(imported, game_index),
+                        "time_class": imported.time_class or "unknown",
+                        "result": _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color),
+                        "opponent": imported.opponent or ("Black" if player_color == "white" else "White"),
+                        "player_color": player_color,
+                        "move_number": (ply_index + 1) // 2,
+                        "ply": ply_index,
+                        "move": san,
+                        "uci": played_uci,
+                        "position_fen": board.fen(),
+                        "position_identifier": _normalize_position_key(board),
+                        "pgn_path": " ".join(before_path + [san]),
+                        "classification": classification or {},
+                        "reason": (classification or {}).get("reason", "best move plus a sound piece sacrifice"),
+                        "line_san": str((played_line or {}).get("line_san", "") or ""),
+                        "expected_points": float((classification or {}).get("expected_points", (played_line or {}).get("expected_points", 0.5)) or 0.5),
+                    }
+                    brilliant_moves.append(item)
+                    game_brilliants.append(item)
+            board.push(move)
+            path_san.append(san)
+            if ply_index >= BRILLIANT_TRACKER_MAX_PLIES and game_brilliants:
+                break
+
+        if game_brilliants:
+            brilliant_games.append(
+                {
+                    "game_id": _game_url_label(imported, game_index),
+                    "game_url": imported.url,
+                    "date_label": _game_date_label(imported, game_index),
+                    "time_class": imported.time_class or "unknown",
+                    "result": _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color),
+                    "opponent": imported.opponent or ("Black" if player_color == "white" else "White"),
+                    "player_color": player_color,
+                    "brilliants": len(game_brilliants),
+                    "moves": game_brilliants[:6],
+                    "pgn_path": game_brilliants[-1].get("pgn_path", ""),
+                }
+            )
+
+    brilliant_moves.sort(key=lambda item: (str(item.get("date_label", "")), int(item.get("ply", 0) or 0)), reverse=True)
+    brilliant_games.sort(key=lambda item: (-int(item.get("brilliants", 0) or 0), str(item.get("date_label", ""))), reverse=False)
+    best_game = brilliant_games[0] if brilliant_games else None
+    return {
+        "summary": {
+            "total_brilliants": len(brilliant_moves),
+            "games_with_brilliants": len(brilliant_games),
+            "games_scanned": games_scanned,
+            "moves_scanned": moves_scanned,
+            "cached_hits": cached_hits,
+            "live_hits": live_hits,
+            "scan_game_limit": BRILLIANT_TRACKER_GAME_LIMIT,
+            "scan_ply_limit": BRILLIANT_TRACKER_MAX_PLIES,
+            "remaining_live_budget": live_budget[0],
+            "counts": dict(counts),
+            "watchlist": len(repertoire_watchlist.get("watchlist", [])),
+        },
+        "high_confidence": brilliant_moves[:32],
+        "recent_brilliants": brilliant_moves[:12],
+        "games": brilliant_games[:12],
+        "best_game": best_game,
+        "watchlist": repertoire_watchlist.get("watchlist", [])[:24],
+    }
+
+
 def _build_drift_fixes(opening_drift: dict[str, Any]) -> dict[str, Any]:
     actions = []
     for alert in (opening_drift or {}).get("alerts", [])[:8]:
@@ -3225,6 +3451,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
     prep_pack = _build_prep_pack(queue_due, queue_new, database_training, known_line_archive)
     study_plan = _build_study_plan(queue_due, queue_new, known_line_archive, memory_scores, database_training)
     confidence_graph = _build_confidence_graph(lessons)
+    brilliant_tracker = _build_game_brilliant_tracker(games, lessons, engine)
     drift_fixes = _build_drift_fixes(opening_drift)
     import_speed_report = _build_import_speed_report(games, nodes, analyzed_nodes, lessons)
     repertoire_export = _build_repertoire_export(lessons, game_move_tree)
@@ -3273,6 +3500,7 @@ def analyse_games(games: list[ImportedGame], engine: EngineSession) -> dict[str,
         "prep_pack": prep_pack,
         "study_plan": study_plan,
         "confidence_graph": confidence_graph,
+        "brilliant_tracker": brilliant_tracker,
         "drift_fixes": drift_fixes,
         "import_speed_report": import_speed_report,
         "repertoire_export": repertoire_export,

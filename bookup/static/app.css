@@ -433,6 +433,8 @@ select:focus {
 }
 
 .health-dashboard.empty,
+.stats-summary-panel.empty,
+.brilliant-tracker-panel.empty,
 .rating-progress-panel.empty,
 .heatmap-panel.empty,
 .timeline-panel.empty {
@@ -441,6 +443,171 @@ select:focus {
   color: var(--muted);
   background: rgba(13, 18, 25, 0.72);
   border: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.stats-summary-panel,
+.brilliant-tracker-panel {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.stats-card-grid,
+.brilliant-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.brilliant-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.stats-card,
+.brilliant-summary-grid article {
+  padding: 18px;
+  border: 1px solid rgba(139, 171, 224, 0.16);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 86% 12%, rgba(125, 162, 255, 0.14), transparent 34%),
+    rgba(7, 11, 16, 0.72);
+}
+
+.stats-card.rating {
+  border-color: rgba(104, 204, 136, 0.28);
+  background:
+    radial-gradient(circle at 84% 12%, rgba(104, 204, 136, 0.16), transparent 34%),
+    rgba(7, 11, 16, 0.72);
+}
+
+.stats-card span,
+.brilliant-summary-grid span {
+  color: var(--muted);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.stats-card strong,
+.brilliant-summary-grid strong {
+  display: block;
+  margin: 8px 0;
+  color: var(--text-strong);
+  font-size: clamp(30px, 4vw, 46px);
+  line-height: 0.95;
+}
+
+.stats-card p,
+.brilliant-summary-grid p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.stats-time-split {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(139, 171, 224, 0.12);
+  border-radius: 18px;
+  background: rgba(7, 11, 16, 0.54);
+}
+
+.stats-split-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.stats-split-row strong,
+.stats-split-row b {
+  color: var(--text-strong);
+}
+
+.stats-split-row span {
+  color: var(--muted);
+}
+
+.brilliant-tracker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.brilliant-tracker-grid section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(139, 171, 224, 0.14);
+  border-radius: 20px;
+  background: rgba(7, 11, 16, 0.58);
+}
+
+.brilliant-tracker-grid h3 {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.brilliant-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(139, 171, 224, 0.16);
+  border-radius: 16px;
+  background: rgba(9, 14, 20, 0.78);
+}
+
+.brilliant-card.brilliant {
+  border-color: rgba(45, 190, 171, 0.45);
+  box-shadow: 0 0 0 1px rgba(45, 190, 171, 0.12), 0 16px 36px rgba(45, 190, 171, 0.08);
+}
+
+.brilliant-card.great,
+.brilliant-card.best {
+  border-color: rgba(116, 184, 78, 0.36);
+}
+
+.brilliant-game-card {
+  background:
+    linear-gradient(135deg, rgba(54, 197, 255, 0.12), rgba(13, 20, 31, 0.86)),
+    rgba(6, 12, 21, 0.82);
+}
+
+.brilliant-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brilliant-card-head strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 22px;
+}
+
+.brilliant-card-head span,
+.brilliant-card p {
+  color: var(--muted);
+}
+
+.brilliant-path {
+  border-left: 2px solid rgba(132, 163, 255, 0.45);
+  color: rgba(242, 247, 255, 0.86) !important;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+  padding-left: 0.8rem;
+}
+
+.brilliant-watchlist {
+  border-top: 1px solid rgba(160, 190, 255, 0.12);
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
 }
 
 .health-card-grid {

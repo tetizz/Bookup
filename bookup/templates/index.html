@@ -43,6 +43,7 @@
     <nav class="workspace-tabs">
       <button class="workspace-tab active" data-tab-target="setup">Setup</button>
       <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire Map</button>
+      <button class="workspace-tab" data-tab-target="stats">Stats</button>
       <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
       <button class="workspace-tab" data-tab-target="trainer">Study Lines</button>
       <button class="workspace-tab" data-tab-target="theory">Theory</button>
@@ -72,6 +73,13 @@
               <label class="checkbox-row">
                 <input id="importAllGamesInput" type="checkbox">
                 <span>Import all public games</span>
+              </label>
+            </label>
+            <label class="field field-check">
+              <span>Startup</span>
+              <label class="checkbox-row">
+                <input id="autoImportStartupInput" type="checkbox">
+                <span>Auto-import new games on startup</span>
               </label>
             </label>
             <label class="field">
@@ -171,57 +179,6 @@
       </section>
 
       <section class="section-block">
-        <div class="section-label">Progress</div>
-        <h2 class="section-title">Rating, results, and form over time</h2>
-        <div id="ratingProgressPanel" class="rating-progress-panel empty">Import rated games to see your 30-day, 90-day, and all-time progress graph.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Training Intelligence</div>
-        <h2 class="section-title">Memory, drift, and cache health</h2>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Line Memory Score</h3>
-            <div id="memoryScorePanel" class="stack empty">Memory scores will show up after import.</div>
-          </article>
-          <article class="card">
-            <h3>Opening Drift Detector</h3>
-            <div id="driftDetectorPanel" class="stack empty">Bookup will compare your recent first moves with your long-term repertoire.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Preparation Pack</h3>
-            <div id="prepPackPanel" class="stack empty">Your compact study pack will show up here.</div>
-          </article>
-          <article class="card">
-            <h3>Engine Cache</h3>
-            <div id="cacheDashboard" class="stack empty">Cache stats will show after Bookup loads.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Study Plan Generator</h3>
-            <div id="studyPlanPanel" class="stack empty">Bookup will build a short session plan after import.</div>
-          </article>
-          <article class="card">
-            <h3>Confidence Graph</h3>
-            <div id="confidenceGraphPanel" class="stack empty">Line confidence distribution will show up here.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Drift Fixes</h3>
-            <div id="driftFixPanel" class="stack empty">If your first moves drift, Bookup will suggest whether to adopt or repair them.</div>
-          </article>
-          <article class="card">
-            <h3>Import Speed Dashboard</h3>
-            <div id="importSpeedPanel" class="stack empty">Import and cache diagnostics will show up here.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
         <div class="section-label">First Moves</div>
         <h2 class="section-title">How your repertoire starts</h2>
         <div class="split-grid">
@@ -267,6 +224,66 @@
         <div class="section-label">Transpositions</div>
         <h2 class="section-title">Different paths into the same position</h2>
         <div id="transpositionList" class="stack empty">Transposition groups will show up here after import.</div>
+      </section>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="stats">
+      <section class="section-block">
+        <div class="section-label">Stats</div>
+        <h2 class="section-title">Rating, results, and form over time</h2>
+        <div id="statsSummaryPanel" class="stats-summary-panel empty">Import rated games to see your W/D/L, score rate, and time-control split.</div>
+        <div id="ratingProgressPanel" class="rating-progress-panel empty">Import rated games to see your 30-day, 90-day, and all-time progress graph.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Brilliant Tracker</div>
+        <h2 class="section-title">Brilliants, great moves, and tactical chances from your repertoire</h2>
+        <div id="brilliantTrackerPanel" class="brilliant-tracker-panel empty">Bookup will track brilliant candidates after Stockfish classifies your repertoire positions.</div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-label">Training Intelligence</div>
+        <h2 class="section-title">Memory, drift, and cache health</h2>
+        <div class="split-grid intelligence-grid">
+          <article class="card">
+            <h3>Line Memory Score</h3>
+            <div id="memoryScorePanel" class="stack empty">Memory scores will show up after import.</div>
+          </article>
+          <article class="card">
+            <h3>Opening Drift Detector</h3>
+            <div id="driftDetectorPanel" class="stack empty">Bookup will compare your recent first moves with your long-term repertoire.</div>
+          </article>
+        </div>
+        <div class="split-grid intelligence-grid">
+          <article class="card">
+            <h3>Preparation Pack</h3>
+            <div id="prepPackPanel" class="stack empty">Your compact study pack will show up here.</div>
+          </article>
+          <article class="card">
+            <h3>Engine Cache</h3>
+            <div id="cacheDashboard" class="stack empty">Cache stats will show after Bookup loads.</div>
+          </article>
+        </div>
+        <div class="split-grid intelligence-grid">
+          <article class="card">
+            <h3>Study Plan Generator</h3>
+            <div id="studyPlanPanel" class="stack empty">Bookup will build a short session plan after import.</div>
+          </article>
+          <article class="card">
+            <h3>Confidence Graph</h3>
+            <div id="confidenceGraphPanel" class="stack empty">Line confidence distribution will show up here.</div>
+          </article>
+        </div>
+        <div class="split-grid intelligence-grid">
+          <article class="card">
+            <h3>Drift Fixes</h3>
+            <div id="driftFixPanel" class="stack empty">If your first moves drift, Bookup will suggest whether to adopt or repair them.</div>
+          </article>
+          <article class="card">
+            <h3>Import Speed Dashboard</h3>
+            <div id="importSpeedPanel" class="stack empty">Import and cache diagnostics will show up here.</div>
+          </article>
+        </div>
       </section>
     </section>
 

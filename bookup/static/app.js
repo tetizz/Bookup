@@ -64,6 +64,7 @@ const el = {
   timeClasses: document.getElementById("timeClassesInput"),
   maxGames: document.getElementById("maxGamesInput"),
   importAllGames: document.getElementById("importAllGamesInput"),
+  autoImportStartup: document.getElementById("autoImportStartupInput"),
   lichessToken: document.getElementById("lichessTokenInput"),
   enginePath: document.getElementById("enginePathInput"),
   depth: document.getElementById("depthInput"),
@@ -92,7 +93,9 @@ const el = {
   repertoireMapWhite: document.getElementById("repertoireMapWhite"),
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
   healthDashboard: document.getElementById("healthDashboard"),
+  statsSummary: document.getElementById("statsSummaryPanel"),
   ratingProgress: document.getElementById("ratingProgressPanel"),
+  brilliantTracker: document.getElementById("brilliantTrackerPanel"),
   memoryScorePanel: document.getElementById("memoryScorePanel"),
   driftDetectorPanel: document.getElementById("driftDetectorPanel"),
   prepPackPanel: document.getElementById("prepPackPanel"),
@@ -227,6 +230,7 @@ const state = {
   repertoireExportText: "",
   manualDriftChoices: {},
   analysisProgressTimer: 0,
+  autoImportRunning: false,
   prepPackText: "",
 };
 
@@ -236,6 +240,7 @@ async function init() {
   el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games ?? 0;
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
+  if (el.autoImportStartup) el.autoImportStartup.checked = defaults.auto_import_on_startup !== false;
   el.lichessToken.value = defaults.lichess_token || "";
   el.enginePath.value = defaults.engine_path || "";
   el.depth.value = defaults.depth || 24;
@@ -248,6 +253,7 @@ async function init() {
   el.analyze.addEventListener("click", runAnalysis);
   el.importPgn?.addEventListener("click", importPgnGames);
   el.importAllGames?.addEventListener("change", syncImportScope);
+  el.autoImportStartup?.addEventListener("change", () => { void saveStartupImportSetting(); });
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
   el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
@@ -362,6 +368,7 @@ async function init() {
   setActiveTab("setup");
   renderStudyWorkspace();
   await bootstrapLocalState();
+  void checkAutoImportOnStartup();
   void initializeFreeAnalysisBoard();
 }
 
@@ -435,6 +442,29 @@ function currentStudySettingsPayload() {
     threads: Number(el.studyThreads?.value || el.threads?.value || defaults.threads || 8),
     hash_mb: Number(el.studyHash?.value || el.hash?.value || defaults.hash_mb || 2048),
   };
+}
+
+function currentSetupSettingsPayload() {
+  return {
+    username: String(el.username?.value || defaults.username || "trixize1234").trim(),
+    time_classes: String(el.timeClasses?.value || defaults.time_classes || "all").trim(),
+    max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames?.value || defaults.max_games || 0),
+    auto_import_on_startup: el.autoImportStartup?.checked !== false,
+    ...currentStudySettingsPayload(),
+  };
+}
+
+async function saveStartupImportSetting() {
+  try {
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentSetupSettingsPayload()),
+    });
+    defaults.auto_import_on_startup = el.autoImportStartup?.checked !== false;
+  } catch {
+    // Non-critical; the next profile save will persist the same checkbox value.
+  }
 }
 
 async function saveStudySettings() {
@@ -889,11 +919,13 @@ function setActiveTab(name) {
   }
 }
 
-async function runAnalysis() {
+async function runAnalysis(options = {}) {
   startAnalysisProgress();
   el.analyze.disabled = true;
   try {
-    const payload = await fetchProfilePayload(el.username.value.trim());
+    const payload = await fetchProfilePayload(el.username.value.trim(), {
+      forceRefresh: Boolean(options.forceRefresh),
+    });
     state.payload = payload;
     state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
     state.games = payload.games || [];
@@ -925,6 +957,39 @@ async function runAnalysis() {
   } finally {
     stopAnalysisProgress();
     el.analyze.disabled = false;
+  }
+}
+
+async function checkAutoImportOnStartup() {
+  if (!el.autoImportStartup || el.autoImportStartup.checked === false || state.autoImportRunning) return;
+  const username = String(el.username?.value || "").trim();
+  if (!username) return;
+  state.autoImportRunning = true;
+  try {
+    setProgress(Math.max(3, Number(el.progressLabel?.textContent?.replace("%", "") || 0)), "Checking Chess.com for new games...");
+    const response = await fetch("/api/auto-import-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentSetupSettingsPayload()),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not check for new games.");
+    if (!payload.needs_import) {
+      setProgress(100, payload.message || "Local repertoire cache is current.");
+      return;
+    }
+    const countText = Number(payload.new_game_count || 0) > 0
+      ? `${payload.new_game_count} new game${payload.new_game_count === 1 ? "" : "s"} found`
+      : "A fresh import is needed";
+    setProgress(8, `${countText}; refreshing your local repertoire now...`);
+    await runAnalysis({ forceRefresh: true });
+  } catch (error) {
+    setProgress(
+      state.payload ? 100 : 0,
+      error.message || "Startup auto-import check failed. You can still build manually."
+    );
+  } finally {
+    state.autoImportRunning = false;
   }
 }
 
@@ -971,7 +1036,7 @@ async function importPgnGames() {
   }
 }
 
-async function fetchProfilePayload(username) {
+async function fetchProfilePayload(username, options = {}) {
   const response = await fetch("/api/profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -979,6 +1044,8 @@ async function fetchProfilePayload(username) {
       username,
       time_classes: el.timeClasses.value.trim(),
       max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
+      auto_import_on_startup: el.autoImportStartup?.checked !== false,
+      force_refresh: Boolean(options.forceRefresh),
       lichess_token: currentLichessToken(),
       engine_path: el.enginePath.value.trim(),
       depth: Number(el.depth.value),
@@ -1073,7 +1140,9 @@ function renderProfile(payload) {
   renderFirstMoves(profile.first_move_repertoire || {});
   renderRepertoireMap(profile.repertoire_map || {});
   renderHealthDashboard(profile.health_dashboard || null);
+  renderStatsSummary(profile, payload);
   renderRatingProgress(profile.rating_progress || null);
+  renderBrilliantTracker(profile.brilliant_tracker || null);
   renderMemoryScores(profile.memory_scores || null);
   renderOpeningDrift(profile.opening_drift || null);
   renderPrepPack(profile.prep_pack || null);
@@ -1218,6 +1287,136 @@ function renderHealthDashboard(dashboard) {
       </article>
     </div>
   `;
+}
+
+function renderStatsSummary(profile, payload) {
+  if (!el.statsSummary) return;
+  const summary = profile?.summary || {};
+  const progress = profile?.rating_progress || {};
+  const record = summary.record || "0W 0D 0L";
+  const games = Number(payload?.games_imported ?? progress.total_games ?? 0);
+  const winRate = typeof summary.win_rate === "number" ? `${summary.win_rate}%` : "--";
+  const scoreRate = typeof summary.score_rate === "number" ? `${summary.score_rate}%` : "--";
+  const currentRange = progress?.ranges?.[state.ratingProgressRange] || progress?.ranges?.["90"] || progress?.ranges?.["30"] || null;
+  const ratingNow = currentRange?.rating_end ?? progress.rating_end ?? "--";
+  const ratingDelta = currentRange?.delta ?? 0;
+  const split = (progress.time_class_breakdown || []).slice(0, 4);
+  if (!games && !progress.available) {
+    el.statsSummary.className = "stats-summary-panel empty";
+    el.statsSummary.textContent = "Import rated Chess.com games to unlock W/D/L, rating form, time-control splits, and brilliant tracking.";
+    return;
+  }
+  el.statsSummary.className = "stats-summary-panel";
+  el.statsSummary.innerHTML = `
+    <div class="stats-card-grid">
+      <article class="stats-card rating">
+        <span>Current rating</span>
+        <strong>${escapeHtml(ratingNow)}</strong>
+        <p>${Number(ratingDelta) >= 0 ? "+" : ""}${escapeHtml(ratingDelta)} over selected range</p>
+      </article>
+      <article class="stats-card">
+        <span>Record</span>
+        <strong>${escapeHtml(record)}</strong>
+        <p>${escapeHtml(winRate)} wins · ${escapeHtml(scoreRate)} score</p>
+      </article>
+      <article class="stats-card">
+        <span>Games indexed</span>
+        <strong>${escapeHtml(games)}</strong>
+        <p>${Number(summary.positions_indexed || 0)} positions · ${Number(summary.trainable_positions || 0)} trainable</p>
+      </article>
+      <article class="stats-card">
+        <span>Line state</span>
+        <strong>${Number(summary.known_lines || 0)}</strong>
+        <p>${Number(summary.urgent_lines || 0)} due · ${Number(summary.positions || 0)} analyzed lessons</p>
+      </article>
+    </div>
+    <div class="stats-time-split">
+      ${split.length ? split.map((item) => `
+        <div class="stats-split-row">
+          <strong>${escapeHtml(item.label || item.key || "time control")}</strong>
+          <span>${Number(item.games || 0)} games · ${Number(item.win_rate || 0)}% wins</span>
+          <b>${escapeHtml(item.rating_current ?? "--")}</b>
+        </div>
+      `).join("") : "<p>No rated time-control split available yet.</p>"}
+    </div>
+  `;
+}
+
+function renderBrilliantTracker(tracker) {
+  if (!el.brilliantTracker) return;
+  const high = tracker?.high_confidence || tracker?.recent_brilliants || [];
+  const games = tracker?.games || [];
+  const watch = tracker?.watchlist || [];
+  const bestGame = tracker?.best_game || games[0] || null;
+  const summary = tracker?.summary || {};
+  if (!high.length && !watch.length && !games.length) {
+    el.brilliantTracker.className = "brilliant-tracker-panel empty";
+    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported games with cached Stockfish lines first, then spends a small live-analysis budget so imports stay fast.";
+    return;
+  }
+  el.brilliantTracker.className = "brilliant-tracker-panel";
+  el.brilliantTracker.innerHTML = `
+    <div class="brilliant-summary-grid">
+      <article><span>Total brilliants</span><strong>${Number(summary.total_brilliants || high.length)}</strong><p>Confirmed Brilliant moves found in your imported games.</p></article>
+      <article><span>Games with brilliants</span><strong>${Number(summary.games_with_brilliants || games.length)}</strong><p>Imported games where at least one Brilliant appeared.</p></article>
+      <article><span>Best game</span><strong>${bestGame ? `${Number(bestGame.brilliants || 0)}×` : "0×"}</strong><p>${escapeHtml(bestGame ? `${bestGame.opponent || "Opponent"} · ${bestGame.date_label || ""}` : "No Brilliant game found yet.")}</p></article>
+      <article><span>Scan coverage</span><strong>${Number(summary.moves_scanned || 0)}</strong><p>${Number(summary.games_scanned || 0)} games · ${Number(summary.cached_hits || 0)} cache hits · ${Number(summary.live_hits || 0)} live.</p></article>
+    </div>
+    <div class="brilliant-tracker-grid">
+      <section>
+        <h3>Recent Brilliant Moves</h3>
+        ${renderBrilliantTrackerList(high, "No confirmed Brilliant moves from your games yet.")}
+      </section>
+      <section>
+        <h3>Games With Brilliants</h3>
+        ${renderBrilliantGameList(games, "No game-level Brilliant hits yet.")}
+      </section>
+    </div>
+    ${watch.length ? `
+      <section class="brilliant-watchlist">
+        <h3>Repertoire Watchlist</h3>
+        ${renderBrilliantTrackerList(watch, "No Great/Best tactical candidates cached yet.")}
+      </section>
+    ` : ""}
+  `;
+}
+
+function renderBrilliantTrackerList(items, emptyText) {
+  if (!Array.isArray(items) || !items.length) return `<p class="line-note">${escapeHtml(emptyText)}</p>`;
+  return items.slice(0, 10).map((item) => `
+    <article class="brilliant-card ${escapeHtml(classificationKey(item.classification))}">
+      <div class="brilliant-card-head">
+        <div>
+          <strong>${escapeHtml(item.move || item.san || "")}</strong>
+          <span>${escapeHtml(item.role || item.time_class || "game move")} · ${escapeHtml(item.opponent ? `vs ${item.opponent}` : item.line_label || "Repertoire position")}</span>
+        </div>
+        ${classificationBadge(item.classification, "compact")}
+      </div>
+      <p>${escapeHtml(item.reason || item.classification?.reason || "Cached engine candidate from your repertoire.")}</p>
+      ${item.pgn_path ? `<p class="brilliant-path">${escapeHtml(item.pgn_path)}</p>` : ""}
+      <div class="chip-row">
+        ${item.lesson_id ? `<button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>` : ""}
+        ${item.game_url ? `<a class="launch-btn" href="${escapeHtml(item.game_url)}" target="_blank" rel="noopener noreferrer">Open game</a>` : ""}
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderBrilliantGameList(items, emptyText) {
+  if (!Array.isArray(items) || !items.length) return `<p class="line-note">${escapeHtml(emptyText)}</p>`;
+  return items.slice(0, 10).map((game) => `
+    <article class="brilliant-card brilliant-game-card">
+      <div class="brilliant-card-head">
+        <div>
+          <strong>${Number(game.brilliants || 0)} Brilliant${Number(game.brilliants || 0) === 1 ? "" : "s"}</strong>
+          <span>${escapeHtml(game.date_label || "Imported game")} · ${escapeHtml(game.time_class || "unknown")} · ${escapeHtml(game.result || "")}</span>
+        </div>
+        ${game.game_url ? `<a class="launch-btn" href="${escapeHtml(game.game_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}
+      </div>
+      <p>Against ${escapeHtml(game.opponent || "opponent")} as ${escapeHtml(game.player_color || "your color")}.</p>
+      ${game.pgn_path ? `<p class="brilliant-path">${escapeHtml(game.pgn_path)}</p>` : ""}
+    </article>
+  `).join("");
 }
 
 function renderRatingProgress(progress) {

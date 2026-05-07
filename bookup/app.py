@@ -203,6 +203,7 @@ def build_defaults_payload(config: dict) -> dict:
         "username": migrated.get("username", "trixize1234"),
         "time_classes": migrated.get("time_classes", "all"),
         "max_games": int(migrated.get("max_games", 0)),
+        "auto_import_on_startup": bool(migrated.get("auto_import_on_startup", True)),
         "lichess_token": local_lichess_token(migrated),
         "engine_path": settings.path,
         "depth": settings.depth,
@@ -254,6 +255,20 @@ def game_request_key(
         },
         sort_keys=True,
     )
+
+
+def game_identity_from_serialized(entry: dict) -> str:
+    url = str(entry.get("url", "") or "").strip()
+    if url:
+        return f"url:{url}"
+    pgn = str(entry.get("pgn", "") or "").strip()
+    return f"pgn:{hashlib.sha256(pgn.encode('utf-8')).hexdigest()}" if pgn else ""
+
+
+def game_identity_from_imported(game: ImportedGame) -> str:
+    if game.url:
+        return f"url:{game.url}"
+    return f"pgn:{hashlib.sha256(game.pgn.encode('utf-8')).hexdigest()}"
 
 
 def profile_response_payload(
@@ -481,6 +496,8 @@ def save_settings() -> tuple:
             config["think_time_sec"] = float(payload.get("think_time_sec", config.get("think_time_sec", 5.0)))
         except (TypeError, ValueError):
             pass
+    if "auto_import_on_startup" in payload:
+        config["auto_import_on_startup"] = bool(payload.get("auto_import_on_startup"))
 
     settings = request_engine_settings(payload, config)
     config = apply_engine_settings_to_config(config, settings)
@@ -493,6 +510,95 @@ def save_settings() -> tuple:
         {
             "ok": True,
             "defaults": build_defaults_payload(config),
+        }
+    )
+
+
+@app.post("/api/auto-import-status")
+def auto_import_status() -> tuple:
+    payload = request.get_json(force=True)
+    config = migrate_engine_defaults(load_config())
+    username = str(payload.get("username") or config.get("username") or "").strip()
+    if not username:
+        return jsonify({"needs_import": False, "message": "No Chess.com username is saved yet."})
+
+    raw_time_classes = str(payload.get("time_classes", config.get("time_classes", "all"))).strip()
+    time_classes = [item.strip() for item in raw_time_classes.split(",") if item.strip()]
+    normalized_time_classes = normalize_time_classes(time_classes)
+    raw_max_games = payload.get("max_games", config.get("max_games", 0))
+    try:
+        parsed_max_games = int(raw_max_games or 0)
+    except (TypeError, ValueError):
+        parsed_max_games = 0
+    max_games = None if parsed_max_games <= 0 else max(1, min(20000, parsed_max_games))
+
+    snapshot = STORE.load_snapshot(username)
+    cached_games = snapshot.get("games") or []
+    cached_profile = snapshot.get("profile")
+    cached_schema = int(snapshot.get("schema_version", 0) or 0)
+    if cached_schema < PROFILE_SCHEMA_VERSION or not isinstance(cached_profile, dict) or not cached_games:
+        return jsonify(
+            {
+                "needs_import": True,
+                "reason": "no_current_workspace",
+                "new_games": 0,
+                "message": "No current local repertoire was found, so Bookup can build one automatically.",
+            }
+        )
+
+    try:
+        archives = fetch_archives(username)
+    except Exception as exc:
+        return jsonify(
+            {
+                "needs_import": False,
+                "reason": "archive_check_failed",
+                "message": f"Auto-import check skipped: {exc}",
+            }
+        )
+
+    cached_archive_urls = {str(item) for item in snapshot.get("archive_urls", []) if str(item)}
+    archives_changed = len(archives) != int(snapshot.get("archives_found", 0) or 0)
+    if archives and cached_archive_urls and archives[-1] not in cached_archive_urls:
+        archives_changed = True
+
+    latest_games: list[ImportedGame] = []
+    if archives:
+        try:
+            latest_games = fetch_games(username, normalized_time_classes, None, archives=[archives[-1]])
+        except Exception:
+            latest_games = []
+
+    cached_ids = {game_identity_from_serialized(entry) for entry in cached_games if isinstance(entry, dict)}
+    cached_ids.discard("")
+    latest_ids = {game_identity_from_imported(game) for game in latest_games}
+    new_ids = latest_ids - cached_ids
+
+    needs_import = archives_changed or bool(new_ids)
+    if not needs_import:
+        return jsonify(
+            {
+                "needs_import": False,
+                "reason": "up_to_date",
+                "archives_found": len(archives),
+                "checked_games": len(latest_games),
+                "new_games": 0,
+                "message": f"Bookup checked Chess.com. No new {raw_time_classes or 'public'} games were found.",
+            }
+        )
+
+    return jsonify(
+        {
+            "needs_import": True,
+            "reason": "new_games_found" if new_ids else "new_archive_found",
+            "archives_found": len(archives),
+            "checked_games": len(latest_games),
+            "new_games": len(new_ids),
+            "message": (
+                f"Bookup found {len(new_ids)} new game{'' if len(new_ids) == 1 else 's'} in the latest Chess.com archive."
+                if new_ids
+                else "Bookup found a new Chess.com archive."
+            ),
         }
     )
 
@@ -526,6 +632,7 @@ def profile() -> tuple:
         return jsonify({"error": "Stockfish path is required."}), 400
 
     settings = build_engine_settings(payload)
+    force_refresh = bool(payload.get("force_refresh"))
     configure_lichess(lichess_token)
     request_key = profile_request_key(
         username,
@@ -544,6 +651,7 @@ def profile() -> tuple:
                 "max_games": 0 if max_games is None else max_games,
                 "lichess_token": lichess_token,
                 "engine_path": engine_path,
+                "auto_import_on_startup": bool(payload.get("auto_import_on_startup", config.get("auto_import_on_startup", True))),
             },
             settings,
         )
@@ -565,6 +673,8 @@ def profile() -> tuple:
     keyed_games = keyed_games_cache.get("games") or []
     keyed_archives_found = int(keyed_profile_cache.get("archives_found", 0) or keyed_games_cache.get("archives_found", 0) or 0)
     if (
+        not force_refresh
+        and
         keyed_profile_schema >= PROFILE_SCHEMA_VERSION
         and isinstance(keyed_profile_data, dict)
         and keyed_profile_games
@@ -583,6 +693,8 @@ def profile() -> tuple:
             )
         )
     if (
+        not force_refresh
+        and
         cached_schema >= PROFILE_SCHEMA_VERSION
         and cached_request_key == request_key
         and isinstance(cached_profile, dict)
@@ -603,15 +715,21 @@ def profile() -> tuple:
         )
 
     archives_found = int(snapshot.get("archives_found", 0) or 0)
+    archive_urls = list(snapshot.get("archive_urls", []) or [])
     reused_games = False
     if (
+        not force_refresh
+        and
         keyed_games_schema >= PROFILE_SCHEMA_VERSION
         and keyed_games
     ):
         games = deserialize_games(list(keyed_games))
         archives_found = keyed_archives_found
+        archive_urls = list(keyed_games_cache.get("archive_urls", []) or archive_urls)
         reused_games = bool(games)
     elif (
+        not force_refresh
+        and
         cached_schema >= PROFILE_SCHEMA_VERSION
         and cached_games_request_key == games_cache_key
         and cached_games
@@ -623,6 +741,7 @@ def profile() -> tuple:
             archives = fetch_archives(username)
             games = fetch_games(username, normalized_time_classes, max_games, archives=archives)
             archives_found = len(archives)
+            archive_urls = archives
         except Exception as exc:
             return jsonify({"error": f"Could not import Chess.com games: {exc}"}), 502
 
@@ -645,6 +764,7 @@ def profile() -> tuple:
         {
             "schema_version": PROFILE_SCHEMA_VERSION,
             "archives_found": archives_found,
+            "archive_urls": archive_urls,
             "games_imported": len(games),
             "games": serialized_games,
         },
@@ -656,6 +776,7 @@ def profile() -> tuple:
             "schema_version": PROFILE_SCHEMA_VERSION,
             "games_request_key": games_cache_key,
             "archives_found": archives_found,
+            "archive_urls": archive_urls,
             "games_imported": len(games),
             "games": serialized_games,
             "profile": profile_data,
@@ -668,6 +789,7 @@ def profile() -> tuple:
             "request_key": request_key,
             "games_request_key": games_cache_key,
             "archives_found": archives_found,
+            "archive_urls": archive_urls,
             "games_imported": len(games),
             "games": serialized_games,
             "profile": profile_data,
