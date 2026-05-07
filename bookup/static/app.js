@@ -180,6 +180,9 @@ const state = {
   ratingProgressRange: "90",
   ratingProgressTimeClass: "",
   ratingProgressPointIndex: null,
+  brilliantProgressRange: "90",
+  brilliantProgressTimeClass: "",
+  brilliantProgressPointIndex: null,
   boardOrientation: "white",
   trainingCursor: 0,
   lessonMistakes: 0,
@@ -1349,6 +1352,7 @@ function renderBrilliantTracker(tracker) {
   const watch = tracker?.watchlist || [];
   const bestGame = tracker?.best_game || games[0] || null;
   const summary = tracker?.summary || {};
+  const progress = tracker?.progress || null;
   if (!high.length && !watch.length && !games.length) {
     el.brilliantTracker.className = "brilliant-tracker-panel empty";
     el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported games with cached Stockfish lines first, then spends a small live-analysis budget so imports stay fast.";
@@ -1360,8 +1364,9 @@ function renderBrilliantTracker(tracker) {
       <article><span>Total brilliants</span><strong>${Number(summary.total_brilliants || high.length)}</strong><p>Confirmed Brilliant moves found in your imported games.</p></article>
       <article><span>Games with brilliants</span><strong>${Number(summary.games_with_brilliants || games.length)}</strong><p>Imported games where at least one Brilliant appeared.</p></article>
       <article><span>Best game</span><strong>${bestGame ? `${Number(bestGame.brilliants || 0)}×` : "0×"}</strong><p>${escapeHtml(bestGame ? `${bestGame.opponent || "Opponent"} · ${bestGame.date_label || ""}` : "No Brilliant game found yet.")}</p></article>
-      <article><span>Scan coverage</span><strong>${Number(summary.moves_scanned || 0)}</strong><p>${Number(summary.games_scanned || 0)} games · ${Number(summary.cached_hits || 0)} cache hits · ${Number(summary.live_hits || 0)} live.</p></article>
+      <article><span>Scan coverage</span><strong>${Number(summary.games_scanned || 0)}</strong><p>All imported games · ${Number(summary.moves_scanned || 0)} moves · ${Number(summary.cached_hits || 0)} cache hits.</p></article>
     </div>
+    ${renderBrilliantProgress(progress)}
     <div class="brilliant-tracker-grid">
       <section>
         <h3>Recent Brilliant Moves</h3>
@@ -1379,6 +1384,259 @@ function renderBrilliantTracker(tracker) {
       </section>
     ` : ""}
   `;
+  bindBrilliantProgressEvents();
+}
+
+function renderBrilliantProgress(progress) {
+  if (!progress?.available || !progress.ranges || !Object.keys(progress.ranges).length) {
+    return `
+      <section class="brilliant-progress-panel empty">
+        ${escapeHtml(progress?.message || "Import dated games to chart Brilliant moves over time.")}
+      </section>
+    `;
+  }
+  const splitPayloads = progress.time_class_progress || {};
+  const splitKeys = [];
+  (progress.time_class_breakdown || []).forEach((item) => {
+    const key = String(item.key || item.label || "").trim();
+    if (key && splitPayloads[key] && !splitKeys.includes(key)) splitKeys.push(key);
+  });
+  Object.keys(splitPayloads).forEach((key) => {
+    if (!splitKeys.includes(key)) splitKeys.push(key);
+  });
+  const defaultTimeKey = progress.default_time_class && splitKeys.includes(progress.default_time_class)
+    ? progress.default_time_class
+    : (splitKeys[0] || "");
+  if (splitKeys.length && (!state.brilliantProgressTimeClass || !splitKeys.includes(state.brilliantProgressTimeClass))) {
+    state.brilliantProgressTimeClass = defaultTimeKey;
+  }
+  if (!splitKeys.length) state.brilliantProgressTimeClass = "";
+  const activeTimeKey = splitKeys.length && splitKeys.includes(state.brilliantProgressTimeClass)
+    ? state.brilliantProgressTimeClass
+    : "";
+  const activeProgress = activeTimeKey ? (splitPayloads[activeTimeKey] || progress) : progress;
+  const timeClassLabel = activeTimeKey
+    ? activeProgress.time_class_label || activeTimeKey.replace(/_/g, " ")
+    : "All imported games";
+  const ranges = activeProgress.ranges || {};
+  const rangeOrder = ["7", "30", "90", "365", "all"].filter((key) => ranges[key]);
+  if (!rangeOrder.includes(state.brilliantProgressRange)) {
+    state.brilliantProgressRange = activeProgress.default_range || progress.default_range || rangeOrder[0] || "90";
+  }
+  const activeKey = ranges[state.brilliantProgressRange] ? state.brilliantProgressRange : rangeOrder[0];
+  const range = ranges[activeKey] || {};
+  const points = Array.isArray(range.points) ? range.points : [];
+  const graphPoints = points
+    .map((point, index) => ({
+      ...point,
+      index,
+      graphValue: Number(point.graph_value ?? point.brilliants ?? 0),
+      result_tone: Number(point.brilliants || 0) > 1 ? "win" : (Number(point.brilliants || 0) === 1 ? "draw" : "idle"),
+    }))
+    .filter((point) => Number.isFinite(point.graphValue));
+  const selectedIndex = pickBrilliantProgressIndex(graphPoints);
+  const selected = graphPoints[selectedIndex] || graphPoints[graphPoints.length - 1] || points[points.length - 1] || null;
+  const chart = buildRatingProgressChart(graphPoints, selected?.index, {
+    dense: graphPoints.length > 130,
+    baselineValue: 0,
+    valueLabel: "Brilliants",
+  });
+  return `
+    <section class="brilliant-progress-panel">
+      <div class="rating-progress-head brilliant-progress-head">
+        <div>
+          <div class="line-badge">Brilliant tracker</div>
+          <h3>${escapeHtml(range.label || "Brilliant timeline")} · ${escapeHtml(timeClassLabel)}</h3>
+          <p>${Number(range.total_brilliants || 0)} Brilliant${Number(range.total_brilliants || 0) === 1 ? "" : "s"} across ${Number(range.games || 0)} game${Number(range.games || 0) === 1 ? "" : "s"} from ${escapeHtml(range.start_date || "")} to ${escapeHtml(range.end_date || "")}</p>
+        </div>
+        <div class="progress-filter-stack">
+          <div class="progress-range-tabs" role="tablist" aria-label="Brilliant range">
+            ${rangeOrder.map((key) => `
+              <button class="progress-range-btn ${key === activeKey ? "active" : ""}" type="button" data-brilliant-range="${escapeHtml(key)}">
+                ${escapeHtml(ranges[key]?.label || key)}
+              </button>
+            `).join("")}
+          </div>
+          ${splitKeys.length ? `<div class="progress-range-tabs compact" role="tablist" aria-label="Brilliant time-control split">
+            ${splitKeys.map((key) => {
+              const payload = splitPayloads[key] || {};
+              const label = payload.time_class_label || key.replace(/_/g, " ");
+              const total = payload.total_brilliants || 0;
+              return `
+                <button class="progress-range-btn ${key === activeTimeKey ? "active" : ""}" type="button" data-brilliant-time-class="${escapeHtml(key)}">
+                  ${escapeHtml(label)} <span>${Number(total || 0)}</span>
+                </button>
+              `;
+            }).join("")}
+          </div>` : ""}
+        </div>
+      </div>
+      <div class="progress-metric-grid brilliant-metric-grid">
+        <article><span>Brilliants</span><strong>${Number(range.total_brilliants || 0)}</strong><small>${Number(range.games_with_brilliants || 0)} games with at least one</small></article>
+        <article><span>Best day</span><strong>${Number(range.best_day?.brilliants || 0)}</strong><small>${escapeHtml(range.best_day?.label || "No Brilliant day yet")}</small></article>
+        <article><span>Games scanned</span><strong>${Number(range.games || 0)}</strong><small>${Number(range.brilliants_per_game || 0).toFixed(3)} Brilliants per game</small></article>
+        <article><span>Busiest day</span><strong>${Number(range.busiest_day?.games || 0)}</strong><small>${escapeHtml(range.busiest_day?.label || "No games in range")}</small></article>
+      </div>
+      <div class="rating-chart-wrap">
+        <div class="rating-chart brilliant-chart ${chart.dense ? "dense" : ""}">
+          ${chart.svg}
+          <div class="rating-point-layer">
+            ${chart.points.map((point) => `
+              <button
+                class="rating-point brilliant-point ${Number(point.graphValue || 0) > 0 ? "hot" : "idle"} ${point.sourceIndex === selected?.index ? "active" : ""}"
+                type="button"
+                style="left:${point.x}%; top:${point.y}%"
+                title="${escapeHtml(point.title)}"
+                data-brilliant-index="${point.sourceIndex}"
+                aria-label="${escapeHtml(point.title)}"
+              ></button>
+            `).join("")}
+          </div>
+          <div class="rating-result-ribbon" aria-hidden="true">
+            ${chart.resultTicks.map((tick) => `
+              <span
+                class="rating-result-tick ${Number(tick.graphValue || 0) > 0 ? "win" : "idle"}"
+                style="left:${tick.x}%"
+                title="${escapeHtml(tick.title)}"
+              ></span>
+            `).join("")}
+          </div>
+          <div class="rating-chart-legend brilliant-legend">
+            <span><i class="brilliant-hot"></i>Brilliant day</span>
+            <span><i class="brilliant-quiet"></i>No Brilliant</span>
+          </div>
+          <div class="rating-axis top">${chart.maxLabel}</div>
+          <div class="rating-axis bottom">${chart.minLabel}</div>
+          <div class="rating-axis baseline">Brilliants / day</div>
+        </div>
+        <div class="progress-highlight brilliant-highlight" data-brilliant-highlight>
+          ${renderBrilliantProgressHighlight(selected, range)}
+        </div>
+      </div>
+      <div class="progress-insights brilliant-insights">
+        ${renderBrilliantProgressInsight("Best Brilliant day", range.best_day)}
+        ${renderBrilliantProgressInsight("Busiest imported day", range.busiest_day)}
+        ${renderBrilliantBreakdown(activeProgress.time_class_breakdown || progress.time_class_breakdown || [])}
+      </div>
+    </section>
+  `;
+}
+
+function pickBrilliantProgressIndex(graphPoints) {
+  if (!graphPoints.length) return -1;
+  const requested = Number(state.brilliantProgressPointIndex);
+  if (Number.isInteger(requested)) {
+    const found = graphPoints.findIndex((point) => Number(point.index) === requested);
+    if (found >= 0) return found;
+  }
+  for (let index = graphPoints.length - 1; index >= 0; index -= 1) {
+    if (Number(graphPoints[index].brilliants || 0) > 0) return index;
+  }
+  return graphPoints.length - 1;
+}
+
+function renderBrilliantProgressHighlight(point, range) {
+  if (!point) {
+    return "<strong>No day selected</strong><span>Hover a chart marker to inspect Brilliant games for that day.</span>";
+  }
+  const gameLinks = renderBrilliantProgressGameLinks(point.game_links || []);
+  return `
+    <div>
+      <span class="line-badge">${escapeHtml(point.label || point.date || "Selected day")}</span>
+      <strong>${Number(point.brilliants || 0)} Brilliant${Number(point.brilliants || 0) === 1 ? "" : "s"}</strong>
+      <p>${Number(point.games || 0)} games · ${Number(point.games_with_brilliants || 0)} games with Brilliants · ${escapeHtml(point.record || "")}</p>
+    </div>
+    <div class="progress-highlight-grid">
+      <span><b>${Number(point.brilliants || 0)}</b> Brilliant moves</span>
+      <span><b>${Number(point.games || 0)}</b> games</span>
+      <span><b>${Number(point.wins || 0)}</b> wins</span>
+      <span><b>${Number(point.losses || 0)}</b> losses</span>
+    </div>
+    ${gameLinks || "<small>No Brilliant games on this day yet.</small>"}
+  `;
+}
+
+function renderBrilliantProgressGameLinks(items) {
+  if (!Array.isArray(items) || !items.length) return "";
+  return `
+    <div class="progress-game-list brilliant-progress-games">
+      ${items.slice(0, 8).map((item) => {
+        const content = `
+          <span class="progress-game-dot brilliant"></span>
+          <b>${escapeHtml(item.opponent || "Unknown opponent")}</b>
+          <small>${Number(item.brilliants || 0)} Brilliant${Number(item.brilliants || 0) === 1 ? "" : "s"} · ${escapeHtml(item.time_class || "unknown")} · ${escapeHtml(item.color || "")} · ${escapeHtml(item.result || "")}</small>
+        `;
+        return item.url
+          ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${content}</a>`
+          : `<span>${content}</span>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderBrilliantProgressInsight(label, item) {
+  if (!item) {
+    return `
+      <article class="progress-insight">
+        <span>${escapeHtml(label)}</span>
+        <strong>Waiting for data</strong>
+        <small>No Brilliant activity in this range yet.</small>
+      </article>
+    `;
+  }
+  return `
+    <article class="progress-insight">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(item.label || item.date || "")}</strong>
+      <small>${Number(item.brilliants || 0)} Brilliant${Number(item.brilliants || 0) === 1 ? "" : "s"} · ${Number(item.games || 0)} games · ${escapeHtml(item.record || "")}</small>
+    </article>
+  `;
+}
+
+function renderBrilliantBreakdown(items) {
+  if (!Array.isArray(items) || !items.length) {
+    return `
+      <article class="progress-insight">
+        <span>Time-control split</span>
+        <strong>No split yet</strong>
+        <small>Rated game imports will populate this.</small>
+      </article>
+    `;
+  }
+  return `
+    <article class="progress-insight breakdown">
+      <span>Time-control split</span>
+      <strong>${items.reduce((sum, item) => sum + Number(item.brilliants || 0), 0)} total</strong>
+      <small>${items.slice(0, 4).map((item) => `${escapeHtml(item.label || item.key || "games")}: ${Number(item.brilliants || 0)} / ${Number(item.games || 0)} games`).join(" · ")}</small>
+    </article>
+  `;
+}
+
+function bindBrilliantProgressEvents() {
+  if (!el.brilliantTracker) return;
+  el.brilliantTracker.querySelectorAll("[data-brilliant-range]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.brilliantProgressRange = button.dataset.brilliantRange || "90";
+      state.brilliantProgressPointIndex = null;
+      renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
+    });
+  });
+  el.brilliantTracker.querySelectorAll("[data-brilliant-time-class]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.brilliantProgressTimeClass = button.dataset.brilliantTimeClass || "";
+      state.brilliantProgressPointIndex = null;
+      renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
+    });
+  });
+  el.brilliantTracker.querySelectorAll("[data-brilliant-index]").forEach((button) => {
+    const update = () => {
+      state.brilliantProgressPointIndex = Number(button.dataset.brilliantIndex);
+      renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
+    };
+    button.addEventListener("click", update);
+    button.addEventListener("focus", update);
+    button.addEventListener("mouseenter", update);
+  });
 }
 
 function renderBrilliantTrackerList(items, emptyText) {
@@ -1404,14 +1662,14 @@ function renderBrilliantTrackerList(items, emptyText) {
 
 function renderBrilliantGameList(items, emptyText) {
   if (!Array.isArray(items) || !items.length) return `<p class="line-note">${escapeHtml(emptyText)}</p>`;
-  return items.slice(0, 10).map((game) => `
+  return items.slice(0, 24).map((game) => `
     <article class="brilliant-card brilliant-game-card">
       <div class="brilliant-card-head">
         <div>
           <strong>${Number(game.brilliants || 0)} Brilliant${Number(game.brilliants || 0) === 1 ? "" : "s"}</strong>
           <span>${escapeHtml(game.date_label || "Imported game")} · ${escapeHtml(game.time_class || "unknown")} · ${escapeHtml(game.result || "")}</span>
         </div>
-        ${game.game_url ? `<a class="launch-btn" href="${escapeHtml(game.game_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}
+        ${game.game_url ? `<a class="launch-btn" href="${escapeHtml(game.game_url)}" target="_blank" rel="noopener noreferrer">Open game</a>` : ""}
       </div>
       <p>Against ${escapeHtml(game.opponent || "opponent")} as ${escapeHtml(game.player_color || "your color")}.</p>
       ${game.pgn_path ? `<p class="brilliant-path">${escapeHtml(game.pgn_path)}</p>` : ""}
@@ -1615,7 +1873,10 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}
     y: Number(toY(point.graphValue).toFixed(3)),
     sourceIndex: point.index,
     tone: point.result_tone || "idle",
-    title: `${point.label}: ${point.rating_graph ?? point.rating ?? "--"} rating, ${point.summary || ""}`,
+    graphValue: point.graphValue,
+    title: options.valueLabel
+      ? `${point.label}: ${point.graphValue} ${options.valueLabel}, ${point.summary || ""}`
+      : `${point.label}: ${point.rating_graph ?? point.rating ?? "--"} rating, ${point.summary || ""}`,
   }));
   const lineStep = Math.max(1, Math.ceil(coords.length / 320));
   const pathCoords = coords.filter((_point, index) => index % lineStep === 0 || index === coords.length - 1);

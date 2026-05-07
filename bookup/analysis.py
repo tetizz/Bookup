@@ -49,7 +49,7 @@ MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
 ENGINE_CACHE_SCHEMA_VERSION = 3
-BRILLIANT_TRACKER_GAME_LIMIT = 120
+BRILLIANT_TRACKER_GAME_LIMIT = 0
 BRILLIANT_TRACKER_MAX_PLIES = 48
 BRILLIANT_TRACKER_LIVE_BUDGET = 80
 BRILLIANT_TRACKER_TIME_SEC = 0.22
@@ -3055,11 +3055,199 @@ def _game_url_label(imported: ImportedGame, index: int) -> str:
     return f"game-{index}"
 
 
+def _empty_brilliant_progress(message: str = "Import games to chart Brilliant moves over time.") -> dict[str, Any]:
+    return {
+        "available": False,
+        "message": message,
+        "default_range": "90",
+        "default_time_class": "",
+        "ranges": {},
+        "time_class_progress": {},
+        "time_class_breakdown": [],
+    }
+
+
+def _brilliant_range_label(key: str) -> str:
+    return {
+        "7": "7 days",
+        "30": "30 days",
+        "90": "90 days",
+        "365": "1 year",
+        "all": "All imported",
+    }.get(key, key)
+
+
+def _build_brilliant_progress(game_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    dated_rows = [row for row in game_rows if isinstance(row.get("date_obj"), date)]
+    if not dated_rows:
+        return _empty_brilliant_progress("No dated games are available for the Brilliant timeline yet.")
+
+    time_counter: Counter[str] = Counter()
+    brilliant_counter: Counter[str] = Counter()
+    for row in dated_rows:
+        key = str(row.get("time_class") or "unknown")
+        time_counter[key] += 1
+        brilliant_counter[key] += int(row.get("brilliants", 0) or 0)
+
+    def build_payload(rows: list[dict[str, Any]], label: str, time_key: str = "") -> dict[str, Any]:
+        if not rows:
+            return {
+                "available": False,
+                "time_class_label": label,
+                "ranges": {},
+                "default_range": "90",
+                "total_games": 0,
+                "total_brilliants": 0,
+                "games_with_brilliants": 0,
+            }
+        rows = sorted(rows, key=lambda item: (item["date_obj"], int(item.get("source_index", 0) or 0)))
+        daily: dict[date, dict[str, Any]] = {}
+        for row in rows:
+            day = row["date_obj"]
+            bucket = daily.setdefault(
+                day,
+                {
+                    "date": day,
+                    "games": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "brilliants": 0,
+                    "games_with_brilliants": 0,
+                    "opponents": [],
+                    "game_links": [],
+                },
+            )
+            result = str(row.get("result") or "")
+            bucket["games"] += 1
+            bucket["wins"] += 1 if result == "win" else 0
+            bucket["draws"] += 1 if result == "draw" else 0
+            bucket["losses"] += 1 if result == "loss" else 0
+            brilliant_count = int(row.get("brilliants", 0) or 0)
+            bucket["brilliants"] += brilliant_count
+            if brilliant_count > 0:
+                bucket["games_with_brilliants"] += 1
+                bucket["game_links"].append(
+                    {
+                        "url": row.get("game_url", ""),
+                        "opponent": row.get("opponent", ""),
+                        "result": result,
+                        "color": row.get("player_color", ""),
+                        "time_class": row.get("time_class", "unknown"),
+                        "brilliants": brilliant_count,
+                        "pgn_path": row.get("pgn_path", ""),
+                    }
+                )
+            opponent = row.get("opponent")
+            if opponent:
+                bucket["opponents"].append(str(opponent))
+
+        ordered_days = [daily[day] for day in sorted(daily)]
+        first_day = ordered_days[0]["date"]
+        last_day = ordered_days[-1]["date"]
+
+        def make_range(key: str, days: int | None) -> dict[str, Any]:
+            cutoff = first_day if days is None else max(first_day, last_day - timedelta(days=max(days - 1, 0)))
+            selected = [bucket for bucket in ordered_days if bucket["date"] >= cutoff]
+            points = []
+            for index, bucket in enumerate(selected):
+                brilliants = int(bucket["brilliants"])
+                games = int(bucket["games"])
+                game_links = sorted(
+                    bucket["game_links"],
+                    key=lambda item: (-int(item.get("brilliants", 0) or 0), str(item.get("opponent", ""))),
+                )
+                points.append(
+                    {
+                        "index": index,
+                        "date": bucket["date"].isoformat(),
+                        "label": _format_progress_date(bucket["date"]),
+                        "graph_value": brilliants,
+                        "brilliants": brilliants,
+                        "games": games,
+                        "games_with_brilliants": int(bucket["games_with_brilliants"]),
+                        "wins": int(bucket["wins"]),
+                        "draws": int(bucket["draws"]),
+                        "losses": int(bucket["losses"]),
+                        "record": _result_record_text(int(bucket["wins"]), int(bucket["draws"]), int(bucket["losses"])),
+                        "win_rate": round(_win_rate(int(bucket["wins"]), games), 1),
+                        "score_rate": round(_score_rate(int(bucket["wins"]), int(bucket["draws"]), games), 1),
+                        "summary": f"{brilliants} Brilliant{'s' if brilliants != 1 else ''} in {games} game{'s' if games != 1 else ''}",
+                        "opponents": sorted(set(bucket["opponents"]))[:8],
+                        "game_links": game_links,
+                        "last_game_url": game_links[-1].get("url", "") if game_links else "",
+                        "result_tone": "win" if brilliants >= 2 else ("draw" if brilliants == 1 else "idle"),
+                    }
+                )
+            total_games = sum(int(point["games"]) for point in points)
+            total_brilliants = sum(int(point["brilliants"]) for point in points)
+            total_with = sum(int(point["games_with_brilliants"]) for point in points)
+            best_day = max(points, key=lambda point: (int(point["brilliants"]), int(point["games"])), default=None)
+            busiest_day = max(points, key=lambda point: int(point["games"]), default=None)
+            return {
+                "available": bool(points),
+                "label": _brilliant_range_label(key),
+                "points": points,
+                "start_date": points[0]["date"] if points else "",
+                "end_date": points[-1]["date"] if points else "",
+                "games": total_games,
+                "total_games": total_games,
+                "total_brilliants": total_brilliants,
+                "games_with_brilliants": total_with,
+                "best_day": best_day,
+                "busiest_day": busiest_day,
+                "brilliants_per_game": round(total_brilliants / total_games, 3) if total_games else 0,
+                "max_brilliants": int(best_day.get("brilliants", 0)) if best_day else 0,
+            }
+
+        ranges = {
+            "7": make_range("7", 7),
+            "30": make_range("30", 30),
+            "90": make_range("90", 90),
+            "365": make_range("365", 365),
+            "all": make_range("all", None),
+        }
+        return {
+            "available": True,
+            "time_class_label": label,
+            "time_class": time_key,
+            "ranges": ranges,
+            "default_range": "90" if ranges.get("90", {}).get("points") else "all",
+            "total_games": len(rows),
+            "dated_games": len(rows),
+            "total_brilliants": sum(int(row.get("brilliants", 0) or 0) for row in rows),
+            "games_with_brilliants": sum(1 for row in rows if int(row.get("brilliants", 0) or 0) > 0),
+        }
+
+    time_class_progress: dict[str, Any] = {}
+    for key in sorted(time_counter, key=lambda item: (-brilliant_counter[item], -time_counter[item], item)):
+        rows = [row for row in dated_rows if str(row.get("time_class") or "unknown") == key]
+        time_class_progress[key] = build_payload(rows, key.replace("_", " ").title(), key)
+
+    default_time_class = next(iter(time_class_progress), "")
+    return {
+        **build_payload(dated_rows, "All imported games", ""),
+        "default_time_class": default_time_class,
+        "time_class_progress": time_class_progress,
+        "time_class_breakdown": [
+            {
+                "key": key,
+                "label": key,
+                "games": int(time_counter[key]),
+                "brilliants": int(brilliant_counter[key]),
+                "games_with_brilliants": int(time_class_progress.get(key, {}).get("games_with_brilliants", 0) or 0),
+            }
+            for key in sorted(time_counter, key=lambda item: (-brilliant_counter[item], -time_counter[item], item))
+        ],
+    }
+
+
 def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[str, Any]], engine: EngineSession) -> dict[str, Any]:
     repertoire_watchlist = _build_repertoire_brilliant_watchlist(lessons)
     live_budget = [BRILLIANT_TRACKER_LIVE_BUDGET]
     brilliant_moves: list[dict[str, Any]] = []
     brilliant_games: list[dict[str, Any]] = []
+    game_rows: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
     games_scanned = 0
     moves_scanned = 0
@@ -3069,13 +3257,19 @@ def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[
     def sort_date_key(imported: ImportedGame) -> tuple[date, int]:
         return (_parse_game_date(imported) or date.min, _parse_game_time_seconds(imported))
 
-    ordered_games = sorted(games, key=sort_date_key, reverse=True)[:BRILLIANT_TRACKER_GAME_LIMIT]
+    ordered_games = sorted(games, key=sort_date_key, reverse=True)
     for game_index, imported in enumerate(ordered_games, start=1):
         player_color = imported.player_color if imported.player_color in {"white", "black"} else "white"
         player_turn = chess.WHITE if player_color == "white" else chess.BLACK
         board = imported.game.board()
         path_san: list[str] = []
         game_brilliants: list[dict[str, Any]] = []
+        played_on = _parse_game_date(imported)
+        result_key = _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color)
+        opponent = imported.opponent or ("Black" if player_color == "white" else "White")
+        game_id = _game_url_label(imported, game_index)
+        date_label = _game_date_label(imported, game_index)
+        time_class = imported.time_class or "unknown"
         games_scanned += 1
         for ply_index, move in enumerate(imported.game.mainline_moves(), start=1):
             if move not in board.legal_moves:
@@ -3098,12 +3292,13 @@ def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[
                 if key == "brilliant":
                     before_path = list(path_san)
                     item = {
-                        "game_id": _game_url_label(imported, game_index),
+                        "game_id": game_id,
                         "game_url": imported.url,
-                        "date_label": _game_date_label(imported, game_index),
-                        "time_class": imported.time_class or "unknown",
-                        "result": _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color),
-                        "opponent": imported.opponent or ("Black" if player_color == "white" else "White"),
+                        "date": played_on.isoformat() if played_on else "",
+                        "date_label": date_label,
+                        "time_class": time_class,
+                        "result": result_key,
+                        "opponent": opponent,
                         "player_color": player_color,
                         "move_number": (ply_index + 1) // 2,
                         "ply": ply_index,
@@ -3121,18 +3316,35 @@ def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[
                     game_brilliants.append(item)
             board.push(move)
             path_san.append(san)
-            if ply_index >= BRILLIANT_TRACKER_MAX_PLIES and game_brilliants:
+            if ply_index >= BRILLIANT_TRACKER_MAX_PLIES:
                 break
 
+        game_rows.append(
+            {
+                "source_index": game_index,
+                "game_id": game_id,
+                "game_url": imported.url,
+                "date_obj": played_on,
+                "date": played_on.isoformat() if played_on else "",
+                "date_label": date_label,
+                "time_class": time_class,
+                "result": result_key,
+                "opponent": opponent,
+                "player_color": player_color,
+                "brilliants": len(game_brilliants),
+                "pgn_path": game_brilliants[-1].get("pgn_path", "") if game_brilliants else " ".join(path_san[:12]),
+            }
+        )
         if game_brilliants:
             brilliant_games.append(
                 {
-                    "game_id": _game_url_label(imported, game_index),
+                    "game_id": game_id,
                     "game_url": imported.url,
-                    "date_label": _game_date_label(imported, game_index),
-                    "time_class": imported.time_class or "unknown",
-                    "result": _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color),
-                    "opponent": imported.opponent or ("Black" if player_color == "white" else "White"),
+                    "date": played_on.isoformat() if played_on else "",
+                    "date_label": date_label,
+                    "time_class": time_class,
+                    "result": result_key,
+                    "opponent": opponent,
                     "player_color": player_color,
                     "brilliants": len(game_brilliants),
                     "moves": game_brilliants[:6],
@@ -3143,24 +3355,27 @@ def _build_game_brilliant_tracker(games: list[ImportedGame], lessons: list[dict[
     brilliant_moves.sort(key=lambda item: (str(item.get("date_label", "")), int(item.get("ply", 0) or 0)), reverse=True)
     brilliant_games.sort(key=lambda item: (-int(item.get("brilliants", 0) or 0), str(item.get("date_label", ""))), reverse=False)
     best_game = brilliant_games[0] if brilliant_games else None
+    progress = _build_brilliant_progress(game_rows)
     return {
         "summary": {
             "total_brilliants": len(brilliant_moves),
             "games_with_brilliants": len(brilliant_games),
+            "total_games": len(games),
             "games_scanned": games_scanned,
             "moves_scanned": moves_scanned,
             "cached_hits": cached_hits,
             "live_hits": live_hits,
-            "scan_game_limit": BRILLIANT_TRACKER_GAME_LIMIT,
+            "scan_game_limit": "all",
             "scan_ply_limit": BRILLIANT_TRACKER_MAX_PLIES,
             "remaining_live_budget": live_budget[0],
             "counts": dict(counts),
             "watchlist": len(repertoire_watchlist.get("watchlist", [])),
         },
         "high_confidence": brilliant_moves[:32],
-        "recent_brilliants": brilliant_moves[:12],
-        "games": brilliant_games[:12],
+        "recent_brilliants": brilliant_moves[:24],
+        "games": brilliant_games,
         "best_game": best_game,
+        "progress": progress,
         "watchlist": repertoire_watchlist.get("watchlist", [])[:24],
     }
 

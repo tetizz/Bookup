@@ -435,6 +435,7 @@ select:focus {
 .health-dashboard.empty,
 .stats-summary-panel.empty,
 .brilliant-tracker-panel.empty,
+.brilliant-progress-panel.empty,
 .rating-progress-panel.empty,
 .heatmap-panel.empty,
 .timeline-panel.empty {
@@ -608,6 +609,72 @@ select:focus {
   border-top: 1px solid rgba(160, 190, 255, 0.12);
   margin-top: 1.25rem;
   padding-top: 1.25rem;
+}
+
+.brilliant-progress-panel {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid rgba(45, 190, 171, 0.18);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(45, 190, 171, 0.14), transparent 28%),
+    rgba(7, 11, 16, 0.56);
+}
+
+.brilliant-progress-head {
+  border-color: rgba(45, 190, 171, 0.2);
+  background:
+    radial-gradient(circle at 16% 16%, rgba(45, 190, 171, 0.16), transparent 36%),
+    rgba(7, 11, 16, 0.72);
+}
+
+.brilliant-metric-grid article:first-child strong,
+.brilliant-metric-grid article:nth-child(2) strong {
+  color: #62f0d7;
+}
+
+.brilliant-chart {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    radial-gradient(circle at 82% 18%, rgba(45, 190, 171, 0.16), transparent 28%),
+    rgba(6, 10, 15, 0.82);
+}
+
+.brilliant-chart .rating-area {
+  fill: rgba(45, 190, 171, 0.13);
+}
+
+.brilliant-chart .rating-line {
+  stroke: #62f0d7;
+  filter: drop-shadow(0 0 8px rgba(45, 190, 171, 0.3));
+}
+
+.rating-point.brilliant-point.hot {
+  background: #2dbeab;
+  border-color: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 0 0 5px rgba(45, 190, 171, 0.16), 0 0 18px rgba(45, 190, 171, 0.34);
+}
+
+.rating-point.brilliant-point.idle {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.brilliant-highlight {
+  background:
+    radial-gradient(circle at top right, rgba(45, 190, 171, 0.18), transparent 34%),
+    rgba(7, 11, 16, 0.76);
+}
+
+.brilliant-legend i.brilliant-hot,
+.progress-game-dot.brilliant {
+  background: #2dbeab;
+}
+
+.brilliant-legend i.brilliant-quiet {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .health-card-grid {
