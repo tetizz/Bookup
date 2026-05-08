@@ -52,18 +52,29 @@
           <section class="demo-tab-panel" data-panel="setup">
             <div class="panel-copy">
               <p class="section-kicker">Setup</p>
-              <h2>Build from your games.</h2>
-              <p>In the desktop app, Bookup imports public Chess.com archives, stores a local cache, and uses optional Lichess explorer data for practical move weighting.</p>
+              <h2>Build once, then keep it fresh.</h2>
+              <p>In the desktop app, Bookup imports public Chess.com archives, auto-imports new games on startup, stores a local analysis cache, and uses optional Lichess explorer data for practical move weighting.</p>
               <div class="setup-form-demo">
                 <label>Chess.com username <span>trixize1234</span></label>
                 <label>Import scope <span>All public games</span></label>
-                <label>Stockfish settings <span>Depth 24 | MultiPV 5 | Cache on</span></label>
+                <label>Lichess database <span>Token stored locally, never committed</span></label>
+                <label>Stockfish settings <span>Depth 26 | MultiPV 5 | 8 workers | Cache on</span></label>
               </div>
             </div>
-            <div class="progress-demo">
-              <span>Import sample</span>
-              <div><i style="width:82%"></i></div>
-              <p>82% - building move tree and cached lessons</p>
+            <div class="engine-dashboard-demo">
+              <div class="progress-demo">
+                <span>Import sample</span>
+                <div><i style="width:92%"></i></div>
+                <p>92% - classifying moves, storing lessons, and warming cache</p>
+              </div>
+              <div class="worker-grid">
+                <div><span>Stockfish CPU</span><strong>72%</strong></div>
+                <div><span>Workers</span><strong>8/8</strong></div>
+                <div><span>Positions/sec</span><strong>14.8</strong></div>
+                <div><span>ETA</span><strong>1m 12s</strong></div>
+                <div><span>Cache hits</span><strong>2,241</strong></div>
+                <div><span>Hash budget</span><strong>39 GB</strong></div>
+              </div>
             </div>
           </section>
 
@@ -84,6 +95,11 @@
                 <h3>Common reply ...e5</h3>
                 <p>Seen in database samples, legal from the shown position, and ready for practical training.</p>
               </article>
+              <article class="node-card">
+                <span class="node-path">Transposition group 18</span>
+                <h3>Same position, one node</h3>
+                <p>Bookup merges move-order transpositions so the trainer improves the actual position you reach.</p>
+              </article>
             </div>
           </section>
 
@@ -103,6 +119,11 @@
                 <span>Known archive</span>
                 <h3>After e4 d6 d4 Nf6</h3>
                 <p>Correct 100+ times, archived instead of cluttering the active queue.</p>
+              </div>
+              <div class="queue-item">
+                <span>Why not urgent?</span>
+                <h3>One-off loss ignored</h3>
+                <p>A single bad result does not become "costing points" until the same repertoire position repeats.</p>
               </div>
             </div>
           </section>
@@ -144,6 +165,10 @@
                 <span>Move review</span>
                 <p id="moveReview">Be3 is a book move because it is part of the imported repertoire branch.</p>
               </div>
+              <div class="move-review-card">
+                <span>Book state</span>
+                <p id="bookStateCopy">Book mode is active. Classification switches from Book only after the line leaves trusted repertoire/database territory.</p>
+              </div>
             </aside>
           </section>
 
@@ -163,6 +188,10 @@
                 <strong>Generated theory sample</strong>
                 <p>Nf3 d5 c4 dxc4 e3 a6 Bxc4 e6 O-O c5</p>
                 <p>d4 Nf6 Nf3 g6 c4 Bg7 Nc3 O-O</p>
+              </div>
+              <div class="theory-lines">
+                <strong>Next 10 best moves</strong>
+                <p>Pick a move and Bookup generates a 10-move Stockfish-backed theory continuation with database replies beside it.</p>
               </div>
             </div>
           </section>
@@ -221,6 +250,33 @@
                 <svg id="ratingDemoSvg" class="rating-demo-svg" viewBox="0 0 720 260" role="img" aria-label="Sample rating progress chart"></svg>
               </div>
               <div id="ratingDemoHighlight" class="rating-demo-highlight">Hover or tap a point in the desktop app to see games, W/D/L, and win rate for that day.</div>
+            </div>
+            <div class="brilliant-tracker-demo" aria-label="Bookup brilliant tracker demo">
+              <div class="rating-demo-head">
+                <div>
+                  <span class="review-date">Brilliant Tracker</span>
+                  <h3>Confirmed tactics from your games</h3>
+                  <p>Brilliant candidates are rescanned with the stricter tactical compensation gate so old false positives do not clog the list.</p>
+                </div>
+                <div class="brilliant-summary">
+                  <strong>4</strong>
+                  <span>confirmed examples shown</span>
+                </div>
+              </div>
+              <div class="brilliant-list-demo">
+                <article>
+                  <span class="class brilliant"><img src="assets/move-classifications/brilliant.png" alt="">Brilliant</span>
+                  <h3>...Nxe4</h3>
+                  <p>Pirc structure. A tactical sacrifice that remains sound after the reply.</p>
+                  <small>Open game in desktop review</small>
+                </article>
+                <article>
+                  <span class="class brilliant"><img src="assets/move-classifications/brilliant.png" alt="">Brilliant</span>
+                  <h3>...Nxg4</h3>
+                  <p>Attack keeps compensation alive; stale mate-only flags are filtered out.</p>
+                  <small>Stored with PGN path and move number</small>
+                </article>
+              </div>
             </div>
           </section>
         </div>

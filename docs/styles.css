@@ -606,6 +606,11 @@ p {
   background: rgba(126, 165, 204, 0.38);
 }
 
+.class.brilliant {
+  border: 1px solid rgba(43, 197, 169, 0.58);
+  background: rgba(43, 197, 169, 0.24);
+}
+
 .database-card {
   display: grid;
   gap: 8px;
@@ -779,6 +784,47 @@ p {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--gold));
+}
+
+.engine-dashboard-demo {
+  display: grid;
+  gap: 16px;
+}
+
+.worker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.worker-grid div,
+.brilliant-summary {
+  border: 1px solid rgba(54, 69, 88, 0.72);
+  border-radius: 20px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(116, 211, 155, 0.12), transparent 10rem),
+    rgba(8, 13, 20, 0.58);
+}
+
+.worker-grid span,
+.brilliant-summary span {
+  display: block;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.worker-grid strong,
+.brilliant-summary strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: clamp(1.55rem, 2.8vw, 2.65rem);
+  letter-spacing: -0.05em;
 }
 
 .node-list-demo,
@@ -1083,6 +1129,46 @@ p {
   background: rgba(125, 162, 255, 0.06);
 }
 
+.brilliant-tracker-demo {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 18px;
+  margin-top: 22px;
+  border: 1px solid rgba(43, 197, 169, 0.28);
+  border-radius: 28px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at 16% 0%, rgba(43, 197, 169, 0.18), transparent 22rem),
+    rgba(8, 13, 20, 0.72);
+}
+
+.brilliant-list-demo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.brilliant-list-demo article {
+  border: 1px solid rgba(43, 197, 169, 0.38);
+  border-radius: 22px;
+  padding: 18px;
+  background: rgba(6, 14, 20, 0.66);
+}
+
+.brilliant-list-demo h3 {
+  margin-top: 12px;
+}
+
+.brilliant-list-demo p {
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+
+.brilliant-list-demo small {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+
 @media (max-width: 1080px) {
   .download-hero,
   .study-demo-grid,
@@ -1099,6 +1185,8 @@ p {
 
   .proof-grid,
   .review-demo,
+  .worker-grid,
+  .brilliant-list-demo,
   .rating-demo-head {
     grid-template-columns: 1fr;
   }

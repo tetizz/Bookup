@@ -38,7 +38,7 @@
             <a class="primary-action" href="https://github.com/tetizz/Bookup/releases/latest">Download desktop installer</a>
             <a class="secondary-action" href="app.html">Open the web demo</a>
           </div>
-          <p class="privacy-note">Private tokens, config, and training cache stay local. The website is only a preview.</p>
+          <p class="privacy-note">Latest release: <strong>v2026.05.08.3</strong>. Private tokens, config, and training cache stay local. The website is only a preview.</p>
         </div>
 
         <div class="download-card" aria-label="Bookup release options">
@@ -88,6 +88,21 @@
             <h3>Private study cache</h3>
             <p>Keep lesson progress, known lines, repeated misses, and Lichess context on your own machine.</p>
           </article>
+          <article class="proof-card">
+            <span>04</span>
+            <h3>Parallel analysis</h3>
+            <p>Run multiple Stockfish workers over different positions while cache hits skip repeated analysis work.</p>
+          </article>
+          <article class="proof-card">
+            <span>05</span>
+            <h3>Strict brilliant tracking</h3>
+            <p>Confirmed Brilliant moves require sound tactical compensation, not stale false positives from old scans.</p>
+          </article>
+          <article class="proof-card">
+            <span>06</span>
+            <h3>Book-state trainer</h3>
+            <p>Opening moves stay Book until the line leaves book, then the coach switches to engine classifications.</p>
+          </article>
         </div>
       </section>
 
@@ -131,6 +146,12 @@
                 <b>...e5 41%</b>
                 <b>...c6 23%</b>
                 <b>...a6 18%</b>
+              </div>
+              <div class="database-card">
+                <span>Worker cache</span>
+                <b>8 Stockfish workers ready</b>
+                <b>Cache hits skip repeats</b>
+                <b>No command windows per move</b>
               </div>
             </aside>
           </div>

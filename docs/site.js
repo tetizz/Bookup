@@ -23,6 +23,7 @@ const demoStates = {
     fill: "56%",
     prompt: "Be3 is legal here, stays inside the imported repertoire, and is the top checked candidate in this demo.",
     review: "Be3 is Book because it is part of the imported branch before engine coaching takes over.",
+    bookState: "Book mode is active. Be3 is trusted because it is in your imported repertoire before engine coaching takes over.",
     replies: ["...e5 41%", "...c6 23%", "...a6 18%"],
     lines: [
       { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5 Nxe5 Nxe4" },
@@ -39,6 +40,7 @@ const demoStates = {
     fill: "55%",
     prompt: "O-O is legal because the bishop has already moved from f1. It keeps the position close to the top line.",
     review: "O-O is Excellent here: legal, safe, and nearly tied with the top candidate.",
+    bookState: "This branch is still inside your repertoire, but Bookup marks it Excellent because it is being compared as an engine candidate in the demo.",
     replies: ["...e5 38%", "...c6 22%", "...Nbd7 15%"],
     lines: [
       { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5 Qxd8 Rxd8" },
@@ -55,6 +57,7 @@ const demoStates = {
     fill: "54%",
     prompt: "Bg5 is a legal developing move from c1 to g5 and stays in the same practical setup.",
     review: "Bg5 is Excellent because it is very close to the top engine line in this validated position.",
+    bookState: "Bookup would keep following Bg5 if your imported games repeatedly transpose here; otherwise it becomes an engine-coached branch.",
     replies: ["...c6 45%", "...Nbd7 29%", "...e5 11%"],
     lines: [
       { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7 O-O e5" },
@@ -267,6 +270,7 @@ function updateStudy(stateKey = "book") {
 
   const prompt = document.getElementById("studyPrompt");
   const review = document.getElementById("moveReview");
+  const bookStateCopy = document.getElementById("bookStateCopy");
   const evalText = document.getElementById("webEval");
   const evalFill = document.getElementById("webEvalFill");
   const evalRail = evalText?.closest(".eval-rail");
@@ -274,6 +278,7 @@ function updateStudy(stateKey = "book") {
 
   if (prompt) prompt.textContent = state.prompt;
   if (review) review.textContent = state.review;
+  if (bookStateCopy) bookStateCopy.textContent = state.bookState;
   if (evalText) evalText.textContent = state.eval;
   if (evalRail) evalRail.setAttribute("aria-label", `Evaluation ${state.eval}`);
   if (evalFill) evalFill.style.height = state.fill;
