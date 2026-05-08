@@ -22,6 +22,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Verify bundled engine assets
+        shell: pwsh
+        run: |
+          git lfs pull
+          git lfs ls-files
+          $engine = Get-Item "stockfish\stockfish-windows-x86-64-avx2.exe"
+          if ($engine.Length -lt 1MB) {
+            throw "Bundled Stockfish is only $($engine.Length) bytes. Git LFS did not fetch the real engine binary."
+          }
 
       - name: Set version
         id: version
