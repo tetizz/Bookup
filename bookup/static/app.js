@@ -917,6 +917,7 @@ function stockfishStatsFromStatus(status) {
     positions_analyzed: Number(status.positions_done ?? status.positions_analyzed ?? 0),
     positions_total: Number(status.positions_total ?? 0),
     positions_per_second: Number(status.positions_per_second ?? 0),
+    items_per_second: Number(status.items_per_second ?? 0),
     elapsed_sec: Number(status.elapsed_sec ?? 0),
     eta_sec: status.eta_sec,
     brilliant_games_done: Number(status.brilliant_games_done ?? 0),
@@ -959,7 +960,7 @@ function analysisWorkSummary(stats) {
     return gamesTotal ? `${gamesDone}/${gamesTotal} games` : "Loading games";
   }
   if (phase === "indexing") {
-    return gamesTotal ? `${gamesTotal} games loaded` : "Indexing games";
+    return gamesTotal ? `${gamesDone}/${gamesTotal} games indexed` : "Indexing games";
   }
   if (phase === "position_index") {
     return `${indexed} positions indexed`;
@@ -1031,6 +1032,15 @@ function renderStockfishStats(stats, options = {}) {
   const hasLiveCpu = stats.cpu_percent != null && (isEnginePhase || activeWorkers > 0 || Number(stats.jobs_started || 0) > 0);
   const cpu = hasLiveCpu ? stats.cpu_percent : stats.cpu_budget_percent;
   const cpuLabel = hasLiveCpu ? "Stockfish CPU" : "CPU budget";
+  const cpuCoreText = hasLiveCpu && stats.cpu_cores != null
+    ? `${Number(stats.cpu_cores).toFixed(1)}/${Number(stats.system_threads || 0)}`
+    : `${Number(stats.threads || 0)}/${Number(stats.system_threads || 0)} planned`;
+  const workerCard = isEnginePhase
+    ? ["Active workers", `${activeWorkers}/${workers}`]
+    : ["Stockfish workers", `${workers} ready`];
+  const throughputCard = isEnginePhase
+    ? ["Positions/sec", formatRate(stats.positions_per_second)]
+    : ["Index rate", formatRate(stats.items_per_second)];
   const memoryText = memory > 0
     ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
     : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
@@ -1040,10 +1050,11 @@ function renderStockfishStats(stats, options = {}) {
     primaryCard,
     ["ETA", analysisEtaText(stats)],
     [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
-    ["CPU cores", stats.cpu_cores == null ? "--" : `${Number(stats.cpu_cores).toFixed(1)}/${Number(stats.system_threads || 0)}`],
+    ["CPU cores", cpuCoreText],
+    throughputCard,
     ["Memory", memoryText],
-    ["Active workers", `${activeWorkers}/${workers}`],
-    ["Workers", workers],
+    workerCard,
+    ["Configured workers", workers],
     ["Threads", `${Number(stats.threads || 0)} total`],
     ["Hash budget", `${Number(stats.hash_mb || 0)} MB`],
     ["Depth / MultiPV", `${Number(stats.depth || 0)} / ${Number(stats.multipv || 0)}`],

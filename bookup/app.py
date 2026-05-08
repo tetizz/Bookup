@@ -36,7 +36,7 @@ STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
 PROFILE_SCHEMA_VERSION = 21
 GAMES_CACHE_SCHEMA_VERSION = 20
-ENGINE_DEFAULTS_VERSION = 5
+ENGINE_DEFAULTS_VERSION = 6
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
@@ -331,14 +331,30 @@ def update_analysis_status(
         now = time.monotonic()
         started = float(ANALYSIS_STATUS.get("started_at", now) or now)
         elapsed = max(0.001, now - started)
-        done = int(ANALYSIS_STATUS.get("positions_done", 0) or 0)
-        total = int(ANALYSIS_STATUS.get("positions_total", 0) or 0)
+        phase = str(ANALYSIS_STATUS.get("phase", "") or "")
+        position_done = int(ANALYSIS_STATUS.get("positions_done", 0) or 0)
+        position_total = int(ANALYSIS_STATUS.get("positions_total", 0) or 0)
+        done = position_done
+        total = position_total
+        if done <= 0 or total <= 0:
+            if phase in {"loading_games", "fetch_archives", "fetch_games", "indexing"}:
+                done = int(ANALYSIS_STATUS.get("games_done", 0) or 0)
+                total = int(ANALYSIS_STATUS.get("games_total", 0) or 0)
+            elif phase == "brilliant_scan":
+                done = int(ANALYSIS_STATUS.get("classified_moves", 0) or 0)
+                total = int(ANALYSIS_STATUS.get("moves_scanned", 0) or 0)
+                if done <= 0 or total <= 0:
+                    done = int(ANALYSIS_STATUS.get("brilliant_games_done", 0) or 0)
+                    total = int(ANALYSIS_STATUS.get("brilliant_games_total", 0) or 0)
         if done > 0:
             rate = done / elapsed
-            ANALYSIS_STATUS["positions_per_second"] = round(rate, 2)
+            if position_done > 0:
+                ANALYSIS_STATUS["positions_per_second"] = round(position_done / elapsed, 2)
+            ANALYSIS_STATUS["items_per_second"] = round(rate, 2)
             ANALYSIS_STATUS["eta_sec"] = round(max(0.0, (total - done) / rate), 1) if total > done and rate > 0 else 0
         elif ANALYSIS_STATUS.get("active"):
             ANALYSIS_STATUS["positions_per_second"] = 0.0
+            ANALYSIS_STATUS["items_per_second"] = 0.0
             ANALYSIS_STATUS["eta_sec"] = None
         ANALYSIS_STATUS["elapsed_sec"] = round(elapsed, 1)
         current_settings = settings or ANALYSIS_STATUS_SETTINGS
@@ -373,9 +389,9 @@ def recommended_engine_defaults() -> dict:
     # The hash value is a total budget; EnginePool divides it between workers.
     snapshot = system_memory_snapshot()
     safe_hash = safe_stockfish_hash_limit_mb()
-    preferred_hash = max(2048, int(snapshot["available_mb"] * 0.45))
+    preferred_hash = max(2048, int(snapshot["available_mb"] * 0.60))
     hash_mb = max(2048, (min(safe_hash, preferred_hash) // 128) * 128)
-    workers = max(1, min(6, CPU_THREADS // 2 if CPU_THREADS >= 12 else CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
+    workers = max(1, min(12, CPU_THREADS // 2 if CPU_THREADS >= 12 else CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
     return {
         "depth": 26,
         "threads": max(1, min(CPU_THREADS, 16)),
@@ -396,7 +412,7 @@ def migrate_engine_defaults(config: dict) -> dict:
         if current in (None, ""):
             migrated[key] = value
             continue
-        if key == "parallel_workers":
+        if key in {"parallel_workers", "hash_mb", "threads"}:
             try:
                 migrated[key] = max(int(current), int(value))
             except (TypeError, ValueError):
@@ -425,7 +441,7 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         parallel_workers = int(payload.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"])
     except (TypeError, ValueError):
         parallel_workers = int(defaults["parallel_workers"])
-    parallel_workers = max(1, min(6, parallel_workers))
+    parallel_workers = max(1, min(12, parallel_workers))
     try:
         requested_hash_mb = int(payload.get("hash_mb", defaults["hash_mb"]))
     except (TypeError, ValueError):

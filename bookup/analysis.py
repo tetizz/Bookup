@@ -706,13 +706,13 @@ def _find_named_dataset_position(imported: ImportedGame, max_plies: int = 12) ->
     return best_match
 
 
-def identify_opening(imported: ImportedGame) -> dict[str, str]:
+def identify_opening(imported: ImportedGame, *, use_explorer: bool = False) -> dict[str, str]:
     header_opening = str(imported.game.headers.get("Opening", "") or "")
     header_variation = str(imported.game.headers.get("Variation", "") or "")
     header_name = _compose_opening_name(header_opening, header_variation)
     eco = (imported.game.headers.get("ECO") or "").strip().upper()
     play_key, board, play, san_moves = _opening_lookup_payload(imported)
-    cache_key = f"{play_key}|{board.epd()}|{header_name}|{eco}"
+    cache_key = f"{int(use_explorer)}|{play_key}|{board.epd()}|{header_name}|{eco}"
     if cache_key in ONLINE_OPENING_CACHE:
         return dict(ONLINE_OPENING_CACHE[cache_key])
 
@@ -747,17 +747,21 @@ def identify_opening(imported: ImportedGame) -> dict[str, str]:
         except Exception:
             pass
 
-    explorer = _explorer_lookup(board, play_key)
-    opening = explorer.get("opening") or {}
-    explorer_name = _clean_header_name(str(opening.get("name", "") or ""))
-    if explorer_name and (
-        not result["name"]
-        or result["name"] == result["code"]
-        or len(explorer_name) > len(result["name"])
-    ):
-        result["name"] = explorer_name
-    if opening.get("eco") and not result["code"]:
-        result["code"] = str(opening["eco"]).upper()
+    # Live explorer lookup is useful for one-off position views, but it is far
+    # too expensive during bulk import. The local Lichess opening dataset and
+    # PGN headers give us stable names without blocking game indexing.
+    if use_explorer:
+        explorer = _explorer_lookup(board, play_key)
+        opening = explorer.get("opening") or {}
+        explorer_name = _clean_header_name(str(opening.get("name", "") or ""))
+        if explorer_name and (
+            not result["name"]
+            or result["name"] == result["code"]
+            or len(explorer_name) > len(result["name"])
+        ):
+            result["name"] = explorer_name
+        if opening.get("eco") and not result["code"]:
+            result["code"] = str(opening["eco"]).upper()
 
     if not result["name"] and result["code"]:
         result["name"] = lookup_by_eco(result["code"])
@@ -1006,14 +1010,48 @@ def _build_game_move_tree(
     }
 
 
-def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, PositionNode], dict[str, Counter[str]], dict[str, dict[str, Any]]]:
+def _collect_position_nodes(
+    games: list[ImportedGame],
+    progress_callback: Callable[..., None] | None = None,
+) -> tuple[dict[str, PositionNode], dict[str, Counter[str]], dict[str, dict[str, Any]]]:
     nodes: dict[str, PositionNode] = {}
     position_counts: dict[str, Counter[str]] = defaultdict(Counter)
     opening_by_position: dict[str, dict[str, Any]] = {}
+    total_games = len(games)
+    started = time.perf_counter()
+    last_notify = 0.0
+
+    def report(game_index: int, *, force: bool = False) -> None:
+        nonlocal last_notify
+        if not progress_callback:
+            return
+        now = time.perf_counter()
+        if not force and game_index < total_games and game_index % 20 and now - last_notify < 0.75:
+            return
+        last_notify = now
+        progress = 8
+        if total_games:
+            progress = 8 + int((game_index / max(1, total_games)) * 10)
+        elapsed = max(0.001, now - started)
+        rate = game_index / elapsed if game_index > 0 else 0.0
+        eta = ((total_games - game_index) / rate) if rate > 0 and total_games > game_index else 0
+        try:
+            progress_callback(
+                phase="indexing",
+                progress=progress,
+                games_done=game_index,
+                games_total=total_games,
+                positions_indexed=len(nodes),
+                items_per_second=round(rate, 2),
+                eta_sec=round(eta, 1) if eta else 0,
+                message=f"Indexed {game_index}/{total_games} games into {len(nodes)} repertoire positions...",
+            )
+        except Exception:
+            pass
 
     for game_index, imported in enumerate(games, start=1):
         user_side = chess.WHITE if imported.player_color == "white" else chess.BLACK
-        opening_info = identify_opening(imported)
+        opening_info = identify_opening(imported, use_explorer=False)
         board = imported.game.board()
         play_uci: list[str] = []
         last_san = "Start position"
@@ -1053,6 +1091,7 @@ def _collect_position_nodes(games: list[ImportedGame]) -> tuple[dict[str, Positi
             last_san = board.san(move)
             play_uci.append(move.uci())
             board.push(move)
+        report(game_index, force=game_index == total_games)
 
     return nodes, position_counts, opening_by_position
 
@@ -3770,7 +3809,7 @@ def analyse_games(
             pass
 
     notify(phase="indexing", progress=8, games_done=0, games_total=len(games), message="Indexing imported games...")
-    nodes, _position_counts, _opening_info = _collect_position_nodes(games)
+    nodes, _position_counts, _opening_info = _collect_position_nodes(games, progress_callback=notify)
     analyzed_nodes = _rank_nodes_for_analysis(nodes)
     notify(
         phase="position_index",
