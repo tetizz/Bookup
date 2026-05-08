@@ -18,9 +18,10 @@
       </a>
       <nav aria-label="Demo navigation">
         <a href="index.html">Download desktop</a>
-        <a href="#study">Study</a>
-        <a href="#theory">Theory</a>
-        <a href="#review">Review</a>
+        <a href="#study" data-nav-tab="study">Study</a>
+        <a href="#theory" data-nav-tab="theory">Theory</a>
+        <a href="#stats" data-nav-tab="stats">Stats</a>
+        <a href="#review" data-nav-tab="review">Review</a>
       </nav>
     </header>
 
@@ -45,6 +46,7 @@
           <button class="tab-button" type="button" data-demo-tab="work">Needs Work</button>
           <button class="tab-button active" type="button" data-demo-tab="study">Study Lines</button>
           <button class="tab-button" type="button" data-demo-tab="theory">Theory</button>
+          <button class="tab-button" type="button" data-demo-tab="stats">Stats</button>
           <button class="tab-button" type="button" data-demo-tab="review">Review</button>
         </div>
 
@@ -196,33 +198,22 @@
             </div>
           </section>
 
-          <section id="review" class="demo-tab-panel" data-panel="review">
+          <section id="stats" class="demo-tab-panel stats-panel" data-panel="stats">
             <div class="panel-copy">
-              <p class="section-kicker">Review</p>
-              <h2>Progress that survives sessions.</h2>
-              <p>The desktop app saves completed lines, known archive entries, miss history, cached engine context, and rating progress by time control.</p>
+              <p class="section-kicker">Stats</p>
+              <h2>Your results and tactics in one place.</h2>
+              <p>The desktop app separates rating progress, W/D/L, time-control trends, Brilliant tracking, scan coverage, and games-with-brilliants into a dedicated stats page.</p>
             </div>
-            <div class="review-demo">
-              <div>
-                <span class="review-date">Completed</span>
-                <h3>Be3 branch</h3>
-                <p>Finished 3 times this week with no repeat miss.</p>
-              </div>
-              <div>
-                <span class="review-date">Timeline</span>
-                <h3>Mistake trend</h3>
-                <p>Repeated misses dropped from 6 to 2 after focused reps.</p>
-              </div>
-              <div>
-                <span class="review-date">Cache</span>
-                <h3>Ready next</h3>
-                <p>Engine lines and database replies are already stored for the next lesson.</p>
-              </div>
+            <div class="stats-summary-demo">
+              <div><span>Current rapid</span><strong>1494</strong><small>+42 over selected range</small></div>
+              <div><span>Record</span><strong>121W 14D 92L</strong><small>53.3% wins</small></div>
+              <div><span>Brilliants</span><strong>4</strong><small>confirmed tactical examples</small></div>
+              <div><span>Scan coverage</span><strong>39,150</strong><small>moves classified with cache</small></div>
             </div>
             <div class="rating-progress-demo" aria-label="Bookup rating progress demo">
               <div class="rating-demo-head">
                 <div>
-                  <span class="review-date">Progress</span>
+                  <span class="review-date">Elo Over Time</span>
                   <h3 id="ratingDemoTitle">Rapid · Last 90 days</h3>
                   <p id="ratingDemoCopy">1494 current rating with 227 games in this sample range.</p>
                 </div>
@@ -276,6 +267,36 @@
                   <p>Attack keeps compensation alive; stale mate-only flags are filtered out.</p>
                   <small>Stored with PGN path and move number</small>
                 </article>
+              </div>
+            </div>
+          </section>
+
+          <section id="review" class="demo-tab-panel" data-panel="review">
+            <div class="panel-copy">
+              <p class="section-kicker">Review</p>
+              <h2>Line history, misses, and completed work.</h2>
+              <p>Review stays focused on study progress: completed lines, known archive entries, miss history, queue explanations, and cached engine context for what to train next.</p>
+            </div>
+            <div class="review-demo">
+              <div>
+                <span class="review-date">Completed</span>
+                <h3>Be3 branch</h3>
+                <p>Finished 3 times this week with no repeat miss.</p>
+              </div>
+              <div>
+                <span class="review-date">Timeline</span>
+                <h3>Mistake trend</h3>
+                <p>Repeated misses dropped from 6 to 2 after focused reps.</p>
+              </div>
+              <div>
+                <span class="review-date">Cache</span>
+                <h3>Ready next</h3>
+                <p>Engine lines and database replies are already stored for the next lesson.</p>
+              </div>
+              <div>
+                <span class="review-date">Known archive</span>
+                <h3>100+ correct</h3>
+                <p>Stable repertoire lines stay visible without cluttering active Needs Work.</p>
               </div>
             </div>
           </section>

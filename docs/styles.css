@@ -797,7 +797,15 @@ p {
   gap: 12px;
 }
 
+.stats-summary-demo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-self: stretch;
+}
+
 .worker-grid div,
+.stats-summary-demo div,
 .brilliant-summary {
   border: 1px solid rgba(54, 69, 88, 0.72);
   border-radius: 20px;
@@ -808,6 +816,7 @@ p {
 }
 
 .worker-grid span,
+.stats-summary-demo span,
 .brilliant-summary span {
   display: block;
   color: var(--muted);
@@ -819,12 +828,20 @@ p {
 }
 
 .worker-grid strong,
+.stats-summary-demo strong,
 .brilliant-summary strong {
   display: block;
   margin-top: 8px;
   color: var(--ink);
   font-size: clamp(1.55rem, 2.8vw, 2.65rem);
   letter-spacing: -0.05em;
+}
+
+.stats-summary-demo small {
+  display: block;
+  margin-top: 10px;
+  color: var(--accent);
+  line-height: 1.45;
 }
 
 .node-list-demo,
@@ -1186,6 +1203,7 @@ p {
   .proof-grid,
   .review-demo,
   .worker-grid,
+  .stats-summary-demo,
   .brilliant-list-demo,
   .rating-demo-head {
     grid-template-columns: 1fr;

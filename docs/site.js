@@ -290,13 +290,25 @@ function updateStudy(stateKey = "book") {
 function bindTabs() {
   const buttons = document.querySelectorAll("[data-demo-tab]");
   const panels = document.querySelectorAll("[data-panel]");
+  const activate = (name) => {
+    buttons.forEach((item) => item.classList.toggle("active", item.dataset.demoTab === name));
+    panels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
+  };
+
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
-      const name = button.dataset.demoTab;
-      buttons.forEach((item) => item.classList.toggle("active", item === button));
-      panels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
+      activate(button.dataset.demoTab);
     });
   });
+
+  document.querySelectorAll("[data-nav-tab]").forEach((link) => {
+    link.addEventListener("click", () => activate(link.dataset.navTab));
+  });
+
+  const initialTab = window.location.hash.replace("#", "");
+  if (initialTab && document.querySelector(`[data-panel="${initialTab}"]`)) {
+    activate(initialTab);
+  }
 }
 
 function bindChoices() {
