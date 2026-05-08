@@ -237,6 +237,7 @@ const state = {
   repertoireExportText: "",
   manualDriftChoices: {},
   analysisProgressTimer: 0,
+  analysisProgressValue: 0,
   analysisStatusTimer: 0,
   analysisStatusPollStartedAt: 0,
   autoImportRunning: false,
@@ -853,18 +854,31 @@ function setStatus(message) {
 
 function setProgress(value, message = "", options = {}) {
   const bounded = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const building = Boolean(
+    state.analysisProgressTimer
+    || el.analyze?.disabled
+    || el.importPgn?.disabled
+    || state.autoImportRunning
+  );
+  const current = Number.isFinite(Number(state.analysisProgressValue))
+    ? Number(state.analysisProgressValue)
+    : 0;
+  const displayValue = (!options.allowDecrease && building && bounded < current && bounded !== 100)
+    ? current
+    : bounded;
+  state.analysisProgressValue = displayValue;
   const indeterminate = Boolean(options.indeterminate);
   if (el.progressFill) {
     el.progressFill.classList.toggle("indeterminate", indeterminate);
     if (!indeterminate) {
-      el.progressFill.style.width = `${bounded}%`;
+      el.progressFill.style.width = `${displayValue}%`;
     }
   }
   if (message) {
     setStatus(message);
   }
   if (el.progressLabel) {
-    el.progressLabel.textContent = indeterminate ? "Working" : `${bounded}%`;
+    el.progressLabel.textContent = indeterminate ? "Working" : `${displayValue}%`;
   }
 }
 
@@ -897,16 +911,103 @@ function stockfishStatsFromStatus(status) {
     message: status.message || "",
     active: Boolean(status.active),
     progress: Number(status.progress || 0),
+    games_done: Number(status.games_done ?? 0),
+    games_total: Number(status.games_total ?? 0),
+    positions_indexed: Number(status.positions_indexed ?? 0),
     positions_analyzed: Number(status.positions_done ?? status.positions_analyzed ?? 0),
     positions_total: Number(status.positions_total ?? 0),
     positions_per_second: Number(status.positions_per_second ?? 0),
     elapsed_sec: Number(status.elapsed_sec ?? 0),
     eta_sec: status.eta_sec,
+    brilliant_games_done: Number(status.brilliant_games_done ?? 0),
+    brilliant_games_total: Number(status.brilliant_games_total ?? 0),
     brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
     brilliant_moves_classified: Number(status.classified_moves ?? 0),
     engine_cache_hits: Number(status.cache_hits ?? 0),
     engine_live_hits: Number(status.live_hits ?? 0),
   };
+}
+
+function analysisPhaseLabel(phase) {
+  const labels = {
+    starting: "Starting",
+    loading_games: "Loading games",
+    fetch_archives: "Checking archives",
+    fetch_games: "Importing games",
+    indexing: "Indexing games",
+    position_index: "Preparing Stockfish",
+    stockfish_positions: "Analyzing positions",
+    brilliant_scan: "Classifying moves",
+    complete: "Complete",
+    failed: "Failed",
+  };
+  return labels[phase] || String(phase || "Analysis");
+}
+
+function analysisWorkSummary(stats) {
+  const phase = stats.phase || "";
+  const gamesDone = Number(stats.games_done || 0);
+  const gamesTotal = Number(stats.games_total || 0);
+  const indexed = Number(stats.positions_indexed || 0);
+  const done = Number(stats.positions_analyzed || 0);
+  const total = Number(stats.positions_total || 0);
+  const scanDone = Number(stats.brilliant_games_done || 0);
+  const scanTotal = Number(stats.brilliant_games_total || 0);
+  const classified = Number(stats.brilliant_moves_classified || 0);
+  const scanned = Number(stats.brilliant_moves_scanned || 0);
+  if (["loading_games", "fetch_archives", "fetch_games"].includes(phase)) {
+    return gamesTotal ? `${gamesDone}/${gamesTotal} games` : "Loading games";
+  }
+  if (phase === "indexing") {
+    return gamesTotal ? `${gamesTotal} games loaded` : "Indexing games";
+  }
+  if (phase === "position_index") {
+    return `${indexed} positions indexed`;
+  }
+  if (phase === "brilliant_scan") {
+    if (scanned) return `${classified}/${scanned} moves classified`;
+    if (scanTotal) return `${scanDone}/${scanTotal} games scanned`;
+    return "Classifying moves";
+  }
+  if (phase === "stockfish_positions" || total) {
+    return `${done}${total ? `/${total}` : ""} positions`;
+  }
+  return stats.active ? "Working" : "Ready";
+}
+
+function analysisPrimaryCard(stats) {
+  const phase = stats.phase || "";
+  if (["loading_games", "fetch_archives", "fetch_games", "indexing"].includes(phase)) {
+    const done = Number(stats.games_done || 0);
+    const total = Number(stats.games_total || 0);
+    return ["Games", total ? `${done}/${total}` : "--"];
+  }
+  if (phase === "brilliant_scan") {
+    const scanned = Number(stats.brilliant_moves_scanned || 0);
+    const classified = Number(stats.brilliant_moves_classified || 0);
+    return ["Moves scanned", scanned ? `${classified}/${scanned}` : "--"];
+  }
+  return ["Positions/sec", formatRate(stats.positions_per_second)];
+}
+
+function analysisEtaText(stats) {
+  if (!stats.active) return "Done";
+  const eta = Number(stats.eta_sec);
+  if (Number.isFinite(eta) && eta > 0) return formatDuration(eta);
+  const progress = Number(stats.progress || 0);
+  const elapsed = Number(stats.elapsed_sec || 0);
+  if (progress > 3 && progress < 96 && elapsed > 2) {
+    const estimatedRemaining = Math.max(3, (elapsed * (100 - progress)) / progress);
+    return formatDuration(estimatedRemaining);
+  }
+  if (["loading_games", "fetch_archives", "fetch_games", "indexing", "position_index"].includes(stats.phase)) {
+    return "Preparing";
+  }
+  if (stats.phase === "stockfish_positions") {
+    return Number(stats.positions_analyzed || 0) ? "Calculating" : "Starting";
+  }
+  if (stats.phase === "brilliant_scan") return "Calculating";
+  return "Working";
 }
 
 function renderStockfishStats(stats, options = {}) {
@@ -920,23 +1021,26 @@ function renderStockfishStats(stats, options = {}) {
       : "Live Stockfish throughput, ETA, CPU, and memory will show up here.";
     return;
   }
-  const total = Number(stats.positions_total || 0);
-  const done = Number(stats.positions_analyzed || stats.positions_done || 0);
-  const cpu = stats.cpu_percent == null ? stats.cpu_budget_percent : stats.cpu_percent;
-  const cpuLabel = stats.cpu_percent == null ? "CPU budget" : "CPU now";
+  const phase = stats.phase || "idle";
+  const isEnginePhase = phase === "stockfish_positions" || phase === "brilliant_scan";
   const memory = Number(stats.memory_mb || 0);
   const freeMemory = Number(stats.system_available_ram_mb || 0);
   const totalMemory = Number(stats.system_ram_mb || 0);
   const activeWorkers = Number(stats.active_workers || 0);
   const workers = Number(stats.workers || 1);
+  const hasLiveCpu = stats.cpu_percent != null && (isEnginePhase || activeWorkers > 0 || Number(stats.jobs_started || 0) > 0);
+  const cpu = hasLiveCpu ? stats.cpu_percent : stats.cpu_budget_percent;
+  const cpuLabel = hasLiveCpu ? "Stockfish CPU" : "CPU budget";
   const memoryText = memory > 0
     ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
     : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
   const hashLimit = Number(stats.hash_limit_mb || 0);
+  const primaryCard = analysisPrimaryCard(stats);
   const cards = [
-    ["Positions/sec", formatRate(stats.positions_per_second)],
-    ["ETA", Number(stats.eta_sec || 0) > 0 ? formatDuration(stats.eta_sec) : "Done"],
+    primaryCard,
+    ["ETA", analysisEtaText(stats)],
     [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
+    ["CPU cores", stats.cpu_cores == null ? "--" : `${Number(stats.cpu_cores).toFixed(1)}/${Number(stats.system_threads || 0)}`],
     ["Memory", memoryText],
     ["Active workers", `${activeWorkers}/${workers}`],
     ["Workers", workers],
@@ -948,8 +1052,8 @@ function renderStockfishStats(stats, options = {}) {
   node.className = live ? "engine-stats-live" : "stack stockfish-stats-panel";
   node.innerHTML = `
     <div class="stockfish-status-head">
-      <span>${escapeHtml(stats.phase || "stockfish")}</span>
-      <strong>${done}${total ? `/${total}` : ""} positions</strong>
+      <span>${escapeHtml(analysisPhaseLabel(phase))}</span>
+      <strong>${escapeHtml(analysisWorkSummary(stats))}</strong>
       <small>${escapeHtml(stats.message || (stats.active ? "Stockfish is working..." : "Analysis cache is ready."))}</small>
     </div>
     <div class="speed-grid stockfish-speed-grid">
@@ -1014,7 +1118,8 @@ function stopAnalysisProgress() {
 function startAnalysisProgress() {
   stopAnalysisProgress();
   const startedAt = Date.now();
-  setProgress(4, "Preparing import...");
+  state.analysisProgressValue = 0;
+  setProgress(4, "Preparing import...", { allowDecrease: true });
   renderStockfishStats(null, { live: true });
   startAnalysisStatusPolling();
   state.analysisProgressTimer = window.setInterval(() => {
@@ -1045,7 +1150,7 @@ function startAnalysisProgress() {
       target = 96;
       message = "Still working. Stockfish is storing Brilliant stats and lesson cache...";
     }
-    const current = parseInt((el.progressFill?.style.width || "0").replace("%", ""), 10) || 0;
+    const current = Number(state.analysisProgressValue || 0);
     if (current < target) {
       setProgress(current + 1, message, { indeterminate: elapsed >= 32000 });
     } else {
@@ -1104,7 +1209,7 @@ async function runAnalysis(options = {}) {
       );
     }
   } catch (error) {
-    setProgress(0, error.message || "Bookup could not build your repertoire.");
+    setProgress(0, error.message || "Bookup could not build your repertoire.", { allowDecrease: true });
   } finally {
     stopAnalysisProgress();
     el.analyze.disabled = false;
@@ -1137,7 +1242,8 @@ async function checkAutoImportOnStartup() {
   } catch (error) {
     setProgress(
       state.payload ? 100 : 0,
-      error.message || "Startup auto-import check failed. You can still build manually."
+      error.message || "Startup auto-import check failed. You can still build manually.",
+      { allowDecrease: true }
     );
   } finally {
     state.autoImportRunning = false;
@@ -1180,7 +1286,7 @@ async function importPgnGames() {
     setProgress(100, `Imported ${payload.games_imported} PGN game${payload.games_imported === 1 ? "" : "s"} into your local Bookup workspace.`);
     if (el.pgnImportStatus) el.pgnImportStatus.textContent = "PGN import complete. The move tree, theory, and trainer are ready.";
   } catch (error) {
-    setProgress(0, error.message || "PGN import failed.");
+    setProgress(0, error.message || "PGN import failed.", { allowDecrease: true });
     if (el.pgnImportStatus) el.pgnImportStatus.textContent = error.message || "PGN import failed.";
   } finally {
     stopAnalysisProgress();

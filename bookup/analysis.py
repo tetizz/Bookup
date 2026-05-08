@@ -3786,6 +3786,18 @@ def analyse_games(
     worker_count = max(1, int(getattr(engine, "worker_count", 1) or 1))
     total_positions = max(1, len(analyzed_nodes))
     positions_done = 0
+    notify(
+        phase="stockfish_positions",
+        progress=20 if analyzed_nodes else 68,
+        positions_done=0,
+        positions_total=len(analyzed_nodes),
+        message=(
+            f"Stockfish is analyzing {len(analyzed_nodes)} repeated positions with "
+            f"{min(worker_count, max(1, len(analyzed_nodes)))} worker(s)..."
+            if analyzed_nodes
+            else "No repeated positions need Stockfish analysis yet. Building queues..."
+        ),
+    )
     if worker_count > 1 and len(analyzed_nodes) > 1:
         with ThreadPoolExecutor(max_workers=min(worker_count, len(analyzed_nodes)), thread_name_prefix="bookup-stockfish") as executor:
             futures = [

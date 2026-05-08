@@ -36,7 +36,7 @@ STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
 PROFILE_SCHEMA_VERSION = 21
 GAMES_CACHE_SCHEMA_VERSION = 20
-ENGINE_DEFAULTS_VERSION = 4
+ENGINE_DEFAULTS_VERSION = 5
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
@@ -237,8 +237,15 @@ def engine_resource_snapshot(settings: EngineSettings, engine: EnginePool | None
         CPU_SAMPLES.pop(pid, None)
 
     cpu_percent = None
+    cpu_cores = None
+    cpu_budget_usage_percent = None
     if sampled and wall_delta > 0:
-        cpu_percent = round(min(100.0, (cpu_delta / wall_delta / max(1, CPU_THREADS)) * 100), 1)
+        cpu_cores = round(max(0.0, cpu_delta / wall_delta), 2)
+        cpu_percent = round(min(100.0, (cpu_cores / max(1, CPU_THREADS)) * 100), 1)
+        cpu_budget_usage_percent = round(
+            min(100.0, (cpu_cores / max(1, int(settings.threads))) * 100),
+            1,
+        )
 
     workers = max(1, int(getattr(engine, "worker_count", settings.parallel_workers) if engine else settings.parallel_workers))
     memory_mb = round(sum(memory_values), 1) if memory_values else 0.0
@@ -257,6 +264,8 @@ def engine_resource_snapshot(settings: EngineSettings, engine: EnginePool | None
         "depth": int(settings.depth),
         "think_time_sec": float(settings.think_time_sec),
         "cpu_percent": cpu_percent,
+        "cpu_cores": cpu_cores,
+        "cpu_budget_usage_percent": cpu_budget_usage_percent,
         "cpu_budget_percent": round(min(100.0, (int(settings.threads) / max(1, CPU_THREADS)) * 100), 1),
         "memory_mb": memory_mb,
         "estimated_hash_mb": int(settings.hash_mb),
@@ -304,7 +313,21 @@ def update_analysis_status(
             ANALYSIS_STATUS_SETTINGS = settings
         if engine is not None:
             ANALYSIS_STATUS_ENGINE = engine
-        ANALYSIS_STATUS.update({key: value for key, value in patch.items() if value is not None})
+        clean_patch = {key: value for key, value in patch.items() if value is not None}
+        if "progress" in clean_patch:
+            try:
+                next_progress = int(clean_patch["progress"] or 0)
+                current_progress = int(ANALYSIS_STATUS.get("progress", 0) or 0)
+                next_phase = str(clean_patch.get("phase", ANALYSIS_STATUS.get("phase", "")))
+                if (
+                    ANALYSIS_STATUS.get("active")
+                    and next_phase not in {"complete", "failed"}
+                    and next_progress < current_progress
+                ):
+                    clean_patch["progress"] = current_progress
+            except (TypeError, ValueError):
+                clean_patch.pop("progress", None)
+        ANALYSIS_STATUS.update(clean_patch)
         now = time.monotonic()
         started = float(ANALYSIS_STATUS.get("started_at", now) or now)
         elapsed = max(0.001, now - started)
@@ -314,6 +337,9 @@ def update_analysis_status(
             rate = done / elapsed
             ANALYSIS_STATUS["positions_per_second"] = round(rate, 2)
             ANALYSIS_STATUS["eta_sec"] = round(max(0.0, (total - done) / rate), 1) if total > done and rate > 0 else 0
+        elif ANALYSIS_STATUS.get("active"):
+            ANALYSIS_STATUS["positions_per_second"] = 0.0
+            ANALYSIS_STATUS["eta_sec"] = None
         ANALYSIS_STATUS["elapsed_sec"] = round(elapsed, 1)
         current_settings = settings or ANALYSIS_STATUS_SETTINGS
         current_engine = engine or ANALYSIS_STATUS_ENGINE
@@ -349,7 +375,7 @@ def recommended_engine_defaults() -> dict:
     safe_hash = safe_stockfish_hash_limit_mb()
     preferred_hash = max(2048, int(snapshot["available_mb"] * 0.45))
     hash_mb = max(2048, (min(safe_hash, preferred_hash) // 128) * 128)
-    workers = max(1, min(6, CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
+    workers = max(1, min(6, CPU_THREADS // 2 if CPU_THREADS >= 12 else CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
     return {
         "depth": 26,
         "threads": max(1, min(CPU_THREADS, 16)),
@@ -366,7 +392,15 @@ def migrate_engine_defaults(config: dict) -> dict:
     migrated = dict(config)
     defaults = recommended_engine_defaults()
     for key, value in defaults.items():
-        migrated[key] = value
+        current = migrated.get(key)
+        if current in (None, ""):
+            migrated[key] = value
+            continue
+        if key == "parallel_workers":
+            try:
+                migrated[key] = max(int(current), int(value))
+            except (TypeError, ValueError):
+                migrated[key] = value
     migrated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
     if not str(migrated.get("engine_path", "")).strip():
         migrated["engine_path"] = default_engine_path()
