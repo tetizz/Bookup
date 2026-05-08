@@ -52,10 +52,10 @@ REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
-ENGINE_CACHE_SCHEMA_VERSION = 8
+ENGINE_CACHE_SCHEMA_VERSION = 9
 BRILLIANT_TRACKER_GAME_LIMIT = 0
-BRILLIANT_TRACKER_MAX_PLIES = 120
-BRILLIANT_TRACKER_LIVE_BUDGET = 220
+BRILLIANT_TRACKER_MAX_PLIES = 0  # 0 means no ply cap; scan every move made by the imported player.
+BRILLIANT_TRACKER_LIVE_BUDGET = 0  # 0 means no cap; every scanned move gets a current-position MultiPV gate.
 BRILLIANT_TRACKER_TIME_SEC = 0.8
 
 
@@ -3095,6 +3095,8 @@ def _cached_candidate_lines_for_brilliant_scan(
 
 def _take_brilliant_live_budget(live_budget: list[int], budget_lock: threading.Lock | None = None) -> bool:
     def take() -> bool:
+        if live_budget[0] < 0:
+            return True
         if live_budget[0] <= 0:
             return False
         live_budget[0] -= 1
@@ -3104,6 +3106,12 @@ def _take_brilliant_live_budget(live_budget: list[int], budget_lock: threading.L
         return take()
     with budget_lock:
         return take()
+
+
+def _within_brilliant_scan_window(ply_index: int) -> bool:
+    if BRILLIANT_TRACKER_MAX_PLIES <= 0:
+        return True
+    return ply_index <= BRILLIANT_TRACKER_MAX_PLIES
 
 
 def _played_move_classification_for_brilliant_scan(
@@ -3118,11 +3126,11 @@ def _played_move_classification_for_brilliant_scan(
     live_budget: list[int],
     budget_lock: threading.Lock | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
-    """Classify the actual played move, even when it is not a top cached line.
+    """Classify the played move from the current-position MultiPV candidates.
 
-    The old Brilliant Tracker only inspected the top candidate lines. That is
-    fast, but it misses real game moves that Stockfish still classifies as
-    Brilliant/Great after analyzing the played branch directly.
+    A move must be a current top candidate before it can be Brilliant. The older
+    direct played-branch scan was too permissive and promoted random late moves
+    after the position had already changed.
     """
 
     played_uci = move.uci()
@@ -3131,64 +3139,7 @@ def _played_move_classification_for_brilliant_scan(
         return played_line, played_line.get("classification"), "candidate"
     if not candidate_lines:
         return None, None, "no_candidates"
-
-    cache_key = _engine_cache_key(
-        "played-move-classification",
-        board,
-        engine,
-        play_uci=path_uci,
-        limit=1,
-        time_sec=BRILLIANT_TRACKER_TIME_SEC,
-        extra={"move_uci": played_uci},
-    )
-    cached = _load_engine_cache(cache_key)
-    if cached and isinstance(cached.get("played_line"), dict):
-        played_line = dict(cached["played_line"])
-        classification = played_line.get("classification")
-        return played_line, classification if isinstance(classification, dict) else None, "played_cache"
-
-    if not _take_brilliant_live_budget(live_budget, budget_lock):
-        return None, None, "budget_exhausted"
-
-    played_line = _build_branch_line(
-        board,
-        played_uci,
-        move_san,
-        engine,
-        source="played-game",
-        time_sec=BRILLIANT_TRACKER_TIME_SEC,
-    )
-    if not played_line:
-        return None, None, "unclassified"
-
-    best_line = candidate_lines[0]
-    second_line = candidate_lines[1] if len(candidate_lines) > 1 else None
-    book_state = _book_state_for_line(path_uci, board)
-    popularity_by_uci = {
-        str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
-        for item in database_moves
-        if item.get("uci")
-    }
-    classification = classify_move_record(
-        board,
-        played_line,
-        best_line,
-        second_record=second_line,
-        is_player_move=True,
-        opening_phase=bool(book_state.get("active")) and len(path_uci) < OPENING_PLIES,
-        in_book=_move_is_book_candidate(
-            board,
-            played_uci,
-            book_state=book_state,
-            popularity_by_uci=popularity_by_uci,
-            repeated_count=1,
-        ),
-    )
-    played_line["classification"] = classification
-    played_line["classification_label"] = classification.get("label", "")
-    played_line["classification_icon"] = classification.get("icon", "")
-    _save_engine_cache(cache_key, {"played_line": dict(played_line)})
-    return played_line, classification, "played_live"
+    return None, None, "not_top_candidate"
 
 
 def _game_url_label(imported: ImportedGame, index: int) -> str:
@@ -3394,7 +3345,7 @@ def _build_game_brilliant_tracker(
     progress_callback: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     repertoire_watchlist = _build_repertoire_brilliant_watchlist(lessons)
-    live_budget = [max(BRILLIANT_TRACKER_LIVE_BUDGET, min(900, len(games) * 2))]
+    live_budget = [-1 if BRILLIANT_TRACKER_LIVE_BUDGET <= 0 else max(BRILLIANT_TRACKER_LIVE_BUDGET, min(900, len(games) * 2))]
     budget_lock = threading.Lock()
     brilliant_moves: list[dict[str, Any]] = []
     brilliant_games: list[dict[str, Any]] = []
@@ -3407,8 +3358,13 @@ def _build_game_brilliant_tracker(
     candidate_live_hits = 0
     played_cache_hits = 0
     played_live_hits = 0
+    not_top_candidate_moves = 0
     skipped_live_budget = 0
     unclassified_moves = 0
+    total_game_moves = 0
+    player_moves_total = 0
+    opponent_moves_ignored = 0
+    moves_outside_scan_window = 0
 
     def notify(**patch: Any) -> None:
         if not progress_callback:
@@ -3441,8 +3397,13 @@ def _build_game_brilliant_tracker(
         local_candidate_live_hits = 0
         local_played_cache_hits = 0
         local_played_live_hits = 0
+        local_not_top_candidate_moves = 0
         local_skipped_live_budget = 0
         local_unclassified_moves = 0
+        local_total_game_moves = 0
+        local_player_moves_total = 0
+        local_opponent_moves_ignored = 0
+        local_moves_outside_scan_window = 0
         played_on = _parse_game_date(imported)
         result_key = _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color)
         opponent = imported.opponent or ("Black" if player_color == "white" else "White")
@@ -3458,7 +3419,16 @@ def _build_game_brilliant_tracker(
             if move not in board.legal_moves:
                 break
             san = board.san(move)
-            should_scan = board.turn == player_turn and ply_index <= BRILLIANT_TRACKER_MAX_PLIES
+            local_total_game_moves += 1
+            is_player_move = board.turn == player_turn
+            in_scan_window = _within_brilliant_scan_window(ply_index)
+            if is_player_move:
+                local_player_moves_total += 1
+            else:
+                local_opponent_moves_ignored += 1
+            if is_player_move and not in_scan_window:
+                local_moves_outside_scan_window += 1
+            should_scan = is_player_move and in_scan_window
             if should_scan:
                 local_moves_scanned += 1
                 played_uci = move.uci()
@@ -3487,12 +3457,17 @@ def _build_game_brilliant_tracker(
                     local_played_cache_hits += 1
                 elif classification_source == "played_live":
                     local_played_live_hits += 1
+                elif classification_source == "not_top_candidate":
+                    local_not_top_candidate_moves += 1
                 elif classification_source == "budget_exhausted":
                     local_skipped_live_budget += 1
                 key = _classification_key(classification)
                 if key:
                     local_classified_moves += 1
                     local_counts[key] += 1
+                elif classification_source == "not_top_candidate":
+                    local_classified_moves += 1
+                    local_counts["not_brilliant"] += 1
                 else:
                     local_unclassified_moves += 1
                 if key == "brilliant":
@@ -3566,14 +3541,20 @@ def _build_game_brilliant_tracker(
             "candidate_live_hits": local_candidate_live_hits,
             "played_cache_hits": local_played_cache_hits,
             "played_live_hits": local_played_live_hits,
+            "not_top_candidate_moves": local_not_top_candidate_moves,
             "skipped_live_budget": local_skipped_live_budget,
             "unclassified_moves": local_unclassified_moves,
+            "total_game_moves": local_total_game_moves,
+            "player_moves_total": local_player_moves_total,
+            "opponent_moves_ignored": local_opponent_moves_ignored,
+            "moves_outside_scan_window": local_moves_outside_scan_window,
         }
 
     def merge_scan_result(result: dict[str, Any]) -> None:
         nonlocal games_scanned, moves_scanned, classified_moves
         nonlocal candidate_cache_hits, candidate_live_hits, played_cache_hits, played_live_hits
-        nonlocal skipped_live_budget, unclassified_moves
+        nonlocal not_top_candidate_moves, skipped_live_budget, unclassified_moves
+        nonlocal total_game_moves, player_moves_total, opponent_moves_ignored, moves_outside_scan_window
         games_scanned += 1
         moves_scanned += int(result.get("moves_scanned", 0) or 0)
         classified_moves += int(result.get("classified_moves", 0) or 0)
@@ -3581,8 +3562,13 @@ def _build_game_brilliant_tracker(
         candidate_live_hits += int(result.get("candidate_live_hits", 0) or 0)
         played_cache_hits += int(result.get("played_cache_hits", 0) or 0)
         played_live_hits += int(result.get("played_live_hits", 0) or 0)
+        not_top_candidate_moves += int(result.get("not_top_candidate_moves", 0) or 0)
         skipped_live_budget += int(result.get("skipped_live_budget", 0) or 0)
         unclassified_moves += int(result.get("unclassified_moves", 0) or 0)
+        total_game_moves += int(result.get("total_game_moves", 0) or 0)
+        player_moves_total += int(result.get("player_moves_total", 0) or 0)
+        opponent_moves_ignored += int(result.get("opponent_moves_ignored", 0) or 0)
+        moves_outside_scan_window += int(result.get("moves_outside_scan_window", 0) or 0)
         counts.update(result.get("counts", Counter()))
         game_rows.append(result["game_row"])
         brilliant_moves.extend(result.get("brilliant_moves", []))
@@ -3602,11 +3588,15 @@ def _build_game_brilliant_tracker(
             brilliant_games_total=total_games,
             moves_scanned=moves_scanned,
             classified_moves=classified_moves,
+            player_moves_total=player_moves_total,
+            total_game_moves=total_game_moves,
+            opponent_moves_ignored=opponent_moves_ignored,
+            moves_outside_scan_window=moves_outside_scan_window,
             cache_hits=candidate_cache_hits + played_cache_hits,
             live_hits=candidate_live_hits + played_live_hits,
             eta_sec=round(eta, 1),
             items_per_second=round(rate, 2),
-            message=f"Scanning Brilliant moves {games_scanned}/{total_games} games with {scan_workers} workers...",
+            message=f"Scanning Brilliant candidates in your moves {games_scanned}/{total_games} games with {scan_workers} workers...",
         )
 
     if scan_workers > 1 and total_games > 1:
@@ -3634,18 +3624,23 @@ def _build_game_brilliant_tracker(
     classification_status = {
         "stored_with_profile": True,
         "classified_during_import": True,
-        "scope": "all imported games, player moves inside the opening window",
-        "scan_mode": "local engine/classifier only; PGN review annotations are ignored",
+        "scope": "all imported games, every move made by you",
+        "scan_mode": "Stockfish MultiPV top-line gate; PGN review annotations are ignored",
         "player_move_scope": "your moves only",
         "games_scanned": games_scanned,
         "moves_scanned": moves_scanned,
         "classified_moves": classified_moves,
+        "player_moves_total": player_moves_total,
+        "total_game_moves": total_game_moves,
+        "opponent_moves_ignored": opponent_moves_ignored,
+        "moves_outside_scan_window": moves_outside_scan_window,
         "cached_hits": cached_hits,
         "live_hits": live_hits,
         "candidate_cache_hits": candidate_cache_hits,
         "candidate_live_hits": candidate_live_hits,
         "played_cache_hits": played_cache_hits,
         "played_live_hits": played_live_hits,
+        "not_top_candidate_moves": not_top_candidate_moves,
         "skipped_live_budget": skipped_live_budget,
         "unclassified_moves": unclassified_moves,
         "remaining_live_budget": live_budget[0],
@@ -3666,12 +3661,17 @@ def _build_game_brilliant_tracker(
             "games_scanned": games_scanned,
             "moves_scanned": moves_scanned,
             "classified_moves": classified_moves,
+            "player_moves_total": player_moves_total,
+            "total_game_moves": total_game_moves,
+            "opponent_moves_ignored": opponent_moves_ignored,
+            "moves_outside_scan_window": moves_outside_scan_window,
             "cached_hits": cached_hits,
             "live_hits": live_hits,
             "candidate_cache_hits": candidate_cache_hits,
             "candidate_live_hits": candidate_live_hits,
             "played_cache_hits": played_cache_hits,
             "played_live_hits": played_live_hits,
+            "not_top_candidate_moves": not_top_candidate_moves,
             "skipped_live_budget": skipped_live_budget,
             "unclassified_moves": unclassified_moves,
             "scan_game_limit": "all",

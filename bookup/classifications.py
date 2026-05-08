@@ -677,6 +677,9 @@ def _consider_brilliant_classification(
     move_record: dict[str, Any],
     second_record: dict[str, Any] | None,
 ) -> bool:
+    if not _is_move_critical_candidate(board, move_record, second_record):
+        return False
+
     try:
         move = chess.Move.from_uci(str(move_record.get("uci", "") or ""))
     except ValueError:
@@ -689,6 +692,8 @@ def _consider_brilliant_classification(
     captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
     current_board = _board_after_move(board, move)
     if current_board is None:
+        return False
+    if current_board.is_checkmate():
         return False
 
     mover = board.turn
@@ -728,10 +733,9 @@ def _consider_brilliant_classification(
         )
         for unsafe_piece in unsafe_pieces
     )
-    if danger_levels_protected and not (sacrifice_capture or sacrifice_shape):
-        return False
-    tactical_resource_left = bool(unsafe_pieces) and not danger_levels_protected
-    if not _is_move_critical_candidate(board, move_record, second_record) and not (sacrifice_shape or tactical_resource_left):
+    # Match the wintrchess/Chess.com-style conservative gate: a Brilliant move
+    # leaves a real tactical resource invested, not a fully protected fake sac.
+    if danger_levels_protected:
         return False
 
     previous_trapped_pieces = [unsafe_piece for unsafe_piece in previous_unsafe_pieces if _is_piece_trapped(board, unsafe_piece)]
@@ -834,7 +838,7 @@ def base_classification_reason(key: str, *, best_move_san: str, move_san: str) -
     if key == "great":
         return "only move that keeps the advantage"
     if key == "brilliant":
-        return "critical move that keeps a tactical resource alive"
+        return "best move that keeps a tactical resource alive"
     if key == "miss":
         return "fails to convert the stronger continuation"
     if key == "book":
@@ -889,9 +893,11 @@ def classify_move_record(
     except ValueError:
         move = None
 
+    is_direct_checkmate = False
     if move is not None:
         checkmate_board = _board_after_move(board, move)
         if checkmate_board is not None and checkmate_board.is_checkmate():
+            is_direct_checkmate = True
             key = "best"
             reason = "engine top move"
 
@@ -901,9 +907,13 @@ def classify_move_record(
             key = "great"
             only_move_keeps_advantage = True
             reason = "only move that keeps the advantage"
-        if CLASSIFICATION_VALUES.get(key, 0) >= CLASSIFICATION_VALUES["good"] and _consider_brilliant_classification(board, move_record, second_record):
+        if (
+            not is_direct_checkmate
+            and CLASSIFICATION_VALUES.get(key, 0) >= CLASSIFICATION_VALUES["best"]
+            and _consider_brilliant_classification(board, move_record, second_record)
+        ):
             key = "brilliant"
-            reason = "critical move that keeps a tactical resource alive"
+            reason = "best move that keeps a tactical resource alive"
 
     return classification_payload(
         key,

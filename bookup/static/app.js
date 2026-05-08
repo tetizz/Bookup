@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 22;
+const PROFILE_SCHEMA_VERSION = 23;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -924,6 +924,10 @@ function stockfishStatsFromStatus(status) {
     brilliant_games_total: Number(status.brilliant_games_total ?? 0),
     brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
     brilliant_moves_classified: Number(status.classified_moves ?? 0),
+    brilliant_player_moves_total: Number(status.player_moves_total ?? status.moves_scanned ?? 0),
+    brilliant_total_game_moves: Number(status.total_game_moves ?? 0),
+    brilliant_opponent_moves_ignored: Number(status.opponent_moves_ignored ?? 0),
+    brilliant_moves_outside_scan_window: Number(status.moves_outside_scan_window ?? 0),
     engine_cache_hits: Number(status.cache_hits ?? 0),
     engine_live_hits: Number(status.live_hits ?? 0),
   };
@@ -955,7 +959,7 @@ function analysisWorkSummary(stats) {
   const scanDone = Number(stats.brilliant_games_done || 0);
   const scanTotal = Number(stats.brilliant_games_total || 0);
   const classified = Number(stats.brilliant_moves_classified || 0);
-  const scanned = Number(stats.brilliant_moves_scanned || 0);
+  const scanned = Number(stats.brilliant_player_moves_total || stats.brilliant_moves_scanned || 0);
   if (["loading_games", "fetch_archives", "fetch_games"].includes(phase)) {
     return gamesTotal ? `${gamesDone}/${gamesTotal} games` : "Loading games";
   }
@@ -988,8 +992,9 @@ function analysisPrimaryCard(stats) {
     const scanTotal = Number(stats.brilliant_games_total || 0);
     if (scanTotal) return ["Games scanned", `${scanDone}/${scanTotal}`];
     const scanned = Number(stats.brilliant_moves_scanned || 0);
+    const playerMoves = Number(stats.brilliant_player_moves_total || scanned || 0);
     const classified = Number(stats.brilliant_moves_classified || 0);
-    return ["Moves classified", scanned ? `${classified}/${scanned}` : "--"];
+    return ["Your moves", playerMoves ? `${classified}/${playerMoves}` : "--"];
   }
   return ["Positions/sec", formatRate(stats.positions_per_second)];
 }
@@ -1063,7 +1068,7 @@ function renderStockfishStats(stats, options = {}) {
     ["Threads", `${Number(stats.threads || 0)} total`],
     ["Hash budget", `${Number(stats.hash_mb || 0)} MB`],
     ["Depth / MultiPV", `${Number(stats.depth || 0)} / ${Number(stats.multipv || 0)}`],
-    ["Classified", `${Number(stats.brilliant_moves_classified || 0)}/${Number(stats.brilliant_moves_scanned || 0)}`],
+    ["Classified", `${Number(stats.brilliant_moves_classified || 0)}/${Number(stats.brilliant_player_moves_total || stats.brilliant_moves_scanned || 0)}`],
   ];
   node.className = live ? "engine-stats-live" : "stack stockfish-stats-panel";
   node.innerHTML = `
@@ -1629,7 +1634,7 @@ function renderBrilliantTracker(tracker) {
   const hasScanData = Boolean(progress?.available || Number(summary.games_scanned || 0) || Number(summary.moves_scanned || 0));
   if (!high.length && !watch.length && !games.length && !hasScanData) {
     el.brilliantTracker.className = "brilliant-tracker-panel empty";
-    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported games with cached Stockfish lines first, then spends a small live-analysis budget so imports stay fast.";
+    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported games with Stockfish MultiPV and only promotes moves that pass the current-position top-line gate.";
     return;
   }
   el.brilliantTracker.className = "brilliant-tracker-panel";
@@ -1638,7 +1643,7 @@ function renderBrilliantTracker(tracker) {
       <article><span>Total brilliants</span><strong>${Number(summary.total_brilliants || high.length)}</strong><p>Confirmed Brilliant moves found in your imported games.</p></article>
       <article><span>Games with brilliants</span><strong>${Number(summary.games_with_brilliants || games.length)}</strong><p>Imported games where at least one Brilliant appeared.</p></article>
       <article><span>Best game</span><strong>${bestGame ? `${Number(bestGame.brilliants || 0)}×` : "0×"}</strong><p>${escapeHtml(bestGame ? `${bestGame.opponent || "Opponent"} · ${bestGame.date_label || ""}` : "No Brilliant game found yet.")}</p></article>
-      <article><span>Scan coverage</span><strong>${Number(summary.classified_moves || 0)}/${Number(summary.moves_scanned || 0)}</strong><p>${Number(summary.games_scanned || 0)} games · ${Number(summary.cached_hits || 0)} cache hits · ${Number(summary.played_live_hits || 0)} direct played-move scans.</p></article>
+      <article><span>Your moves scanned</span><strong>${Number(summary.classified_moves || 0)}/${Number(summary.player_moves_total || summary.moves_scanned || 0)}</strong><p>${Number(summary.games_scanned || 0)} games · ${Number(summary.opponent_moves_ignored || 0)} opponent moves ignored · ${Number(summary.not_top_candidate_moves || 0)} ruled out outside MultiPV.</p></article>
     </div>
     ${renderBrilliantClassificationStatus(tracker)}
     ${renderBrilliantProgress(progress)}
@@ -1678,10 +1683,10 @@ function renderBrilliantClassificationStatus(tracker) {
       <div class="brilliant-scan-grid">
         <article><span>Stored</span><strong>${stored ? "Yes" : "No"}</strong><small>Profile cache payload</small></article>
         <article><span>Import pass</span><strong>${duringImport ? "Yes" : "No"}</strong><small>${escapeHtml(status.scope || "all imported games")}</small></article>
-        <article><span>Move scan</span><strong>${Number(status.classified_moves || summary.classified_moves || 0)}/${Number(status.moves_scanned || summary.moves_scanned || 0)}</strong><small>${Number(status.games_scanned || summary.games_scanned || 0)} games scanned</small></article>
+        <article><span>Your move scan</span><strong>${Number(status.classified_moves || summary.classified_moves || 0)}/${Number(status.player_moves_total || summary.player_moves_total || status.moves_scanned || summary.moves_scanned || 0)}</strong><small>${Number(status.total_game_moves || summary.total_game_moves || 0)} total game moves seen</small></article>
         <article><span>Candidate cache/live</span><strong>${Number(status.candidate_cache_hits || summary.candidate_cache_hits || 0)}/${Number(status.candidate_live_hits || summary.candidate_live_hits || 0)}</strong><small>top-line cache / live</small></article>
-        <article><span>Played cache/live</span><strong>${Number(status.played_cache_hits || summary.played_cache_hits || 0)}/${Number(status.played_live_hits || summary.played_live_hits || 0)}</strong><small>actual move cache / live</small></article>
-        <article><span>Skipped</span><strong>${Number(status.skipped_live_budget || summary.skipped_live_budget || 0)}</strong><small>live budget skips</small></article>
+        <article><span>Ruled out</span><strong>${Number(status.not_top_candidate_moves || summary.not_top_candidate_moves || 0)}</strong><small>not in current top MultiPV</small></article>
+        <article><span>Engine skips</span><strong>${Number(status.skipped_live_budget || summary.skipped_live_budget || 0)}</strong><small>positions without candidate lines</small></article>
         <article><span>Depth</span><strong>${Number(engine.depth || 0) || "--"}</strong><small>Stockfish depth</small></article>
         <article><span>MultiPV</span><strong>${Number(engine.multipv || 0) || "--"}</strong><small>candidate lines</small></article>
         <article><span>Think time</span><strong>${engine.think_time_sec == null ? "--" : `${Number(engine.think_time_sec)}s`}</strong><small>per live scan</small></article>
