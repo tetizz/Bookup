@@ -158,6 +158,10 @@ class EnginePool:
         self._available: Queue[EngineSession] = Queue()
         self._sessions: list[EngineSession] = []
         self._open_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
+        self._active_jobs = 0
+        self._jobs_started = 0
+        self._jobs_completed = 0
         self._closed = False
 
     def __enter__(self) -> "EnginePool":
@@ -220,6 +224,14 @@ class EnginePool:
                 pids.append(pid)
         return pids
 
+    def runtime_stats(self) -> dict[str, int]:
+        with self._stats_lock:
+            return {
+                "active_workers": self._active_jobs,
+                "jobs_started": self._jobs_started,
+                "jobs_completed": self._jobs_completed,
+            }
+
     def analyse(
         self,
         board: chess.Board,
@@ -232,8 +244,14 @@ class EnginePool:
             raise RuntimeError("Stockfish pool is closed.")
         session = self._available.get()
         try:
+            with self._stats_lock:
+                self._active_jobs += 1
+                self._jobs_started += 1
             return session.analyse(board, depth=depth, multipv=multipv, time_sec=time_sec)
         finally:
+            with self._stats_lock:
+                self._active_jobs = max(0, self._active_jobs - 1)
+                self._jobs_completed += 1
             if self._closed:
                 session.close()
             else:

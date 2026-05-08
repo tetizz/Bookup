@@ -925,16 +925,23 @@ function renderStockfishStats(stats, options = {}) {
   const cpu = stats.cpu_percent == null ? stats.cpu_budget_percent : stats.cpu_percent;
   const cpuLabel = stats.cpu_percent == null ? "CPU budget" : "CPU now";
   const memory = Number(stats.memory_mb || 0);
+  const freeMemory = Number(stats.system_available_ram_mb || 0);
+  const totalMemory = Number(stats.system_ram_mb || 0);
+  const activeWorkers = Number(stats.active_workers || 0);
+  const workers = Number(stats.workers || 1);
   const memoryText = memory > 0
     ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
     : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
+  const hashLimit = Number(stats.hash_limit_mb || 0);
   const cards = [
     ["Positions/sec", formatRate(stats.positions_per_second)],
     ["ETA", Number(stats.eta_sec || 0) > 0 ? formatDuration(stats.eta_sec) : "Done"],
     [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
     ["Memory", memoryText],
-    ["Workers", Number(stats.workers || 1)],
+    ["Active workers", `${activeWorkers}/${workers}`],
+    ["Workers", workers],
     ["Threads", `${Number(stats.threads || 0)} total`],
+    ["Hash budget", `${Number(stats.hash_mb || 0)} MB`],
     ["Depth / MultiPV", `${Number(stats.depth || 0)} / ${Number(stats.multipv || 0)}`],
     ["Classified", `${Number(stats.brilliant_moves_classified || 0)}/${Number(stats.brilliant_moves_scanned || 0)}`],
   ];
@@ -948,7 +955,11 @@ function renderStockfishStats(stats, options = {}) {
     <div class="speed-grid stockfish-speed-grid">
       ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}
     </div>
-    <div class="line-note">Elapsed ${formatDuration(stats.elapsed_sec)} · ${Number(stats.worker_threads || 0)} thread${Number(stats.worker_threads || 0) === 1 ? "" : "s"} per worker · ${Number(stats.worker_hash_mb || 0)} MB hash per worker.</div>
+    <div class="line-note">
+      Elapsed ${formatDuration(stats.elapsed_sec)} · ${Number(stats.worker_threads || 0)} thread${Number(stats.worker_threads || 0) === 1 ? "" : "s"} per worker · ${Number(stats.worker_hash_mb || 0)} MB hash per worker.
+      ${freeMemory ? ` Windows reports ${Math.round(freeMemory)} MB free${totalMemory ? ` of ${Math.round(totalMemory)} MB` : ""}.` : ""}
+      ${hashLimit ? ` Safe hash ceiling: ${hashLimit} MB.` : ""}
+    </div>
   `;
 }
 
@@ -970,7 +981,13 @@ async function pollAnalysisStatus() {
       setProgress(Number(status.progress || 0), status.message || "", {
         indeterminate: Number(status.progress || 0) >= 96,
       });
-    } else if (state.analysisStatusTimer && Date.now() - state.analysisStatusPollStartedAt > 2500) {
+    } else if (
+      state.analysisStatusTimer
+      && Date.now() - state.analysisStatusPollStartedAt > 2500
+      && !state.analysisProgressTimer
+      && !el.analyze?.disabled
+      && !el.importPgn?.disabled
+    ) {
       stopAnalysisStatusPolling();
       renderStockfishStats(stats, { live: true });
     }

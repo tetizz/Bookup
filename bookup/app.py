@@ -34,8 +34,9 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 20
-ENGINE_DEFAULTS_VERSION = 3
+PROFILE_SCHEMA_VERSION = 21
+GAMES_CACHE_SCHEMA_VERSION = 20
+ENGINE_DEFAULTS_VERSION = 4
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
@@ -46,6 +47,8 @@ ANALYSIS_STATUS: dict[str, object] = {
     "progress": 0,
     "message": "Ready.",
 }
+ANALYSIS_STATUS_SETTINGS: EngineSettings | None = None
+ANALYSIS_STATUS_ENGINE: EnginePool | None = None
 CPU_SAMPLES: dict[int, tuple[float, float]] = {}
 
 app = Flask(
@@ -68,28 +71,57 @@ def save_config(payload: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def system_total_ram_mb() -> int:
-    try:
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
+class MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
 
+
+def system_memory_snapshot() -> dict[str, int]:
+    try:
         status = MEMORYSTATUSEX()
         status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            return max(1024, int(status.ullTotalPhys // (1024 * 1024)))
+            return {
+                "total_mb": max(1024, int(status.ullTotalPhys // (1024 * 1024))),
+                "available_mb": max(0, int(status.ullAvailPhys // (1024 * 1024))),
+                "load_percent": max(0, min(100, int(status.dwMemoryLoad))),
+            }
     except Exception:
         pass
-    return 16384
+    return {"total_mb": 16384, "available_mb": 8192, "load_percent": 50}
+
+
+def system_total_ram_mb() -> int:
+    return int(system_memory_snapshot()["total_mb"])
+
+
+def system_available_ram_mb() -> int:
+    return int(system_memory_snapshot()["available_mb"])
+
+
+def safe_stockfish_hash_limit_mb() -> int:
+    """Upper bound for the total Stockfish hash budget across all workers.
+
+    Hash is split between workers by EnginePool. Keep a generous but safe reserve
+    for Windows, the browser/webview, and Python so a huge manual value does not
+    push the machine into paging.
+    """
+    snapshot = system_memory_snapshot()
+    total_mb = max(1024, int(snapshot["total_mb"]))
+    available_mb = max(1024, int(snapshot["available_mb"]))
+    reserved_mb = max(8192, int(total_mb * 0.10))
+    available_limited = max(512, available_mb - reserved_mb)
+    total_limited = max(512, int(total_mb * 0.80))
+    return max(512, (min(available_limited, total_limited) // 128) * 128)
 
 
 CPU_THREADS = max(1, os.cpu_count() or 8)
@@ -182,6 +214,8 @@ def _process_cpu_seconds(pid: int) -> float | None:
 def engine_resource_snapshot(settings: EngineSettings, engine: EnginePool | None) -> dict[str, object]:
     pids = engine.worker_pids() if engine is not None and hasattr(engine, "worker_pids") else []
     memory_values = [value for pid in pids if (value := _process_memory_mb(pid)) is not None]
+    runtime = engine.runtime_stats() if engine is not None and hasattr(engine, "runtime_stats") else {}
+    memory_snapshot = system_memory_snapshot()
     now = time.monotonic()
     cpu_delta = 0.0
     wall_delta = 0.0
@@ -210,11 +244,15 @@ def engine_resource_snapshot(settings: EngineSettings, engine: EnginePool | None
     memory_mb = round(sum(memory_values), 1) if memory_values else 0.0
     return {
         "workers": workers,
+        "active_workers": int(runtime.get("active_workers", 0) or 0),
+        "jobs_started": int(runtime.get("jobs_started", 0) or 0),
+        "jobs_completed": int(runtime.get("jobs_completed", 0) or 0),
         "worker_pids": pids,
         "threads": int(settings.threads),
         "worker_threads": max(1, int(settings.threads) // workers),
         "hash_mb": int(settings.hash_mb),
         "worker_hash_mb": max(128, int(settings.hash_mb) // workers),
+        "hash_limit_mb": safe_stockfish_hash_limit_mb(),
         "multipv": int(settings.multipv),
         "depth": int(settings.depth),
         "think_time_sec": float(settings.think_time_sec),
@@ -223,14 +261,18 @@ def engine_resource_snapshot(settings: EngineSettings, engine: EnginePool | None
         "memory_mb": memory_mb,
         "estimated_hash_mb": int(settings.hash_mb),
         "system_threads": CPU_THREADS,
-        "system_ram_mb": TOTAL_RAM_MB,
+        "system_ram_mb": int(memory_snapshot["total_mb"]),
+        "system_available_ram_mb": int(memory_snapshot["available_mb"]),
+        "system_memory_load_percent": int(memory_snapshot["load_percent"]),
     }
 
 
 def reset_analysis_status(kind: str, username: str, settings: EngineSettings, engine: EnginePool | None) -> None:
-    global ANALYSIS_STATUS
+    global ANALYSIS_STATUS, ANALYSIS_STATUS_SETTINGS, ANALYSIS_STATUS_ENGINE
     now = time.monotonic()
     with ANALYSIS_STATUS_LOCK:
+        ANALYSIS_STATUS_SETTINGS = settings
+        ANALYSIS_STATUS_ENGINE = engine
         ANALYSIS_STATUS = {
             "active": True,
             "kind": kind,
@@ -254,9 +296,14 @@ def update_analysis_status(
     engine: EnginePool | None = None,
     **patch: object,
 ) -> None:
+    global ANALYSIS_STATUS_SETTINGS, ANALYSIS_STATUS_ENGINE
     with ANALYSIS_STATUS_LOCK:
         if not ANALYSIS_STATUS:
             return
+        if settings is not None:
+            ANALYSIS_STATUS_SETTINGS = settings
+        if engine is not None:
+            ANALYSIS_STATUS_ENGINE = engine
         ANALYSIS_STATUS.update({key: value for key, value in patch.items() if value is not None})
         now = time.monotonic()
         started = float(ANALYSIS_STATUS.get("started_at", now) or now)
@@ -268,8 +315,10 @@ def update_analysis_status(
             ANALYSIS_STATUS["positions_per_second"] = round(rate, 2)
             ANALYSIS_STATUS["eta_sec"] = round(max(0.0, (total - done) / rate), 1) if total > done and rate > 0 else 0
         ANALYSIS_STATUS["elapsed_sec"] = round(elapsed, 1)
-        if settings is not None:
-            ANALYSIS_STATUS["resources"] = engine_resource_snapshot(settings, engine)
+        current_settings = settings or ANALYSIS_STATUS_SETTINGS
+        current_engine = engine or ANALYSIS_STATUS_ENGINE
+        if current_settings is not None:
+            ANALYSIS_STATUS["resources"] = engine_resource_snapshot(current_settings, current_engine)
 
 
 def finish_analysis_status(*, ok: bool, message: str = "") -> None:
@@ -285,14 +334,22 @@ def finish_analysis_status(*, ok: bool, message: str = "") -> None:
 
 def analysis_status_payload() -> dict[str, object]:
     with ANALYSIS_STATUS_LOCK:
-        return dict(ANALYSIS_STATUS)
+        settings = ANALYSIS_STATUS_SETTINGS
+        engine = ANALYSIS_STATUS_ENGINE
+        payload = dict(ANALYSIS_STATUS)
+    if settings is not None:
+        payload["resources"] = engine_resource_snapshot(settings, engine)
+    return payload
 
 
 def recommended_engine_defaults() -> dict:
     # Strong live-analysis defaults without making imports painfully expensive.
-    raw_hash = max(2048, min(4096, TOTAL_RAM_MB // 8))
-    hash_mb = max(2048, (raw_hash // 128) * 128)
-    workers = max(1, min(4, CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
+    # The hash value is a total budget; EnginePool divides it between workers.
+    snapshot = system_memory_snapshot()
+    safe_hash = safe_stockfish_hash_limit_mb()
+    preferred_hash = max(2048, int(snapshot["available_mb"] * 0.45))
+    hash_mb = max(2048, (min(safe_hash, preferred_hash) // 128) * 128)
+    workers = max(1, min(6, CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
     return {
         "depth": 26,
         "threads": max(1, min(CPU_THREADS, 16)),
@@ -330,14 +387,24 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         think_time_sec = float(payload.get("think_time_sec", defaults["think_time_sec"]) or 0)
     except (TypeError, ValueError):
         think_time_sec = float(defaults["think_time_sec"])
+    try:
+        parallel_workers = int(payload.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"])
+    except (TypeError, ValueError):
+        parallel_workers = int(defaults["parallel_workers"])
+    parallel_workers = max(1, min(6, parallel_workers))
+    try:
+        requested_hash_mb = int(payload.get("hash_mb", defaults["hash_mb"]))
+    except (TypeError, ValueError):
+        requested_hash_mb = int(defaults["hash_mb"])
+    hash_mb = max(256, min(safe_stockfish_hash_limit_mb(), requested_hash_mb))
     return EngineSettings(
         path=engine_path,
         depth=max(10, min(30, int(payload.get("depth", defaults["depth"])))),
         threads=max(1, min(CPU_THREADS, int(payload.get("threads", defaults["threads"])))),
-        hash_mb=max(256, min(4096, int(payload.get("hash_mb", defaults["hash_mb"])))),
+        hash_mb=hash_mb,
         multipv=max(1, min(10, int(payload.get("multipv", defaults["multipv"])))),
         think_time_sec=max(0.0, min(60.0, think_time_sec)),
-        parallel_workers=max(1, min(6, int(payload.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"]))),
+        parallel_workers=parallel_workers,
     )
 
 
@@ -460,7 +527,7 @@ def game_request_key(
 ) -> str:
     return json.dumps(
         {
-            "schema_version": PROFILE_SCHEMA_VERSION,
+            "schema_version": GAMES_CACHE_SCHEMA_VERSION,
             "username": username,
             "time_classes": sorted(normalized_time_classes),
             "max_games": 0 if max_games is None else max_games,
@@ -936,43 +1003,85 @@ def profile() -> tuple:
             )
         )
 
+    try:
+        engine = shared_engine_for(settings)
+        reset_analysis_status("profile", username, settings, engine)
+        update_analysis_status(
+            settings=settings,
+            engine=engine,
+            phase="loading_games",
+            progress=5,
+            message="Loading saved games or checking Chess.com archives...",
+        )
+    except FileNotFoundError:
+        finish_analysis_status(ok=False, message="The Stockfish executable could not be opened.")
+        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
+
     archives_found = int(snapshot.get("archives_found", 0) or 0)
     archive_urls = list(snapshot.get("archive_urls", []) or [])
     reused_games = False
     if (
         not force_refresh
         and
-        keyed_games_schema >= PROFILE_SCHEMA_VERSION
+        keyed_games_schema >= GAMES_CACHE_SCHEMA_VERSION
         and keyed_games
     ):
         games = deserialize_games(list(keyed_games))
         archives_found = keyed_archives_found
         archive_urls = list(keyed_games_cache.get("archive_urls", []) or archive_urls)
         reused_games = bool(games)
+        update_analysis_status(
+            settings=settings,
+            engine=engine,
+            phase="loading_games",
+            progress=12,
+            message=f"Reusing {len(games)} saved games from the local cache...",
+        )
     elif (
         not force_refresh
         and
-        cached_schema >= PROFILE_SCHEMA_VERSION
+        cached_schema >= GAMES_CACHE_SCHEMA_VERSION
         and cached_games_request_key == games_cache_key
         and cached_games
     ):
         games = deserialize_games(list(cached_games))
         reused_games = bool(games)
+        update_analysis_status(
+            settings=settings,
+            engine=engine,
+            phase="loading_games",
+            progress=12,
+            message=f"Reusing {len(games)} saved games from the local cache...",
+        )
     else:
         try:
+            update_analysis_status(
+                settings=settings,
+                engine=engine,
+                phase="fetch_archives",
+                progress=8,
+                message="Fetching Chess.com archive list...",
+            )
             archives = fetch_archives(username)
+            update_analysis_status(
+                settings=settings,
+                engine=engine,
+                phase="fetch_games",
+                progress=12,
+                message=f"Importing {raw_time_classes or 'all'} Chess.com games...",
+            )
             games = fetch_games(username, normalized_time_classes, max_games, archives=archives)
             archives_found = len(archives)
             archive_urls = archives
         except Exception as exc:
+            finish_analysis_status(ok=False, message=f"Could not import Chess.com games: {exc}")
             return jsonify({"error": f"Could not import Chess.com games: {exc}"}), 502
 
     if not games:
+        finish_analysis_status(ok=False, message="No matching public games were found.")
         return jsonify({"error": "No matching public games were found for that username and time control."}), 404
 
     try:
-        engine = shared_engine_for(settings)
-        reset_analysis_status("profile", username, settings, engine)
         profile_data = analyse_games(
             games,
             engine,
@@ -991,7 +1100,7 @@ def profile() -> tuple:
         username,
         games_cache_key,
         {
-            "schema_version": PROFILE_SCHEMA_VERSION,
+            "schema_version": GAMES_CACHE_SCHEMA_VERSION,
             "archives_found": archives_found,
             "archive_urls": archive_urls,
             "games_imported": len(games),
