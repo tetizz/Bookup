@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 import json
 import math
+import threading
 import time
 from statistics import mean
 from typing import Any, Callable
@@ -24,6 +25,7 @@ from .classifications import (
     annotate_candidate_classifications,
     book_classification_payload,
     classify_move_record,
+    classification_payload,
     expected_points_from_evaluation,
 )
 from .engine import EngineSession
@@ -50,11 +52,11 @@ REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
-ENGINE_CACHE_SCHEMA_VERSION = 3
+ENGINE_CACHE_SCHEMA_VERSION = 7
 BRILLIANT_TRACKER_GAME_LIMIT = 0
-BRILLIANT_TRACKER_MAX_PLIES = 48
+BRILLIANT_TRACKER_MAX_PLIES = 120
 BRILLIANT_TRACKER_LIVE_BUDGET = 220
-BRILLIANT_TRACKER_TIME_SEC = 0.22
+BRILLIANT_TRACKER_TIME_SEC = 0.8
 
 
 @dataclass(slots=True)
@@ -1375,6 +1377,7 @@ def _candidate_lines_for_board(
     play_uci: list[str] | None = None,
     limit: int = 5,
     time_sec: float | None = None,
+    include_database: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
     play_uci = play_uci or []
     cache_key = _engine_cache_key(
@@ -1384,6 +1387,7 @@ def _candidate_lines_for_board(
         play_uci=play_uci,
         limit=limit,
         time_sec=time_sec,
+        extra={"include_database": bool(include_database)},
     )
     cached = _load_engine_cache(cache_key)
     if cached:
@@ -1414,7 +1418,7 @@ def _candidate_lines_for_board(
         multipv=max(limit, engine.settings.multipv),
         time_sec=time_sec,
     )
-    database_moves = _database_moves(board, play_uci, limit=limit + 1)
+    database_moves = _database_moves(board, play_uci, limit=limit + 1) if include_database else []
     popularity_by_uci = {
         str(item.get("uci", "")): float(item.get("popularity", 0.0) or 0.0)
         for item in database_moves
@@ -2988,6 +2992,19 @@ def _classification_key(record: dict[str, Any] | None) -> str:
     return str((record or {}).get("key") or (record or {}).get("label") or "").strip().lower()
 
 
+def _node_has_chesscom_brilliant_annotation(node: Any) -> bool:
+    """Detect Chess.com review Brilliant marks preserved in imported PGN nodes."""
+
+    nags = getattr(node, "nags", set()) or set()
+    try:
+        if 3 in nags:  # PGN $3 / "!!"
+            return True
+    except TypeError:
+        pass
+    comment = str(getattr(node, "comment", "") or "").lower()
+    return "type;brilliant" in comment or "classification=brilliant" in comment or "$3" in comment
+
+
 def _build_repertoire_brilliant_watchlist(lessons: list[dict[str, Any]]) -> dict[str, Any]:
     watchlist: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
@@ -3062,6 +3079,7 @@ def _cached_candidate_lines_for_brilliant_scan(
     engine: EngineSession,
     *,
     live_budget: list[int],
+    budget_lock: threading.Lock | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
     cache_key = _engine_cache_key(
         "candidate-lines",
@@ -3070,21 +3088,35 @@ def _cached_candidate_lines_for_brilliant_scan(
         play_uci=[],
         limit=5,
         time_sec=BRILLIANT_TRACKER_TIME_SEC,
+        extra={"include_database": False},
     )
     cached = _load_engine_cache(cache_key)
     if cached:
         return list(cached.get("candidate_lines", [])), list(cached.get("database_moves", [])), True
-    if live_budget[0] <= 0:
+    if not _take_brilliant_live_budget(live_budget, budget_lock):
         return [], [], False
-    live_budget[0] -= 1
     candidate_lines, database_moves, _cache_hit = _candidate_lines_for_board(
         board,
         engine,
         play_uci=[],
         limit=5,
         time_sec=BRILLIANT_TRACKER_TIME_SEC,
+        include_database=False,
     )
     return candidate_lines, database_moves, False
+
+
+def _take_brilliant_live_budget(live_budget: list[int], budget_lock: threading.Lock | None = None) -> bool:
+    def take() -> bool:
+        if live_budget[0] <= 0:
+            return False
+        live_budget[0] -= 1
+        return True
+
+    if budget_lock is None:
+        return take()
+    with budget_lock:
+        return take()
 
 
 def _played_move_classification_for_brilliant_scan(
@@ -3097,6 +3129,7 @@ def _played_move_classification_for_brilliant_scan(
     database_moves: list[dict[str, Any]],
     engine: EngineSession,
     live_budget: list[int],
+    budget_lock: threading.Lock | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     """Classify the actual played move, even when it is not a top cached line.
 
@@ -3127,9 +3160,8 @@ def _played_move_classification_for_brilliant_scan(
         classification = played_line.get("classification")
         return played_line, classification if isinstance(classification, dict) else None, "played_cache"
 
-    if live_budget[0] <= 0:
+    if not _take_brilliant_live_budget(live_budget, budget_lock):
         return None, None, "budget_exhausted"
-    live_budget[0] -= 1
 
     played_line = _build_branch_line(
         board,
@@ -3376,6 +3408,7 @@ def _build_game_brilliant_tracker(
 ) -> dict[str, Any]:
     repertoire_watchlist = _build_repertoire_brilliant_watchlist(lessons)
     live_budget = [max(BRILLIANT_TRACKER_LIVE_BUDGET, min(900, len(games) * 2))]
+    budget_lock = threading.Lock()
     brilliant_moves: list[dict[str, Any]] = []
     brilliant_games: list[dict[str, Any]] = []
     game_rows: list[dict[str, Any]] = []
@@ -3402,55 +3435,98 @@ def _build_game_brilliant_tracker(
         return (_parse_game_date(imported) or date.min, _parse_game_time_seconds(imported))
 
     ordered_games = sorted(games, key=sort_date_key, reverse=True)
-    for game_index, imported in enumerate(ordered_games, start=1):
+    scan_started = time.perf_counter()
+    total_games = len(ordered_games)
+    configured_workers = max(1, int(getattr(engine, "worker_count", 1) or 1))
+    scan_workers = max(1, min(configured_workers, total_games or 1))
+
+    def scan_game(game_index: int, imported: ImportedGame) -> dict[str, Any]:
         player_color = imported.player_color if imported.player_color in {"white", "black"} else "white"
         player_turn = chess.WHITE if player_color == "white" else chess.BLACK
         board = imported.game.board()
         path_san: list[str] = []
         path_uci: list[str] = []
         game_brilliants: list[dict[str, Any]] = []
+        local_counts: Counter[str] = Counter()
+        local_moves_scanned = 0
+        local_classified_moves = 0
+        local_candidate_cache_hits = 0
+        local_candidate_live_hits = 0
+        local_played_cache_hits = 0
+        local_played_live_hits = 0
+        local_skipped_live_budget = 0
+        local_unclassified_moves = 0
         played_on = _parse_game_date(imported)
         result_key = _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color)
         opponent = imported.opponent or ("Black" if player_color == "white" else "White")
         game_id = _game_url_label(imported, game_index)
         date_label = _game_date_label(imported, game_index)
         time_class = imported.time_class or "unknown"
-        games_scanned += 1
-        for ply_index, move in enumerate(imported.game.mainline_moves(), start=1):
+        node = imported.game
+        ply_index = 0
+        while node.variations:
+            child = node.variation(0)
+            move = child.move
+            ply_index += 1
             if move not in board.legal_moves:
                 break
             san = board.san(move)
-            should_scan = board.turn == player_turn and ply_index <= BRILLIANT_TRACKER_MAX_PLIES
+            has_review_brilliant = _node_has_chesscom_brilliant_annotation(child)
+            should_scan = board.turn == player_turn and (
+                ply_index <= BRILLIANT_TRACKER_MAX_PLIES or has_review_brilliant
+            )
             if should_scan:
-                moves_scanned += 1
-                candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(board, engine, live_budget=live_budget)
-                if from_cache:
-                    candidate_cache_hits += 1
-                elif candidate_lines:
-                    candidate_live_hits += 1
+                local_moves_scanned += 1
                 played_uci = move.uci()
-                played_line, classification, classification_source = _played_move_classification_for_brilliant_scan(
-                    board,
-                    move,
-                    san,
-                    path_uci=list(path_uci),
-                    candidate_lines=candidate_lines,
-                    database_moves=database_moves,
-                    engine=engine,
-                    live_budget=live_budget,
-                )
-                if classification_source == "played_cache":
-                    played_cache_hits += 1
-                elif classification_source == "played_live":
-                    played_live_hits += 1
-                elif classification_source == "budget_exhausted":
-                    skipped_live_budget += 1
+                if has_review_brilliant:
+                    played_line = {
+                        "uci": played_uci,
+                        "move": san,
+                        "san": san,
+                        "line_san": san,
+                    }
+                    classification = classification_payload(
+                        "brilliant",
+                        loss=0.0,
+                        expected_points=1.0,
+                        reason="Chess.com review marked this move Brilliant",
+                        is_real_piece_sacrifice=True,
+                    )
+                    classification_source = "pgn_brilliant"
+                else:
+                    candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(
+                        board,
+                        engine,
+                        live_budget=live_budget,
+                        budget_lock=budget_lock,
+                    )
+                    if from_cache:
+                        local_candidate_cache_hits += 1
+                    elif candidate_lines:
+                        local_candidate_live_hits += 1
+                    played_line, classification, classification_source = _played_move_classification_for_brilliant_scan(
+                        board,
+                        move,
+                        san,
+                        path_uci=list(path_uci),
+                        candidate_lines=candidate_lines,
+                        database_moves=database_moves,
+                        engine=engine,
+                        live_budget=live_budget,
+                        budget_lock=budget_lock,
+                    )
+                    if classification_source == "played_cache":
+                        local_played_cache_hits += 1
+                    elif classification_source == "played_live":
+                        local_played_live_hits += 1
+                    elif classification_source == "budget_exhausted":
+                        local_skipped_live_budget += 1
                 key = _classification_key(classification)
                 if key:
-                    classified_moves += 1
-                    counts[key] += 1
+                    local_classified_moves += 1
+                    local_counts[key] += 1
                 else:
-                    unclassified_moves += 1
+                    local_unclassified_moves += 1
                 if key == "brilliant":
                     before_path = list(path_san)
                     item = {
@@ -3475,33 +3551,31 @@ def _build_game_brilliant_tracker(
                         "expected_points": float((classification or {}).get("expected_points", (played_line or {}).get("expected_points", 0.5)) or 0.5),
                         "classification_source": classification_source,
                     }
-                    brilliant_moves.append(item)
                     game_brilliants.append(item)
             board.push(move)
             path_san.append(san)
             path_uci.append(move.uci())
-            if ply_index >= BRILLIANT_TRACKER_MAX_PLIES:
-                break
+            node = child
 
-        if game_index == 1 or game_index % 10 == 0 or game_index == len(ordered_games):
-            notify(
-                phase="brilliant_scan",
-                progress=min(98, 80 + int((game_index / max(1, len(ordered_games))) * 18)),
-                brilliant_games_done=game_index,
-                brilliant_games_total=len(ordered_games),
-                moves_scanned=moves_scanned,
-                classified_moves=classified_moves,
-                cache_hits=candidate_cache_hits + played_cache_hits,
-                live_hits=candidate_live_hits + played_live_hits,
-                message=f"Scanning Brilliant moves {game_index}/{len(ordered_games)} games...",
-            )
-
-        game_rows.append(
-            {
-                "source_index": game_index,
+        game_row = {
+            "source_index": game_index,
+            "game_id": game_id,
+            "game_url": imported.url,
+            "date_obj": played_on,
+            "date": played_on.isoformat() if played_on else "",
+            "date_label": date_label,
+            "time_class": time_class,
+            "result": result_key,
+            "opponent": opponent,
+            "player_color": player_color,
+            "brilliants": len(game_brilliants),
+            "pgn_path": game_brilliants[-1].get("pgn_path", "") if game_brilliants else " ".join(path_san[:12]),
+        }
+        brilliant_game = None
+        if game_brilliants:
+            brilliant_game = {
                 "game_id": game_id,
                 "game_url": imported.url,
-                "date_obj": played_on,
                 "date": played_on.isoformat() if played_on else "",
                 "date_label": date_label,
                 "time_class": time_class,
@@ -3509,25 +3583,79 @@ def _build_game_brilliant_tracker(
                 "opponent": opponent,
                 "player_color": player_color,
                 "brilliants": len(game_brilliants),
-                "pgn_path": game_brilliants[-1].get("pgn_path", "") if game_brilliants else " ".join(path_san[:12]),
+                "moves": game_brilliants[:6],
+                "pgn_path": game_brilliants[-1].get("pgn_path", ""),
             }
+        return {
+            "game_index": game_index,
+            "game_row": game_row,
+            "brilliant_game": brilliant_game,
+            "brilliant_moves": game_brilliants,
+            "counts": local_counts,
+            "moves_scanned": local_moves_scanned,
+            "classified_moves": local_classified_moves,
+            "candidate_cache_hits": local_candidate_cache_hits,
+            "candidate_live_hits": local_candidate_live_hits,
+            "played_cache_hits": local_played_cache_hits,
+            "played_live_hits": local_played_live_hits,
+            "skipped_live_budget": local_skipped_live_budget,
+            "unclassified_moves": local_unclassified_moves,
+        }
+
+    def merge_scan_result(result: dict[str, Any]) -> None:
+        nonlocal games_scanned, moves_scanned, classified_moves
+        nonlocal candidate_cache_hits, candidate_live_hits, played_cache_hits, played_live_hits
+        nonlocal skipped_live_budget, unclassified_moves
+        games_scanned += 1
+        moves_scanned += int(result.get("moves_scanned", 0) or 0)
+        classified_moves += int(result.get("classified_moves", 0) or 0)
+        candidate_cache_hits += int(result.get("candidate_cache_hits", 0) or 0)
+        candidate_live_hits += int(result.get("candidate_live_hits", 0) or 0)
+        played_cache_hits += int(result.get("played_cache_hits", 0) or 0)
+        played_live_hits += int(result.get("played_live_hits", 0) or 0)
+        skipped_live_budget += int(result.get("skipped_live_budget", 0) or 0)
+        unclassified_moves += int(result.get("unclassified_moves", 0) or 0)
+        counts.update(result.get("counts", Counter()))
+        game_rows.append(result["game_row"])
+        brilliant_moves.extend(result.get("brilliant_moves", []))
+        if result.get("brilliant_game"):
+            brilliant_games.append(result["brilliant_game"])
+
+    def notify_scan_progress(force: bool = False) -> None:
+        if not force and games_scanned != 1 and games_scanned % 5 != 0 and games_scanned != total_games:
+            return
+        elapsed = max(0.001, time.perf_counter() - scan_started)
+        rate = games_scanned / elapsed
+        eta = ((total_games - games_scanned) / rate) if games_scanned and rate > 0 and total_games > games_scanned else 0
+        notify(
+            phase="brilliant_scan",
+            progress=min(98, 80 + int((games_scanned / max(1, total_games)) * 18)),
+            brilliant_games_done=games_scanned,
+            brilliant_games_total=total_games,
+            moves_scanned=moves_scanned,
+            classified_moves=classified_moves,
+            cache_hits=candidate_cache_hits + played_cache_hits,
+            live_hits=candidate_live_hits + played_live_hits,
+            eta_sec=round(eta, 1),
+            items_per_second=round(rate, 2),
+            message=f"Scanning Brilliant moves {games_scanned}/{total_games} games with {scan_workers} workers...",
         )
-        if game_brilliants:
-            brilliant_games.append(
-                {
-                    "game_id": game_id,
-                    "game_url": imported.url,
-                    "date": played_on.isoformat() if played_on else "",
-                    "date_label": date_label,
-                    "time_class": time_class,
-                    "result": result_key,
-                    "opponent": opponent,
-                    "player_color": player_color,
-                    "brilliants": len(game_brilliants),
-                    "moves": game_brilliants[:6],
-                    "pgn_path": game_brilliants[-1].get("pgn_path", ""),
-                }
-            )
+
+    if scan_workers > 1 and total_games > 1:
+        with ThreadPoolExecutor(max_workers=scan_workers, thread_name_prefix="bookup-brilliant") as executor:
+            futures = [
+                executor.submit(scan_game, game_index, imported)
+                for game_index, imported in enumerate(ordered_games, start=1)
+            ]
+            for future in as_completed(futures):
+                merge_scan_result(future.result())
+                notify_scan_progress()
+    else:
+        for game_index, imported in enumerate(ordered_games, start=1):
+            merge_scan_result(scan_game(game_index, imported))
+            notify_scan_progress()
+
+    notify_scan_progress(force=True)
 
     brilliant_moves.sort(key=lambda item: (str(item.get("date", "")), int(item.get("ply", 0) or 0)), reverse=True)
     brilliant_games.sort(key=lambda item: (-int(item.get("brilliants", 0) or 0), str(item.get("date_label", ""))), reverse=False)

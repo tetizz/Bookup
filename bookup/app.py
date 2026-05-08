@@ -341,11 +341,14 @@ def update_analysis_status(
                 done = int(ANALYSIS_STATUS.get("games_done", 0) or 0)
                 total = int(ANALYSIS_STATUS.get("games_total", 0) or 0)
             elif phase == "brilliant_scan":
-                done = int(ANALYSIS_STATUS.get("classified_moves", 0) or 0)
-                total = int(ANALYSIS_STATUS.get("moves_scanned", 0) or 0)
+                # Game completion is the unit of work here. A single game can
+                # finish its current move batch while the full scan still has
+                # hundreds of games left, so move counts make the ETA lie.
+                done = int(ANALYSIS_STATUS.get("brilliant_games_done", 0) or 0)
+                total = int(ANALYSIS_STATUS.get("brilliant_games_total", 0) or 0)
                 if done <= 0 or total <= 0:
-                    done = int(ANALYSIS_STATUS.get("brilliant_games_done", 0) or 0)
-                    total = int(ANALYSIS_STATUS.get("brilliant_games_total", 0) or 0)
+                    done = int(ANALYSIS_STATUS.get("classified_moves", 0) or 0)
+                    total = int(ANALYSIS_STATUS.get("moves_scanned", 0) or 0)
         if done > 0:
             rate = done / elapsed
             if position_done > 0:

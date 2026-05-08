@@ -23,10 +23,10 @@ MOVE_CLASSIFICATION_LABELS = {
 }
 
 WINTRCHESS_POINT_LOSS_BANDS = (
-    ("excellent", 0.02),
-    ("good", 0.05),
-    ("inaccuracy", 0.10),
-    ("mistake", 0.20),
+    ("excellent", 0.045),
+    ("good", 0.08),
+    ("inaccuracy", 0.12),
+    ("mistake", 0.22),
 )
 
 CLASSIFICATION_VALUES = {
@@ -58,7 +58,7 @@ BOOK_ALLOWED_BASE_KEYS = {"best", "excellent", "good"}
 WINTRCHESS_EXPECTED_POINTS_GRADIENT = 0.0035
 GREAT_KEEP_ADVANTAGE_THRESHOLD = 0.53
 GREAT_KEEP_ADVANTAGE_CP = 20
-BRILLIANT_MATERIAL_DROP = 200
+BRILLIANT_MATERIAL_DROP = 150
 BRILLIANT_SOUND_THRESHOLD = 0.45
 BRILLIANT_ALREADY_WINNING_THRESHOLD = 0.92
 PIECE_VALUES = {
@@ -362,7 +362,13 @@ def move_material_drop(board: chess.Board, move: chess.Move) -> int:
     return before - after
 
 
-def _is_piece_safe(board: chess.Board, piece: dict[str, Any], played_move: chess.Move | None = None) -> bool:
+def _is_piece_safe(
+    board: chess.Board,
+    piece: dict[str, Any],
+    played_move: chess.Move | None = None,
+    *,
+    captured_piece_value: int | None = None,
+) -> bool:
     direct_attackers = _get_attacking_moves(board, piece, False)
     attackers = _get_attacking_moves(board, piece, True)
     defenders = _get_defending_moves(board, piece, True)
@@ -370,12 +376,12 @@ def _is_piece_safe(board: chess.Board, piece: dict[str, Any], played_move: chess
     if (
         played_move is not None
         and piece["type"] == chess.ROOK
-        and board.piece_at(_capture_square(board, played_move)) is not None
     ):
-        captured_piece = board.piece_at(_capture_square(board, played_move))
+        if captured_piece_value is None:
+            captured_piece = board.piece_at(_capture_square(board, played_move))
+            captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
         if (
-            captured_piece is not None
-            and PIECE_VALUES.get(captured_piece.piece_type, 0) == PIECE_VALUES[chess.KNIGHT]
+            captured_piece_value == PIECE_VALUES[chess.KNIGHT]
             and len(attackers) == 1
             and len(defenders) > 0
             and attackers[0].get("piece") is not None
@@ -417,11 +423,18 @@ def _is_piece_safe(board: chess.Board, piece: dict[str, Any], played_move: chess
     return False
 
 
-def _get_unsafe_pieces(board: chess.Board, color: chess.Color, played_move: chess.Move | None = None) -> list[dict[str, Any]]:
-    captured_piece_value = 0
-    if played_move is not None:
-        captured_piece = board.piece_at(_capture_square(board, played_move))
-        captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
+def _get_unsafe_pieces(
+    board: chess.Board,
+    color: chess.Color,
+    played_move: chess.Move | None = None,
+    *,
+    captured_piece_value: int | None = None,
+) -> list[dict[str, Any]]:
+    if captured_piece_value is None:
+        captured_piece_value = 0
+        if played_move is not None:
+            captured_piece = board.piece_at(_capture_square(board, played_move))
+            captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
 
     pieces = []
     for piece in _board_pieces(board):
@@ -431,7 +444,7 @@ def _get_unsafe_pieces(board: chess.Board, color: chess.Color, played_move: ches
             continue
         if PIECE_VALUES[piece["type"]] <= captured_piece_value:
             continue
-        if not _is_piece_safe(board, piece, played_move):
+        if not _is_piece_safe(board, piece, played_move, captured_piece_value=captured_piece_value):
             pieces.append(piece)
     return pieces
 
@@ -447,7 +460,10 @@ def _board_after_move(board: chess.Board, move: chess.Move) -> chess.Board | Non
 
 def _move_creates_greater_threat(board: chess.Board, threatened_piece: dict[str, Any], acting_move_info: dict[str, Any]) -> bool:
     action_board = board.copy(stack=False)
-    previous_relative_attacks = _relative_unsafe_piece_attacks(action_board, threatened_piece, bool(acting_move_info["piece"].color))
+    acting_piece = acting_move_info.get("piece")
+    if acting_piece is None:
+        return False
+    previous_relative_attacks = _relative_unsafe_piece_attacks(action_board, threatened_piece, bool(acting_piece.color))
     acting_move = chess.Move(
         acting_move_info["from_square"],
         acting_move_info["to_square"],
@@ -455,8 +471,16 @@ def _move_creates_greater_threat(board: chess.Board, threatened_piece: dict[str,
     )
     if acting_move not in action_board.legal_moves:
         return False
+    captured_piece = acting_move_info.get("captured")
+    captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
     action_board.push(acting_move)
-    relative_attacks = _relative_unsafe_piece_attacks(action_board, threatened_piece, bool(acting_move_info["piece"].color), acting_move)
+    relative_attacks = _relative_unsafe_piece_attacks(
+        action_board,
+        threatened_piece,
+        bool(acting_piece.color),
+        acting_move,
+        captured_piece_value=captured_piece_value,
+    )
     previous_identities = {_move_identity(info) for info in previous_relative_attacks}
     if any(_move_identity(info) not in previous_identities for info in relative_attacks):
         return True
@@ -471,6 +495,9 @@ def _move_creates_greater_threat(board: chess.Board, threatened_piece: dict[str,
 
 def _move_leaves_greater_threat(board: chess.Board, threatened_piece: dict[str, Any], acting_move_info: dict[str, Any]) -> bool:
     action_board = board.copy(stack=False)
+    acting_piece = acting_move_info.get("piece")
+    if acting_piece is None:
+        return False
     acting_move = chess.Move(
         acting_move_info["from_square"],
         acting_move_info["to_square"],
@@ -479,7 +506,7 @@ def _move_leaves_greater_threat(board: chess.Board, threatened_piece: dict[str, 
     if acting_move not in action_board.legal_moves:
         return False
     action_board.push(acting_move)
-    relative_attacks = _relative_unsafe_piece_attacks(action_board, threatened_piece, bool(acting_move_info["piece"].color))
+    relative_attacks = _relative_unsafe_piece_attacks(action_board, threatened_piece, bool(acting_piece.color))
     if relative_attacks:
         return True
     if PIECE_VALUES[threatened_piece["type"]] < PIECE_VALUES[chess.QUEEN]:
@@ -510,9 +537,11 @@ def _relative_unsafe_piece_attacks(
     threatened_piece: dict[str, Any],
     color: chess.Color,
     played_move: chess.Move | None = None,
+    *,
+    captured_piece_value: int | None = None,
 ) -> list[dict[str, Any]]:
     attacks: list[dict[str, Any]] = []
-    for unsafe_piece in _get_unsafe_pieces(board, color, played_move):
+    for unsafe_piece in _get_unsafe_pieces(board, color, played_move, captured_piece_value=captured_piece_value):
         if unsafe_piece["square"] == threatened_piece["square"]:
             continue
         if PIECE_VALUES[unsafe_piece["type"]] < PIECE_VALUES[threatened_piece["type"]]:
@@ -531,11 +560,14 @@ def _is_piece_trapped(board: chess.Board, piece: dict[str, Any], danger_levels: 
         if calibrated_board.piece_at(move.to_square) and calibrated_board.piece_at(move.to_square).piece_type == chess.KING:
             return False
         escape_board = calibrated_board.copy(stack=False)
-        if danger_levels and _move_creates_greater_threat(escape_board, piece, _move_info(calibrated_board, move)):
+        acting_move_info = _move_info(calibrated_board, move)
+        if danger_levels and _move_creates_greater_threat(escape_board, piece, acting_move_info):
             return True
+        captured_piece = acting_move_info.get("captured")
+        captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
         escape_board.push(move)
         escaped_piece = {**piece, "square": move.to_square}
-        return not _is_piece_safe(escape_board, escaped_piece, move)
+        return not _is_piece_safe(escape_board, escaped_piece, move, captured_piece_value=captured_piece_value)
 
     all_moves_unsafe = all(move_is_unsafe(move) for move in piece_moves)
     return (not standing_piece_safety) and all_moves_unsafe
@@ -645,9 +677,6 @@ def _consider_brilliant_classification(
     move_record: dict[str, Any],
     second_record: dict[str, Any] | None,
 ) -> bool:
-    if not _is_move_critical_candidate(board, move_record, second_record):
-        return False
-
     try:
         move = chess.Move.from_uci(str(move_record.get("uci", "") or ""))
     except ValueError:
@@ -655,18 +684,43 @@ def _consider_brilliant_classification(
     if move.promotion is not None:
         return False
 
+    moved_piece = board.piece_at(move.from_square)
+    captured_piece = board.piece_at(_capture_square(board, move)) if move in board.legal_moves else None
+    captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
     current_board = _board_after_move(board, move)
     if current_board is None:
         return False
 
     mover = board.turn
     previous_unsafe_pieces = _get_unsafe_pieces(board, mover)
-    unsafe_pieces = _get_unsafe_pieces(current_board, mover, move)
+    unsafe_pieces = _get_unsafe_pieces(current_board, mover, move, captured_piece_value=captured_piece_value)
 
     if not current_board.is_check() and len(unsafe_pieces) < len(previous_unsafe_pieces):
         return False
 
-    danger_levels_protected = all(
+    moved_piece_left_unsafe = bool(
+        moved_piece
+        and any(
+            unsafe_piece["square"] == move.to_square
+            and unsafe_piece["type"] == moved_piece.piece_type
+            and unsafe_piece["color"] == mover
+            for unsafe_piece in unsafe_pieces
+        )
+    )
+    sacrifice_capture = bool(
+        moved_piece
+        and captured_piece_value > 0
+        and PIECE_VALUES.get(moved_piece.piece_type, 0) > captured_piece_value
+        and moved_piece_left_unsafe
+    )
+    sacrifice_shape = bool(
+        moved_piece
+        and moved_piece.piece_type != chess.KING
+        and moved_piece_left_unsafe
+        and PIECE_VALUES.get(moved_piece.piece_type, 0) > captured_piece_value
+    )
+
+    danger_levels_protected = bool(unsafe_pieces) and all(
         _has_danger_levels(
             current_board,
             unsafe_piece,
@@ -674,7 +728,10 @@ def _consider_brilliant_classification(
         )
         for unsafe_piece in unsafe_pieces
     )
-    if danger_levels_protected:
+    if danger_levels_protected and not (sacrifice_capture or sacrifice_shape):
+        return False
+    tactical_resource_left = bool(unsafe_pieces) and not danger_levels_protected
+    if not _is_move_critical_candidate(board, move_record, second_record) and not (sacrifice_shape or tactical_resource_left):
         return False
 
     previous_trapped_pieces = [unsafe_piece for unsafe_piece in previous_unsafe_pieces if _is_piece_trapped(board, unsafe_piece)]
@@ -692,7 +749,7 @@ def _consider_brilliant_classification(
 
 
 def point_loss_classification_key(loss: float, *, is_best_move: bool) -> str:
-    if is_best_move or loss <= 0.0001:
+    if is_best_move or loss < 0.01:
         return "best"
     for key, limit in WINTRCHESS_POINT_LOSS_BANDS:
         if loss < limit:
@@ -777,7 +834,7 @@ def base_classification_reason(key: str, *, best_move_san: str, move_san: str) -
     if key == "great":
         return "only move that keeps the advantage"
     if key == "brilliant":
-        return "best move plus a sound piece sacrifice"
+        return "critical move that keeps a tactical resource alive"
     if key == "miss":
         return "fails to convert the stronger continuation"
     if key == "book":
@@ -838,15 +895,15 @@ def classify_move_record(
             key = "best"
             reason = "engine top move"
 
-    if is_best_move and move is not None:
+    if move is not None:
         real_piece_sacrifice = is_real_piece_sacrifice(board, move)
-        if _consider_critical_classification(board, move_record, best_record, second_record):
+        if is_best_move and _consider_critical_classification(board, move_record, best_record, second_record):
             key = "great"
             only_move_keeps_advantage = True
             reason = "only move that keeps the advantage"
-        if CLASSIFICATION_VALUES.get(key, 0) >= CLASSIFICATION_VALUES["best"] and _consider_brilliant_classification(board, move_record, second_record):
+        if CLASSIFICATION_VALUES.get(key, 0) >= CLASSIFICATION_VALUES["good"] and _consider_brilliant_classification(board, move_record, second_record):
             key = "brilliant"
-            reason = "best move plus a sound piece sacrifice"
+            reason = "critical move that keeps a tactical resource alive"
 
     return classification_payload(
         key,

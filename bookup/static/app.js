@@ -966,8 +966,8 @@ function analysisWorkSummary(stats) {
     return `${indexed} positions indexed`;
   }
   if (phase === "brilliant_scan") {
-    if (scanned) return `${classified}/${scanned} moves classified`;
     if (scanTotal) return `${scanDone}/${scanTotal} games scanned`;
+    if (scanned) return `${classified}/${scanned} moves classified`;
     return "Classifying moves";
   }
   if (phase === "stockfish_positions" || total) {
@@ -984,9 +984,12 @@ function analysisPrimaryCard(stats) {
     return ["Games", total ? `${done}/${total}` : "--"];
   }
   if (phase === "brilliant_scan") {
+    const scanDone = Number(stats.brilliant_games_done || 0);
+    const scanTotal = Number(stats.brilliant_games_total || 0);
+    if (scanTotal) return ["Games scanned", `${scanDone}/${scanTotal}`];
     const scanned = Number(stats.brilliant_moves_scanned || 0);
     const classified = Number(stats.brilliant_moves_classified || 0);
-    return ["Moves scanned", scanned ? `${classified}/${scanned}` : "--"];
+    return ["Moves classified", scanned ? `${classified}/${scanned}` : "--"];
   }
   return ["Positions/sec", formatRate(stats.positions_per_second)];
 }
@@ -1038,9 +1041,11 @@ function renderStockfishStats(stats, options = {}) {
   const workerCard = isEnginePhase
     ? ["Active workers", `${activeWorkers}/${workers}`]
     : ["Stockfish workers", `${workers} ready`];
-  const throughputCard = isEnginePhase
+  const throughputCard = phase === "stockfish_positions"
     ? ["Positions/sec", formatRate(stats.positions_per_second)]
-    : ["Index rate", formatRate(stats.items_per_second)];
+    : phase === "brilliant_scan"
+      ? ["Games/sec", formatRate(stats.items_per_second)]
+      : ["Index rate", formatRate(stats.items_per_second)];
   const memoryText = memory > 0
     ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
     : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
