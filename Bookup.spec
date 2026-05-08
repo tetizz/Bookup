@@ -1,12 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+
+pythonnet_datas, pythonnet_binaries, pythonnet_hiddenimports = collect_all('pythonnet')
+clr_loader_datas, clr_loader_binaries, clr_loader_hiddenimports = collect_all('clr_loader')
+cffi_datas, cffi_binaries, cffi_hiddenimports = collect_all('cffi')
+webview_hiddenimports = collect_submodules('webview')
+windows_runtime_hiddenimports = sorted(
+    set(
+        pythonnet_hiddenimports
+        + clr_loader_hiddenimports
+        + cffi_hiddenimports
+        + webview_hiddenimports
+        + [
+            'clr',
+            'pythonnet',
+            'clr_loader',
+            '_cffi_backend',
+        ]
+    )
+)
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('bookup', 'bookup'), ('stockfish', 'stockfish')],
-    hiddenimports=[],
+    binaries=pythonnet_binaries + clr_loader_binaries + cffi_binaries,
+    datas=[
+        ('bookup', 'bookup'),
+        ('stockfish', 'stockfish'),
+    ] + pythonnet_datas + clr_loader_datas + cffi_datas,
+    hiddenimports=windows_runtime_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
