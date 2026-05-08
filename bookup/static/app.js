@@ -1,6 +1,6 @@
 ﻿const defaults = window.APP_DEFAULTS || {};
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 19;
+const PROFILE_SCHEMA_VERSION = 20;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -81,6 +81,7 @@ const el = {
   progressTrack: document.getElementById("progressTrack"),
   progressFill: document.getElementById("progressFill"),
   progressLabel: document.getElementById("progressLabel"),
+  engineStatsLive: document.getElementById("engineStatsLive"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
   summaryPositions: document.getElementById("summaryPositions"),
@@ -105,6 +106,7 @@ const el = {
   confidenceGraphPanel: document.getElementById("confidenceGraphPanel"),
   driftFixPanel: document.getElementById("driftFixPanel"),
   importSpeedPanel: document.getElementById("importSpeedPanel"),
+  stockfishStatsPanel: document.getElementById("stockfishStatsPanel"),
   transpositionList: document.getElementById("transpositionList"),
   previewPanel: document.getElementById("previewPanel"),
   knownArchiveList: document.getElementById("knownArchiveList"),
@@ -235,6 +237,8 @@ const state = {
   repertoireExportText: "",
   manualDriftChoices: {},
   analysisProgressTimer: 0,
+  analysisStatusTimer: 0,
+  analysisStatusPollStartedAt: 0,
   autoImportRunning: false,
   prepPackText: "",
 };
@@ -864,17 +868,138 @@ function setProgress(value, message = "", options = {}) {
   }
 }
 
+function formatDuration(seconds) {
+  if (seconds == null || !Number.isFinite(Number(seconds))) return "--";
+  const total = Math.max(0, Math.round(Number(seconds)));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const rem = minutes % 60;
+    return `${hours}h ${rem}m`;
+  }
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+function formatRate(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "--";
+  return `${numeric.toFixed(numeric >= 10 ? 1 : 2)}/s`;
+}
+
+function stockfishStatsFromStatus(status) {
+  if (!status) return null;
+  const resources = status.resources || {};
+  return {
+    ...resources,
+    phase: status.phase || "idle",
+    message: status.message || "",
+    active: Boolean(status.active),
+    progress: Number(status.progress || 0),
+    positions_analyzed: Number(status.positions_done ?? status.positions_analyzed ?? 0),
+    positions_total: Number(status.positions_total ?? 0),
+    positions_per_second: Number(status.positions_per_second ?? 0),
+    elapsed_sec: Number(status.elapsed_sec ?? 0),
+    eta_sec: status.eta_sec,
+    brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
+    brilliant_moves_classified: Number(status.classified_moves ?? 0),
+    engine_cache_hits: Number(status.cache_hits ?? 0),
+    engine_live_hits: Number(status.live_hits ?? 0),
+  };
+}
+
+function renderStockfishStats(stats, options = {}) {
+  const live = Boolean(options.live);
+  const node = live ? el.engineStatsLive : el.stockfishStatsPanel;
+  if (!node) return;
+  if (!stats) {
+    node.className = live ? "engine-stats-live empty" : "stack empty";
+    node.textContent = live
+      ? "Stockfish runtime stats will appear while Bookup analyzes your games."
+      : "Live Stockfish throughput, ETA, CPU, and memory will show up here.";
+    return;
+  }
+  const total = Number(stats.positions_total || 0);
+  const done = Number(stats.positions_analyzed || stats.positions_done || 0);
+  const cpu = stats.cpu_percent == null ? stats.cpu_budget_percent : stats.cpu_percent;
+  const cpuLabel = stats.cpu_percent == null ? "CPU budget" : "CPU now";
+  const memory = Number(stats.memory_mb || 0);
+  const memoryText = memory > 0
+    ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
+    : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
+  const cards = [
+    ["Positions/sec", formatRate(stats.positions_per_second)],
+    ["ETA", Number(stats.eta_sec || 0) > 0 ? formatDuration(stats.eta_sec) : "Done"],
+    [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
+    ["Memory", memoryText],
+    ["Workers", Number(stats.workers || 1)],
+    ["Threads", `${Number(stats.threads || 0)} total`],
+    ["Depth / MultiPV", `${Number(stats.depth || 0)} / ${Number(stats.multipv || 0)}`],
+    ["Classified", `${Number(stats.brilliant_moves_classified || 0)}/${Number(stats.brilliant_moves_scanned || 0)}`],
+  ];
+  node.className = live ? "engine-stats-live" : "stack stockfish-stats-panel";
+  node.innerHTML = `
+    <div class="stockfish-status-head">
+      <span>${escapeHtml(stats.phase || "stockfish")}</span>
+      <strong>${done}${total ? `/${total}` : ""} positions</strong>
+      <small>${escapeHtml(stats.message || (stats.active ? "Stockfish is working..." : "Analysis cache is ready."))}</small>
+    </div>
+    <div class="speed-grid stockfish-speed-grid">
+      ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}
+    </div>
+    <div class="line-note">Elapsed ${formatDuration(stats.elapsed_sec)} · ${Number(stats.worker_threads || 0)} thread${Number(stats.worker_threads || 0) === 1 ? "" : "s"} per worker · ${Number(stats.worker_hash_mb || 0)} MB hash per worker.</div>
+  `;
+}
+
+function stopAnalysisStatusPolling() {
+  if (state.analysisStatusTimer) {
+    window.clearInterval(state.analysisStatusTimer);
+    state.analysisStatusTimer = 0;
+  }
+}
+
+async function pollAnalysisStatus() {
+  try {
+    const response = await fetch("/api/analysis-status");
+    const status = await response.json();
+    if (!response.ok) return;
+    const stats = stockfishStatsFromStatus(status);
+    renderStockfishStats(stats, { live: true });
+    if (status.active) {
+      setProgress(Number(status.progress || 0), status.message || "", {
+        indeterminate: Number(status.progress || 0) >= 96,
+      });
+    } else if (state.analysisStatusTimer && Date.now() - state.analysisStatusPollStartedAt > 2500) {
+      stopAnalysisStatusPolling();
+      renderStockfishStats(stats, { live: true });
+    }
+  } catch {
+    // Keep the optimistic progress bar if the status poll races the server.
+  }
+}
+
+function startAnalysisStatusPolling() {
+  stopAnalysisStatusPolling();
+  state.analysisStatusPollStartedAt = Date.now();
+  void pollAnalysisStatus();
+  state.analysisStatusTimer = window.setInterval(pollAnalysisStatus, 1000);
+}
+
 function stopAnalysisProgress() {
   if (state.analysisProgressTimer) {
     window.clearInterval(state.analysisProgressTimer);
     state.analysisProgressTimer = 0;
   }
+  stopAnalysisStatusPolling();
 }
 
 function startAnalysisProgress() {
   stopAnalysisProgress();
   const startedAt = Date.now();
   setProgress(4, "Preparing import...");
+  renderStockfishStats(null, { live: true });
+  startAnalysisStatusPolling();
   state.analysisProgressTimer = window.setInterval(() => {
     const elapsed = Date.now() - startedAt;
     let target = 12;
@@ -1161,6 +1286,7 @@ function renderProfile(payload) {
   renderConfidenceGraph(profile.confidence_graph || null);
   renderDriftFixes(profile.drift_fixes || null);
   renderImportSpeed(profile.import_speed_report || null);
+  renderStockfishStats(profile.stockfish_stats || null);
   void refreshCacheDashboard();
   renderKnownArchive(profile.known_line_archive || []);
   renderTranspositionGroups(profile.transposition_groups || []);
@@ -1373,7 +1499,7 @@ function renderBrilliantTracker(tracker) {
       <article><span>Total brilliants</span><strong>${Number(summary.total_brilliants || high.length)}</strong><p>Confirmed Brilliant moves found in your imported games.</p></article>
       <article><span>Games with brilliants</span><strong>${Number(summary.games_with_brilliants || games.length)}</strong><p>Imported games where at least one Brilliant appeared.</p></article>
       <article><span>Best game</span><strong>${bestGame ? `${Number(bestGame.brilliants || 0)}×` : "0×"}</strong><p>${escapeHtml(bestGame ? `${bestGame.opponent || "Opponent"} · ${bestGame.date_label || ""}` : "No Brilliant game found yet.")}</p></article>
-      <article><span>Scan coverage</span><strong>${Number(summary.games_scanned || 0)}</strong><p>All imported games · ${Number(summary.moves_scanned || 0)} moves · ${Number(summary.cached_hits || 0)} cache hits.</p></article>
+      <article><span>Scan coverage</span><strong>${Number(summary.classified_moves || 0)}/${Number(summary.moves_scanned || 0)}</strong><p>${Number(summary.games_scanned || 0)} games · ${Number(summary.cached_hits || 0)} cache hits · ${Number(summary.played_live_hits || 0)} direct played-move scans.</p></article>
     </div>
     ${renderBrilliantClassificationStatus(tracker)}
     ${renderBrilliantProgress(progress)}
@@ -1408,13 +1534,15 @@ function renderBrilliantClassificationStatus(tracker) {
       <div>
         <span class="line-badge">Classification proof</span>
         <h3>Brilliant scan runs during profile import</h3>
-        <p>Results are saved inside the local profile cache, so the Brilliant chart and clickable game list reload without rescanning unless settings or the cache schema changes.</p>
+        <p>Results are saved inside the local profile cache. Bookup checks cached candidate lines first, then directly classifies the actual move you played if it was not already in the top candidate set.</p>
       </div>
       <div class="brilliant-scan-grid">
         <article><span>Stored</span><strong>${stored ? "Yes" : "No"}</strong><small>Profile cache payload</small></article>
         <article><span>Import pass</span><strong>${duringImport ? "Yes" : "No"}</strong><small>${escapeHtml(status.scope || "all imported games")}</small></article>
-        <article><span>Move scan</span><strong>${Number(status.moves_scanned || summary.moves_scanned || 0)}</strong><small>${Number(status.games_scanned || summary.games_scanned || 0)} games scanned</small></article>
-        <article><span>Cache/live</span><strong>${Number(status.cached_hits || summary.cached_hits || 0)}/${Number(status.live_hits || summary.live_hits || 0)}</strong><small>cached hits / live Stockfish</small></article>
+        <article><span>Move scan</span><strong>${Number(status.classified_moves || summary.classified_moves || 0)}/${Number(status.moves_scanned || summary.moves_scanned || 0)}</strong><small>${Number(status.games_scanned || summary.games_scanned || 0)} games scanned</small></article>
+        <article><span>Candidate cache/live</span><strong>${Number(status.candidate_cache_hits || summary.candidate_cache_hits || 0)}/${Number(status.candidate_live_hits || summary.candidate_live_hits || 0)}</strong><small>top-line cache / live</small></article>
+        <article><span>Played cache/live</span><strong>${Number(status.played_cache_hits || summary.played_cache_hits || 0)}/${Number(status.played_live_hits || summary.played_live_hits || 0)}</strong><small>actual move cache / live</small></article>
+        <article><span>Skipped</span><strong>${Number(status.skipped_live_budget || summary.skipped_live_budget || 0)}</strong><small>live budget skips</small></article>
         <article><span>Depth</span><strong>${Number(engine.depth || 0) || "--"}</strong><small>Stockfish depth</small></article>
         <article><span>MultiPV</span><strong>${Number(engine.multipv || 0) || "--"}</strong><small>candidate lines</small></article>
         <article><span>Think time</span><strong>${engine.think_time_sec == null ? "--" : `${Number(engine.think_time_sec)}s`}</strong><small>per live scan</small></article>

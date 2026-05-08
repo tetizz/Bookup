@@ -94,6 +94,23 @@ class EngineSession:
         finally:
             self._engine = None
 
+    def pid(self) -> int | None:
+        """Best-effort process id for live runtime stats."""
+        engine = self._engine
+        if engine is None:
+            return None
+        transport = getattr(engine, "transport", None)
+        if transport is None:
+            return None
+        try:
+            pid = transport.get_pid()
+        except Exception:
+            return None
+        try:
+            return int(pid) if pid else None
+        except (TypeError, ValueError):
+            return None
+
     @property
     def engine(self) -> chess.engine.SimpleEngine:
         if self._engine is None:
@@ -194,6 +211,14 @@ class EnginePool:
                 session.close()
             except Exception:
                 pass
+
+    def worker_pids(self) -> list[int]:
+        pids: list[int] = []
+        for session in list(self._sessions):
+            pid = session.pid()
+            if pid is not None:
+                pids.append(pid)
+        return pids
 
     def analyse(
         self,

@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -33,11 +34,19 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 19
+PROFILE_SCHEMA_VERSION = 20
 ENGINE_DEFAULTS_VERSION = 3
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
+ANALYSIS_STATUS_LOCK = threading.Lock()
+ANALYSIS_STATUS: dict[str, object] = {
+    "active": False,
+    "phase": "idle",
+    "progress": 0,
+    "message": "Ready.",
+}
+CPU_SAMPLES: dict[int, tuple[float, float]] = {}
 
 app = Flask(
     __name__,
@@ -85,6 +94,198 @@ def system_total_ram_mb() -> int:
 
 CPU_THREADS = max(1, os.cpu_count() or 8)
 TOTAL_RAM_MB = system_total_ram_mb()
+
+
+class FILETIME(ctypes.Structure):
+    _fields_ = [
+        ("dwLowDateTime", ctypes.c_ulong),
+        ("dwHighDateTime", ctypes.c_ulong),
+    ]
+
+
+class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_ulong),
+        ("PageFaultCount", ctypes.c_ulong),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
+def _filetime_seconds(value: FILETIME) -> float:
+    ticks = (int(value.dwHighDateTime) << 32) + int(value.dwLowDateTime)
+    return ticks / 10_000_000.0
+
+
+def _process_handle(pid: int):
+    if sys.platform != "win32":
+        return None
+    access = 0x1000 | 0x0010  # PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
+    try:
+        return ctypes.windll.kernel32.OpenProcess(access, False, int(pid))
+    except Exception:
+        return None
+
+
+def _process_memory_mb(pid: int) -> float | None:
+    handle = _process_handle(pid)
+    if not handle:
+        return None
+    try:
+        counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+        if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return round(float(counters.WorkingSetSize) / (1024 * 1024), 1)
+    except Exception:
+        return None
+    finally:
+        try:
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+    return None
+
+
+def _process_cpu_seconds(pid: int) -> float | None:
+    handle = _process_handle(pid)
+    if not handle:
+        return None
+    try:
+        creation = FILETIME()
+        exit_time = FILETIME()
+        kernel = FILETIME()
+        user = FILETIME()
+        if ctypes.windll.kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return _filetime_seconds(kernel) + _filetime_seconds(user)
+    except Exception:
+        return None
+    finally:
+        try:
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+    return None
+
+
+def engine_resource_snapshot(settings: EngineSettings, engine: EnginePool | None) -> dict[str, object]:
+    pids = engine.worker_pids() if engine is not None and hasattr(engine, "worker_pids") else []
+    memory_values = [value for pid in pids if (value := _process_memory_mb(pid)) is not None]
+    now = time.monotonic()
+    cpu_delta = 0.0
+    wall_delta = 0.0
+    sampled = 0
+    for pid in pids:
+        cpu_seconds = _process_cpu_seconds(pid)
+        if cpu_seconds is None:
+            continue
+        previous = CPU_SAMPLES.get(pid)
+        CPU_SAMPLES[pid] = (now, cpu_seconds)
+        if previous:
+            previous_wall, previous_cpu = previous
+            elapsed = max(0.001, now - previous_wall)
+            cpu_delta += max(0.0, cpu_seconds - previous_cpu)
+            wall_delta = max(wall_delta, elapsed)
+            sampled += 1
+    stale_pids = set(CPU_SAMPLES) - set(pids)
+    for pid in stale_pids:
+        CPU_SAMPLES.pop(pid, None)
+
+    cpu_percent = None
+    if sampled and wall_delta > 0:
+        cpu_percent = round(min(100.0, (cpu_delta / wall_delta / max(1, CPU_THREADS)) * 100), 1)
+
+    workers = max(1, int(getattr(engine, "worker_count", settings.parallel_workers) if engine else settings.parallel_workers))
+    memory_mb = round(sum(memory_values), 1) if memory_values else 0.0
+    return {
+        "workers": workers,
+        "worker_pids": pids,
+        "threads": int(settings.threads),
+        "worker_threads": max(1, int(settings.threads) // workers),
+        "hash_mb": int(settings.hash_mb),
+        "worker_hash_mb": max(128, int(settings.hash_mb) // workers),
+        "multipv": int(settings.multipv),
+        "depth": int(settings.depth),
+        "think_time_sec": float(settings.think_time_sec),
+        "cpu_percent": cpu_percent,
+        "cpu_budget_percent": round(min(100.0, (int(settings.threads) / max(1, CPU_THREADS)) * 100), 1),
+        "memory_mb": memory_mb,
+        "estimated_hash_mb": int(settings.hash_mb),
+        "system_threads": CPU_THREADS,
+        "system_ram_mb": TOTAL_RAM_MB,
+    }
+
+
+def reset_analysis_status(kind: str, username: str, settings: EngineSettings, engine: EnginePool | None) -> None:
+    global ANALYSIS_STATUS
+    now = time.monotonic()
+    with ANALYSIS_STATUS_LOCK:
+        ANALYSIS_STATUS = {
+            "active": True,
+            "kind": kind,
+            "username": username,
+            "phase": "starting",
+            "progress": 2,
+            "message": "Starting Stockfish analysis...",
+            "started_at": now,
+            "elapsed_sec": 0.0,
+            "eta_sec": None,
+            "positions_done": 0,
+            "positions_total": 0,
+            "positions_per_second": 0.0,
+            "resources": engine_resource_snapshot(settings, engine),
+        }
+
+
+def update_analysis_status(
+    *,
+    settings: EngineSettings | None = None,
+    engine: EnginePool | None = None,
+    **patch: object,
+) -> None:
+    with ANALYSIS_STATUS_LOCK:
+        if not ANALYSIS_STATUS:
+            return
+        ANALYSIS_STATUS.update({key: value for key, value in patch.items() if value is not None})
+        now = time.monotonic()
+        started = float(ANALYSIS_STATUS.get("started_at", now) or now)
+        elapsed = max(0.001, now - started)
+        done = int(ANALYSIS_STATUS.get("positions_done", 0) or 0)
+        total = int(ANALYSIS_STATUS.get("positions_total", 0) or 0)
+        if done > 0:
+            rate = done / elapsed
+            ANALYSIS_STATUS["positions_per_second"] = round(rate, 2)
+            ANALYSIS_STATUS["eta_sec"] = round(max(0.0, (total - done) / rate), 1) if total > done and rate > 0 else 0
+        ANALYSIS_STATUS["elapsed_sec"] = round(elapsed, 1)
+        if settings is not None:
+            ANALYSIS_STATUS["resources"] = engine_resource_snapshot(settings, engine)
+
+
+def finish_analysis_status(*, ok: bool, message: str = "") -> None:
+    with ANALYSIS_STATUS_LOCK:
+        ANALYSIS_STATUS["active"] = False
+        ANALYSIS_STATUS["phase"] = "complete" if ok else "failed"
+        ANALYSIS_STATUS["progress"] = 100 if ok else 0
+        ANALYSIS_STATUS["eta_sec"] = 0
+        if message:
+            ANALYSIS_STATUS["message"] = message
+        ANALYSIS_STATUS["completed_at"] = time.monotonic()
+
+
+def analysis_status_payload() -> dict[str, object]:
+    with ANALYSIS_STATUS_LOCK:
+        return dict(ANALYSIS_STATUS)
 
 
 def recommended_engine_defaults() -> dict:
@@ -625,6 +826,11 @@ def cache_stats() -> tuple:
     return jsonify(STORE.cache_stats(username))
 
 
+@app.get("/api/analysis-status")
+def analysis_status() -> tuple:
+    return jsonify(analysis_status_payload())
+
+
 @app.post("/api/profile")
 def profile() -> tuple:
     payload = request.get_json(force=True)
@@ -766,10 +972,18 @@ def profile() -> tuple:
 
     try:
         engine = shared_engine_for(settings)
-        profile_data = analyse_games(games, engine)
+        reset_analysis_status("profile", username, settings, engine)
+        profile_data = analyse_games(
+            games,
+            engine,
+            progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
+        )
+        finish_analysis_status(ok=True, message="Analysis complete.")
     except FileNotFoundError:
+        finish_analysis_status(ok=False, message="The Stockfish executable could not be opened.")
         return jsonify({"error": "The Stockfish executable could not be opened."}), 400
     except Exception as exc:
+        finish_analysis_status(ok=False, message=f"Engine analysis failed: {exc}")
         return jsonify({"error": f"Engine analysis failed: {exc}"}), 500
 
     serialized_games = serialize_games(games)
@@ -862,10 +1076,18 @@ def import_pgn() -> tuple:
 
     try:
         engine = shared_engine_for(settings)
-        profile_data = analyse_games(games, engine)
+        reset_analysis_status("pgn", username, settings, engine)
+        profile_data = analyse_games(
+            games,
+            engine,
+            progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
+        )
+        finish_analysis_status(ok=True, message="PGN analysis complete.")
     except FileNotFoundError:
+        finish_analysis_status(ok=False, message="The Stockfish executable could not be opened.")
         return jsonify({"error": "The Stockfish executable could not be opened."}), 400
     except Exception as exc:
+        finish_analysis_status(ok=False, message=f"PGN analysis failed: {exc}")
         return jsonify({"error": f"PGN analysis failed: {exc}"}), 500
 
     serialized_games = serialize_games(games)

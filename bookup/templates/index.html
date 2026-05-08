@@ -137,6 +137,7 @@
                 <div id="status" class="status">Ready.</div>
                 <div id="progressLabel" class="progress-label">0%</div>
               </div>
+              <div id="engineStatsLive" class="engine-stats-live empty">Stockfish runtime stats will appear while Bookup analyzes your games.</div>
             </div>
           </div>
           <details class="import-pgn-panel">
@@ -286,6 +287,16 @@
           <article class="card">
             <h3>Import Speed Dashboard</h3>
             <div id="importSpeedPanel" class="stack empty">Import and cache diagnostics will show up here.</div>
+          </article>
+        </div>
+        <div class="split-grid intelligence-grid">
+          <article class="card stockfish-stats-card">
+            <h3>Stockfish Runtime</h3>
+            <div id="stockfishStatsPanel" class="stack empty">Live Stockfish throughput, ETA, CPU, and memory will show up here.</div>
+          </article>
+          <article class="card">
+            <h3>Parallel Analysis</h3>
+            <p class="summary-copy">Bookup can run several Stockfish workers at once and reuses cached positions so repeated imports do not re-analyze the same board over and over.</p>
           </article>
         </div>
       </section>

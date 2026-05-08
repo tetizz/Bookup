@@ -30,6 +30,7 @@ https://tetizz.github.io/Bookup/
 - charts rating progress, win/loss/draw record, score rate, win rate, and separate rapid/blitz/bullet time-control graphs across 30 days, 90 days, and all time
 - exports a compact preparation pack with focus lines, common replies, and maintenance lines
 - shows local engine/profile cache health so repeat analysis is easier to trust
+- shows live Stockfish runtime stats during imports, including analyzed positions, positions per second, ETA, worker count, CPU budget, CPU usage, and memory usage
 - generates a short study plan from due lines, fragile memory scores, common replies, and new branches
 - shows a confidence graph so weak, building, stable, and strong lines are visible at a glance
 - proposes drift fixes when your recent first moves stop matching your longer-term repertoire
@@ -47,6 +48,7 @@ https://tetizz.github.io/Bookup/
 - filters out lines you already know well enough so the active queue stays focused
 - explains every due/new queue item with the repeated-miss evidence, frequency, review state, and engine/database factors that put it there
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
+- scans imported games for Brilliant moves during repertoire builds, stores the results locally, and tracks cache/live scan coverage so missed non-candidate brilliants are less likely to disappear
 - runs as a Windows desktop app instead of a plain browser tab
 
 ## Workspaces
@@ -55,7 +57,7 @@ https://tetizz.github.io/Bookup/
   Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
 
 - `Repertoire Map`
-  See health, rating progress, result trends, study plan, memory scores, confidence graph, opening drift, drift fixes, cache health, preparation packs, import speed, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
+  See health, rating progress, result trends, Stockfish runtime stats, Brilliant Tracker, study plan, memory scores, confidence graph, opening drift, drift fixes, cache health, preparation packs, import speed, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
 
 - `Needs Work`
   Focus on repeated repertoire mistakes, due lines, fresh lines, queue explainers, suggested repertoire updates, mistake heatmap squares, mistake timelines, spaced-review buckets, smart retry cards, and pre-move quizzes.
@@ -248,6 +250,8 @@ That includes:
 - imported-game move-tree payloads
 - health dashboard, heatmap, mistake timeline, response-builder, and transposition payloads inside the saved profile snapshot
 - rating progress snapshots from imported game headers, including daily W/D/L, win rate, score rate, rating changes, and separate time-control breakdowns
+- Brilliant Tracker results from imported games, including games with brilliants, most brilliant-heavy games, recent brilliant dates, and classification scan coverage
+- Stockfish runtime summaries from the latest repertoire build, including worker count, analysis speed, cache hits, live hits, and elapsed time
 - study plan, confidence graph, smart retry, pre-move quiz, opponent simulator, blunder traps, and repertoire export payloads
 - snapshot state for the latest profile
 - training progress and review stats
