@@ -18,7 +18,15 @@ import chess.pgn
 from flask import Flask, jsonify, render_template, request
 import webview
 
-from .analysis import analyse_games, build_position_insight, configure_engine_cache, configure_lichess, database_context_for_board, generate_theory_line
+from .analysis import (
+    analyse_games,
+    build_position_insight,
+    clear_runtime_caches,
+    configure_engine_cache,
+    configure_lichess,
+    database_context_for_board,
+    generate_theory_line,
+)
 from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_class, normalize_time_classes
 from .classifications import book_classification_payload
 from .engine import EnginePool, EngineSettings, default_engine_path
@@ -381,6 +389,25 @@ def finish_analysis_status(*, ok: bool, message: str = "") -> None:
         if message:
             ANALYSIS_STATUS["message"] = message
         ANALYSIS_STATUS["completed_at"] = time.monotonic()
+
+
+def reset_analysis_status_to_idle(message: str = "Ready.") -> None:
+    global ANALYSIS_STATUS, ANALYSIS_STATUS_SETTINGS, ANALYSIS_STATUS_ENGINE
+    with ANALYSIS_STATUS_LOCK:
+        ANALYSIS_STATUS_SETTINGS = None
+        ANALYSIS_STATUS_ENGINE = None
+        ANALYSIS_STATUS = {
+            "active": False,
+            "phase": "idle",
+            "progress": 0,
+            "message": message,
+            "eta_sec": 0,
+            "elapsed_sec": 0,
+            "positions_done": 0,
+            "positions_total": 0,
+            "positions_per_second": 0.0,
+            "resources": {},
+        }
 
 
 def analysis_status_payload() -> dict[str, object]:
@@ -955,6 +982,36 @@ def cache_stats() -> tuple:
 @app.get("/api/analysis-status")
 def analysis_status() -> tuple:
     return jsonify(analysis_status_payload())
+
+
+@app.post("/api/reset-local-workspace")
+def reset_local_workspace() -> tuple:
+    payload = request.get_json(force=True)
+    username = str(payload.get("username", "")).strip() or "trixize1234"
+    clear_engine_cache = bool(payload.get("clear_engine_cache", True))
+
+    with ANALYSIS_STATUS_LOCK:
+        if bool(ANALYSIS_STATUS.get("active")):
+            return jsonify({"error": "Bookup is still analyzing. Wait for the current job to finish before resetting local data."}), 409
+
+    user_cleared = STORE.clear_user_workspace(username)
+    shared_cleared = STORE.clear_shared_engine_cache() if clear_engine_cache else {"removed_files": 0, "removed_bytes": 0}
+    clear_runtime_caches(include_explorer=True, include_engine_cache=True)
+    CPU_SAMPLES.clear()
+    with ENGINE_LOCK:
+        close_live_engine()
+    reset_analysis_status_to_idle("Local cache cleared. Bookup is ready for a clean rebuild.")
+
+    return jsonify(
+        {
+            "ok": True,
+            "username": username,
+            "message": "Local cache cleared. Build Repertoire to reclassify everything from scratch.",
+            "removed_user_files": int(user_cleared.get("removed_files", 0)),
+            "removed_engine_entries": int(shared_cleared.get("removed_files", 0)),
+            "removed_engine_bytes": int(shared_cleared.get("removed_bytes", 0)),
+        }
+    )
 
 
 @app.post("/api/profile")

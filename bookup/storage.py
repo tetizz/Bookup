@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,9 @@ class LocalStore:
         path = self.root / _safe_slug(username)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _user_path(self, username: str) -> Path:
+        return self.root / _safe_slug(username)
 
     def _read_json(self, path: Path, default: Any) -> Any:
         if not path.exists():
@@ -131,6 +135,27 @@ class LocalStore:
             + sum(path.stat().st_size for path in games_files if path.exists()),
             "cache_root": str(self.root),
         }
+
+    def clear_user_workspace(self, username: str) -> dict[str, int]:
+        user_path = self._user_path(username)
+        removed_files = 0
+        removed_dirs = 0
+        if user_path.exists():
+            removed_files = sum(1 for path in user_path.rglob("*") if path.is_file())
+            removed_dirs = sum(1 for path in user_path.rglob("*") if path.is_dir())
+            shutil.rmtree(user_path, ignore_errors=True)
+        return {"removed_files": removed_files, "removed_dirs": removed_dirs}
+
+    def clear_shared_engine_cache(self) -> dict[str, int]:
+        shared_engine_dir = self.root / "_shared" / "cache" / "engine"
+        removed_files = 0
+        removed_bytes = 0
+        if shared_engine_dir.exists():
+            files = [path for path in shared_engine_dir.glob("*.json") if path.exists()]
+            removed_files = len(files)
+            removed_bytes = sum(path.stat().st_size for path in files)
+            shutil.rmtree(shared_engine_dir, ignore_errors=True)
+        return {"removed_files": removed_files, "removed_bytes": removed_bytes}
 
 
 def serialize_games(imported_games: list[ImportedGame]) -> list[dict[str, Any]]:

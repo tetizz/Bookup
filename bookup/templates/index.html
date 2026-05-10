@@ -137,7 +137,6 @@
                 <div id="status" class="status">Ready.</div>
                 <div id="progressLabel" class="progress-label">0%</div>
               </div>
-              <div id="engineStatsLive" class="engine-stats-live empty">Stockfish runtime stats will appear while Bookup analyzes your games.</div>
             </div>
           </div>
           <details class="import-pgn-panel">
@@ -156,8 +155,15 @@
 
         <section class="card summary-card">
           <div class="section-label">Summary</div>
-          <h2 id="heroTitle" class="section-title">No repertoire loaded yet</h2>
-          <p id="heroSummary" class="summary-copy">Run an import to build your repertoire map, needs-work queue, and trainable branches from the games you actually play.</p>
+          <div class="summary-hero-grid">
+            <div class="summary-copy-block">
+              <h2 id="heroTitle" class="section-title">No repertoire loaded yet</h2>
+              <p id="heroSummary" class="summary-copy">Run an import to build your repertoire map, needs-work queue, and trainable branches from the games you actually play.</p>
+            </div>
+            <div id="analysisPreviewPanel" class="analysis-preview-panel empty">
+              Run an import to see live worker stats and the positions Bookup is analyzing.
+            </div>
+          </div>
           <div class="summary-grid">
             <div class="summary-metric">
               <span>Games</span>
@@ -172,8 +178,9 @@
               <strong id="badgeWinRate">--</strong>
             </div>
           </div>
-          <div id="analysisPreviewPanel" class="analysis-preview-panel empty">
-            Run an import to see live worker stats and the positions Bookup is analyzing.
+          <div class="summary-action-row">
+            <button id="reclassifyFreshBtn" class="launch-btn" type="button">Reclassify from scratch</button>
+            <button id="resetWorkspaceBtn" class="ghost-btn" type="button">Reset local cache</button>
           </div>
         </section>
       </div>

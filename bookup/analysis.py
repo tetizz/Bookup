@@ -128,6 +128,14 @@ def configure_engine_cache(
     PERSISTENT_ENGINE_CACHE_SAVE = saver
 
 
+def clear_runtime_caches(*, include_explorer: bool = True, include_engine_cache: bool = True) -> None:
+    if include_explorer:
+        EXPLORER_CACHE.clear()
+        ONLINE_OPENING_CACHE.clear()
+    if include_engine_cache:
+        POSITION_INSIGHT_CACHE.clear()
+
+
 def _engine_cache_key(
     kind: str,
     board: chess.Board,
@@ -1669,6 +1677,7 @@ def build_position_insight(
                     popularity_by_uci=popularity_by_uci,
                     repeated_count=your_move_count,
                 ),
+                move_rank=int(your_line.get("rank", 0) or 0) or None,
             )
             try:
                 reaction_move = chess.Move.from_uci(your_move_uci)
@@ -2133,6 +2142,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
             popularity_by_uci=popularity_by_uci,
             repeated_count=best_repeat_count,
         ),
+        move_rank=int(root.get("rank", 0) or 0) or 1,
     )
     your_branch = branch_by_uci.get(top_played_uci) or next((line for line in candidate_lines if line["uci"] == top_played_uci), None)
     your_move_classification = None
@@ -2152,6 +2162,7 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
                 popularity_by_uci=popularity_by_uci,
                 repeated_count=top_played_count,
             ),
+            move_rank=int(your_branch.get("rank", 0) or 0) or None,
         )
 
     locked_training_line_uci = [*node.play_uci, *preferred_branch["line_uci"]]
@@ -3097,12 +3108,13 @@ def _cached_candidate_lines_for_brilliant_scan(
     live_budget: list[int],
     budget_lock: threading.Lock | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    candidate_limit = max(10, int(getattr(engine.settings, "multipv", 5) or 5))
     cache_key = _engine_cache_key(
         "candidate-lines",
         board,
         engine,
         play_uci=[],
-        limit=5,
+        limit=candidate_limit,
         time_sec=BRILLIANT_TRACKER_TIME_SEC,
         extra={"include_database": False},
     )
@@ -3115,7 +3127,7 @@ def _cached_candidate_lines_for_brilliant_scan(
         board,
         engine,
         play_uci=[],
-        limit=5,
+        limit=candidate_limit,
         time_sec=BRILLIANT_TRACKER_TIME_SEC,
         include_database=False,
     )
@@ -3155,11 +3167,11 @@ def _played_move_classification_for_brilliant_scan(
     live_budget: list[int],
     budget_lock: threading.Lock | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
-    """Classify the played move from the current-position MultiPV candidates.
+    """Classify the played move from the current position.
 
-    A move must be a current top candidate before it can be Brilliant. The older
-    direct played-branch scan was too permissive and promoted random late moves
-    after the position had already changed.
+    Only moves already present in the current MultiPV window are considered for
+    Brilliant tracking. This keeps the tracker aligned with the engine's live
+    PV rather than force-classifying off-PV moves after the fact.
     """
 
     played_uci = move.uci()
@@ -3169,19 +3181,6 @@ def _played_move_classification_for_brilliant_scan(
     if not candidate_lines:
         return None, None, "no_candidates"
     return None, None, "not_top_candidate"
-
-
-def _node_has_chesscom_brilliant_annotation(node: Any) -> bool:
-    """Detect trusted Chess.com review Brilliant marks preserved in imported PGN nodes."""
-
-    nags = getattr(node, "nags", set()) or set()
-    try:
-        if 3 in nags:  # PGN $3 / "!!"
-            return True
-    except TypeError:
-        pass
-    comment = str(getattr(node, "comment", "") or "").lower()
-    return "type;brilliant" in comment or "classification=brilliant" in comment or "$3" in comment
 
 
 def _game_url_label(imported: ImportedGame, index: int) -> str:
@@ -3471,8 +3470,7 @@ def _build_game_brilliant_tracker(
                 local_opponent_moves_ignored += 1
             if is_player_move and not in_scan_window:
                 local_moves_outside_scan_window += 1
-            has_review_brilliant = _node_has_chesscom_brilliant_annotation(child)
-            should_scan = is_player_move and (in_scan_window or has_review_brilliant)
+            should_scan = is_player_move and in_scan_window
             if should_scan:
                 local_moves_scanned += 1
                 played_uci = move.uci()
@@ -3486,51 +3484,35 @@ def _build_game_brilliant_tracker(
                             orientation=player_color,
                         )
                     )
-                if has_review_brilliant:
-                    played_line = {
-                        "uci": played_uci,
-                        "move": san,
-                        "san": san,
-                        "line_san": san,
-                    }
-                    classification = classification_payload(
-                        "brilliant",
-                        loss=0.0,
-                        expected_points=1.0,
-                        reason="Chess.com review marked this move Brilliant",
-                        is_real_piece_sacrifice=True,
-                    )
-                    classification_source = "pgn_brilliant"
-                else:
-                    candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(
-                        board,
-                        engine,
-                        live_budget=live_budget,
-                        budget_lock=budget_lock,
-                    )
-                    if from_cache:
-                        local_candidate_cache_hits += 1
-                    elif candidate_lines:
-                        local_candidate_live_hits += 1
-                    played_line, classification, classification_source = _played_move_classification_for_brilliant_scan(
-                        board,
-                        move,
-                        san,
-                        path_uci=list(path_uci),
-                        candidate_lines=candidate_lines,
-                        database_moves=database_moves,
-                        engine=engine,
-                        live_budget=live_budget,
-                        budget_lock=budget_lock,
-                    )
-                    if classification_source == "played_cache":
-                        local_played_cache_hits += 1
-                    elif classification_source == "played_live":
-                        local_played_live_hits += 1
-                    elif classification_source == "not_top_candidate":
-                        local_not_top_candidate_moves += 1
-                    elif classification_source == "budget_exhausted":
-                        local_skipped_live_budget += 1
+                candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(
+                    board,
+                    engine,
+                    live_budget=live_budget,
+                    budget_lock=budget_lock,
+                )
+                if from_cache:
+                    local_candidate_cache_hits += 1
+                elif candidate_lines:
+                    local_candidate_live_hits += 1
+                played_line, classification, classification_source = _played_move_classification_for_brilliant_scan(
+                    board,
+                    move,
+                    san,
+                    path_uci=list(path_uci),
+                    candidate_lines=candidate_lines,
+                    database_moves=database_moves,
+                    engine=engine,
+                    live_budget=live_budget,
+                    budget_lock=budget_lock,
+                )
+                if classification_source == "played_cache":
+                    local_played_cache_hits += 1
+                elif classification_source == "played_live":
+                    local_played_live_hits += 1
+                elif classification_source == "not_top_candidate":
+                    local_not_top_candidate_moves += 1
+                elif classification_source == "budget_exhausted":
+                    local_skipped_live_budget += 1
                 key = _classification_key(classification)
                 if key:
                     local_classified_moves += 1
@@ -3540,7 +3522,7 @@ def _build_game_brilliant_tracker(
                     local_counts["not_brilliant"] += 1
                 else:
                     local_unclassified_moves += 1
-                if key == "brilliant" and classification_source == "pgn_brilliant":
+                if key == "brilliant":
                     before_path = list(path_san)
                     item = {
                         "game_id": game_id,
@@ -3701,7 +3683,7 @@ def _build_game_brilliant_tracker(
         "stored_with_profile": True,
         "classified_during_import": True,
         "scope": "all imported games, every move made by you",
-        "scan_mode": "trusted Chess.com review Brilliant markers stored; live engine ideas stay descriptive",
+        "scan_mode": "engine-only MultiPV scan for near-best good piece sacrifices",
         "player_move_scope": "your moves only",
         "games_scanned": games_scanned,
         "moves_scanned": moves_scanned,

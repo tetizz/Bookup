@@ -81,7 +81,6 @@ const el = {
   progressTrack: document.getElementById("progressTrack"),
   progressFill: document.getElementById("progressFill"),
   progressLabel: document.getElementById("progressLabel"),
-  engineStatsLive: document.getElementById("engineStatsLive"),
   analysisPreviewPanel: document.getElementById("analysisPreviewPanel"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
@@ -91,6 +90,8 @@ const el = {
   badgeGames: document.getElementById("badgeGames"),
   badgeKnown: document.getElementById("badgeKnown"),
   badgeWinRate: document.getElementById("badgeWinRate"),
+  reclassifyFresh: document.getElementById("reclassifyFreshBtn"),
+  resetWorkspace: document.getElementById("resetWorkspaceBtn"),
   firstMoveWhite: document.getElementById("firstMoveWhite"),
   firstMoveBlack: document.getElementById("firstMoveBlack"),
   repertoireMapWhite: document.getElementById("repertoireMapWhite"),
@@ -246,6 +247,10 @@ const state = {
 };
 
 async function init() {
+  const savedNotice = sessionStorage.getItem("bookup-status-message") || "";
+  const shouldAutoRebuild = sessionStorage.getItem("bookup-auto-rebuild") === "1";
+  sessionStorage.removeItem("bookup-status-message");
+  sessionStorage.removeItem("bookup-auto-rebuild");
   preloadClassificationIcons();
   el.username.value = defaults.username || "trixize1234";
   el.timeClasses.value = defaults.time_classes || "all";
@@ -266,6 +271,8 @@ async function init() {
   el.importPgn?.addEventListener("click", importPgnGames);
   el.importAllGames?.addEventListener("change", syncImportScope);
   el.autoImportStartup?.addEventListener("change", () => { void saveStartupImportSetting(); });
+  el.reclassifyFresh?.addEventListener("click", () => { void resetLocalWorkspace({ rebuild: true }); });
+  el.resetWorkspace?.addEventListener("click", () => { void resetLocalWorkspace({ rebuild: false }); });
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
   el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
@@ -380,8 +387,15 @@ async function init() {
   setActiveTab("setup");
   renderStudyWorkspace();
   await bootstrapLocalState();
-  void checkAutoImportOnStartup();
   void initializeFreeAnalysisBoard();
+  if (savedNotice) {
+    setProgress(0, savedNotice, { allowDecrease: true });
+  }
+  if (shouldAutoRebuild) {
+    await runAnalysis({ forceRefresh: true });
+    return;
+  }
+  void checkAutoImportOnStartup();
 }
 
 function normalizeFen(fen) {
@@ -587,6 +601,46 @@ function applyBoardState(payload, options = {}) {
   }
   if (state.activeLessonId) {
     syncTrainerPhase(currentLesson());
+  }
+}
+
+async function resetLocalWorkspace({ rebuild = false } = {}) {
+  const username = String(el.username?.value || defaults.username || "trixize1234").trim();
+  if (!username) {
+    setProgress(0, "Enter a Chess.com username before resetting the local workspace.", { allowDecrease: true });
+    return;
+  }
+  const prompt = rebuild
+    ? `Clear Bookup's local cache for ${username} and rebuild the full repertoire from scratch?`
+    : `Clear Bookup's local cache for ${username}? This removes the saved repertoire, progress, and engine cache for a clean install.`;
+  if (!window.confirm(prompt)) {
+    return;
+  }
+  const disabledButtons = [el.analyze, el.importPgn, el.reclassifyFresh, el.resetWorkspace].filter(Boolean);
+  disabledButtons.forEach((button) => { button.disabled = true; });
+  stopAnalysisProgress();
+  setProgress(6, rebuild ? "Clearing local cache before a full reclassification..." : "Clearing local cache and saved analysis...", { allowDecrease: true });
+  try {
+    const response = await fetch("/api/reset-local-workspace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username,
+        clear_engine_cache: true,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Bookup could not clear the local workspace.");
+    }
+    sessionStorage.setItem("bookup-status-message", payload.message || "Local cache cleared.");
+    if (rebuild) {
+      sessionStorage.setItem("bookup-auto-rebuild", "1");
+    }
+    window.location.reload();
+  } catch (error) {
+    setProgress(0, error.message || "Bookup could not clear the local workspace.", { allowDecrease: true });
+    disabledButtons.forEach((button) => { button.disabled = false; });
   }
 }
 
@@ -1024,13 +1078,13 @@ function analysisEtaText(stats) {
 
 function renderStockfishStats(stats, options = {}) {
   const live = Boolean(options.live);
-  const node = live ? el.engineStatsLive : el.stockfishStatsPanel;
-  if (!node) return;
+  const node = live ? null : el.stockfishStatsPanel;
   if (!stats) {
-    node.className = live ? "engine-stats-live empty" : "stack empty";
-    node.textContent = live
-      ? "Stockfish runtime stats will appear while Bookup analyzes your games."
-      : "Live Stockfish throughput, ETA, CPU, and memory will show up here.";
+    if (!live && node) {
+      node.className = "stack empty";
+      node.textContent = "Live Stockfish throughput, ETA, CPU, and memory will show up here.";
+    }
+    renderAnalysisPreviewPanel(null);
     return;
   }
   const phase = stats.phase || "idle";
@@ -1073,22 +1127,24 @@ function renderStockfishStats(stats, options = {}) {
     ["Depth / MultiPV", `${Number(stats.depth || 0)} / ${Number(stats.multipv || 0)}`],
     ["Classified", `${Number(stats.brilliant_moves_classified || 0)}/${Number(stats.brilliant_player_moves_total || stats.brilliant_moves_scanned || 0)}`],
   ];
-  node.className = live ? "engine-stats-live" : "stack stockfish-stats-panel";
-  node.innerHTML = `
-    <div class="stockfish-status-head">
-      <span>${escapeHtml(analysisPhaseLabel(phase))}</span>
-      <strong>${escapeHtml(analysisWorkSummary(stats))}</strong>
-      <small>${escapeHtml(stats.message || (stats.active ? "Stockfish is working..." : "Analysis cache is ready."))}</small>
-    </div>
-    <div class="speed-grid stockfish-speed-grid">
-      ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}
-    </div>
-    <div class="line-note">
-      Elapsed ${formatDuration(stats.elapsed_sec)} · ${Number(stats.worker_threads || 0)} thread${Number(stats.worker_threads || 0) === 1 ? "" : "s"} per worker · ${Number(stats.worker_hash_mb || 0)} MB hash per worker.
-      ${freeMemory ? ` Windows reports ${Math.round(freeMemory)} MB free${totalMemory ? ` of ${Math.round(totalMemory)} MB` : ""}.` : ""}
-      ${hashLimit ? ` Safe hash ceiling: ${hashLimit} MB.` : ""}
-    </div>
-  `;
+  if (!live && node) {
+    node.className = "stack stockfish-stats-panel";
+    node.innerHTML = `
+      <div class="stockfish-status-head">
+        <span>${escapeHtml(analysisPhaseLabel(phase))}</span>
+        <strong>${escapeHtml(analysisWorkSummary(stats))}</strong>
+        <small>${escapeHtml(stats.message || (stats.active ? "Stockfish is working..." : "Analysis cache is ready."))}</small>
+      </div>
+      <div class="speed-grid stockfish-speed-grid">
+        ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}
+      </div>
+      <div class="line-note">
+        Elapsed ${formatDuration(stats.elapsed_sec)} · ${Number(stats.worker_threads || 0)} thread${Number(stats.worker_threads || 0) === 1 ? "" : "s"} per worker · ${Number(stats.worker_hash_mb || 0)} MB hash per worker.
+        ${freeMemory ? ` Windows reports ${Math.round(freeMemory)} MB free${totalMemory ? ` of ${Math.round(totalMemory)} MB` : ""}.` : ""}
+        ${hashLimit ? ` Safe hash ceiling: ${hashLimit} MB.` : ""}
+      </div>
+    `;
+  }
   renderAnalysisPreviewPanel(stats);
 }
 
@@ -1733,7 +1789,7 @@ function renderBrilliantTracker(tracker) {
   const hasScanData = Boolean(progress?.available || Number(summary.games_scanned || 0) || Number(summary.moves_scanned || 0));
   if (!high.length && !watch.length && !games.length && !hasScanData) {
     el.brilliantTracker.className = "brilliant-tracker-panel empty";
-    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup stores trusted Brilliant review markers from your imported PGNs and keeps engine-only tactical ideas out of the Brilliant tracker.";
+    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported positions with Stockfish and only stores near-best good piece sacrifices that stay sound.";
     return;
   }
   el.brilliantTracker.className = "brilliant-tracker-panel";

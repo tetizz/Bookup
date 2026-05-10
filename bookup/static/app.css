@@ -189,6 +189,23 @@ h1 {
   padding: 22px;
 }
 
+.summary-card {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.summary-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.78fr) minmax(520px, 1.22fr);
+  align-items: start;
+  gap: 22px;
+}
+
+.summary-copy-block {
+  min-width: 0;
+}
+
 .section-label {
   color: var(--accent);
   font-size: 11px;
@@ -213,7 +230,19 @@ h1 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  margin-top: 22px;
+  margin-top: 0;
+}
+
+.summary-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.summary-action-row .launch-btn,
+.summary-action-row .ghost-btn {
+  margin-top: 0;
 }
 
 .field {
@@ -374,7 +403,7 @@ select:focus {
 .analysis-preview-panel {
   display: grid;
   gap: 18px;
-  margin-top: 24px;
+  margin-top: 0;
   padding: 18px;
   border: 1px solid rgba(125, 162, 255, 0.18);
   border-radius: 22px;
@@ -390,9 +419,9 @@ select:focus {
 }
 
 .analysis-preview-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  align-items: start;
   gap: 18px;
 }
 
@@ -3346,6 +3375,10 @@ select:focus {
   .form-grid,
   .engine-grid,
   .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-hero-grid {
     grid-template-columns: 1fr;
   }
 
