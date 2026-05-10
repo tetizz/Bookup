@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -85,6 +85,23 @@ class PositionNode:
             self.player_san = {}
         if self.result_counts is None:
             self.result_counts = Counter()
+
+
+def _analysis_progress_preview(
+    fen: str,
+    *,
+    label: str = "Position",
+    subtitle: str = "",
+    status: str = "Analyzing",
+    orientation: str = "white",
+) -> dict[str, Any]:
+    return {
+        "fen": fen,
+        "label": label,
+        "subtitle": subtitle,
+        "status": status,
+        "orientation": "black" if orientation == "black" else "white",
+    }
 
 
 def configure_lichess(token: str = "") -> None:
@@ -1019,6 +1036,7 @@ def _collect_position_nodes(
     nodes: dict[str, PositionNode] = {}
     position_counts: dict[str, Counter[str]] = defaultdict(Counter)
     opening_by_position: dict[str, dict[str, Any]] = {}
+    live_previews: deque[dict[str, Any]] = deque(maxlen=6)
     total_games = len(games)
     started = time.perf_counter()
     last_notify = 0.0
@@ -1045,7 +1063,9 @@ def _collect_position_nodes(
                 games_total=total_games,
                 positions_indexed=len(nodes),
                 items_per_second=round(rate, 2),
+                games_per_second=round(rate, 2),
                 eta_sec=round(eta, 1) if eta else 0,
+                live_positions=list(live_previews),
                 message=f"Indexed {game_index}/{total_games} games into {len(nodes)} repertoire positions...",
             )
         except Exception:
@@ -1090,6 +1110,15 @@ def _collect_position_nodes(
                 node.player_moves[move.uci()] += 1
                 node.player_san[move.uci()] = san
                 position_counts[key][san] += 1
+                live_previews.append(
+                    _analysis_progress_preview(
+                        board.fen(),
+                        label=san,
+                        subtitle=f"{seen_label} · {opening_info['name']}",
+                        status="Indexing",
+                        orientation=imported.player_color,
+                    )
+                )
             last_san = board.san(move)
             play_uci.append(move.uci())
             board.push(move)
@@ -3142,6 +3171,19 @@ def _played_move_classification_for_brilliant_scan(
     return None, None, "not_top_candidate"
 
 
+def _node_has_chesscom_brilliant_annotation(node: Any) -> bool:
+    """Detect trusted Chess.com review Brilliant marks preserved in imported PGN nodes."""
+
+    nags = getattr(node, "nags", set()) or set()
+    try:
+        if 3 in nags:  # PGN $3 / "!!"
+            return True
+    except TypeError:
+        pass
+    comment = str(getattr(node, "comment", "") or "").lower()
+    return "type;brilliant" in comment or "classification=brilliant" in comment or "$3" in comment
+
+
 def _game_url_label(imported: ImportedGame, index: int) -> str:
     if imported.url:
         return imported.url.rsplit("/", 1)[-1] or imported.url
@@ -3404,6 +3446,7 @@ def _build_game_brilliant_tracker(
         local_player_moves_total = 0
         local_opponent_moves_ignored = 0
         local_moves_outside_scan_window = 0
+        local_live_positions: list[dict[str, Any]] = []
         played_on = _parse_game_date(imported)
         result_key = _classify_result(imported.result or str(imported.game.headers.get("Result", "")), player_color)
         opponent = imported.opponent or ("Black" if player_color == "white" else "White")
@@ -3428,39 +3471,66 @@ def _build_game_brilliant_tracker(
                 local_opponent_moves_ignored += 1
             if is_player_move and not in_scan_window:
                 local_moves_outside_scan_window += 1
-            should_scan = is_player_move and in_scan_window
+            has_review_brilliant = _node_has_chesscom_brilliant_annotation(child)
+            should_scan = is_player_move and (in_scan_window or has_review_brilliant)
             if should_scan:
                 local_moves_scanned += 1
                 played_uci = move.uci()
-                candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(
-                    board,
-                    engine,
-                    live_budget=live_budget,
-                    budget_lock=budget_lock,
-                )
-                if from_cache:
-                    local_candidate_cache_hits += 1
-                elif candidate_lines:
-                    local_candidate_live_hits += 1
-                played_line, classification, classification_source = _played_move_classification_for_brilliant_scan(
-                    board,
-                    move,
-                    san,
-                    path_uci=list(path_uci),
-                    candidate_lines=candidate_lines,
-                    database_moves=database_moves,
-                    engine=engine,
-                    live_budget=live_budget,
-                    budget_lock=budget_lock,
-                )
-                if classification_source == "played_cache":
-                    local_played_cache_hits += 1
-                elif classification_source == "played_live":
-                    local_played_live_hits += 1
-                elif classification_source == "not_top_candidate":
-                    local_not_top_candidate_moves += 1
-                elif classification_source == "budget_exhausted":
-                    local_skipped_live_budget += 1
+                if len(local_live_positions) < 3:
+                    local_live_positions.append(
+                        _analysis_progress_preview(
+                            board.fen(),
+                            label=san,
+                            subtitle=f"{date_label} · vs {opponent}",
+                            status="Classifying",
+                            orientation=player_color,
+                        )
+                    )
+                if has_review_brilliant:
+                    played_line = {
+                        "uci": played_uci,
+                        "move": san,
+                        "san": san,
+                        "line_san": san,
+                    }
+                    classification = classification_payload(
+                        "brilliant",
+                        loss=0.0,
+                        expected_points=1.0,
+                        reason="Chess.com review marked this move Brilliant",
+                        is_real_piece_sacrifice=True,
+                    )
+                    classification_source = "pgn_brilliant"
+                else:
+                    candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(
+                        board,
+                        engine,
+                        live_budget=live_budget,
+                        budget_lock=budget_lock,
+                    )
+                    if from_cache:
+                        local_candidate_cache_hits += 1
+                    elif candidate_lines:
+                        local_candidate_live_hits += 1
+                    played_line, classification, classification_source = _played_move_classification_for_brilliant_scan(
+                        board,
+                        move,
+                        san,
+                        path_uci=list(path_uci),
+                        candidate_lines=candidate_lines,
+                        database_moves=database_moves,
+                        engine=engine,
+                        live_budget=live_budget,
+                        budget_lock=budget_lock,
+                    )
+                    if classification_source == "played_cache":
+                        local_played_cache_hits += 1
+                    elif classification_source == "played_live":
+                        local_played_live_hits += 1
+                    elif classification_source == "not_top_candidate":
+                        local_not_top_candidate_moves += 1
+                    elif classification_source == "budget_exhausted":
+                        local_skipped_live_budget += 1
                 key = _classification_key(classification)
                 if key:
                     local_classified_moves += 1
@@ -3470,7 +3540,7 @@ def _build_game_brilliant_tracker(
                     local_counts["not_brilliant"] += 1
                 else:
                     local_unclassified_moves += 1
-                if key == "brilliant":
+                if key == "brilliant" and classification_source == "pgn_brilliant":
                     before_path = list(path_san)
                     item = {
                         "game_id": game_id,
@@ -3548,6 +3618,7 @@ def _build_game_brilliant_tracker(
             "player_moves_total": local_player_moves_total,
             "opponent_moves_ignored": local_opponent_moves_ignored,
             "moves_outside_scan_window": local_moves_outside_scan_window,
+            "live_positions": local_live_positions,
         }
 
     def merge_scan_result(result: dict[str, Any]) -> None:
@@ -3574,6 +3645,8 @@ def _build_game_brilliant_tracker(
         brilliant_moves.extend(result.get("brilliant_moves", []))
         if result.get("brilliant_game"):
             brilliant_games.append(result["brilliant_game"])
+        for preview in result.get("live_positions", []) or []:
+            live_scan_previews.append(preview)
 
     def notify_scan_progress(force: bool = False) -> None:
         if not force and games_scanned != 1 and games_scanned % 5 != 0 and games_scanned != total_games:
@@ -3596,9 +3669,12 @@ def _build_game_brilliant_tracker(
             live_hits=candidate_live_hits + played_live_hits,
             eta_sec=round(eta, 1),
             items_per_second=round(rate, 2),
+            games_per_second=round(rate, 2),
+            live_positions=list(live_scan_previews),
             message=f"Scanning Brilliant candidates in your moves {games_scanned}/{total_games} games with {scan_workers} workers...",
         )
 
+    live_scan_previews: deque[dict[str, Any]] = deque(maxlen=6)
     if scan_workers > 1 and total_games > 1:
         with ThreadPoolExecutor(max_workers=scan_workers, thread_name_prefix="bookup-brilliant") as executor:
             futures = [
@@ -3625,7 +3701,7 @@ def _build_game_brilliant_tracker(
         "stored_with_profile": True,
         "classified_during_import": True,
         "scope": "all imported games, every move made by you",
-        "scan_mode": "Stockfish MultiPV top-line gate; PGN review annotations are ignored",
+        "scan_mode": "trusted Chess.com review Brilliant markers stored; live engine ideas stay descriptive",
         "player_move_scope": "your moves only",
         "games_scanned": games_scanned,
         "moves_scanned": moves_scanned,
@@ -3921,11 +3997,25 @@ def analyse_games(
     worker_count = max(1, int(getattr(engine, "worker_count", 1) or 1))
     total_positions = max(1, len(analyzed_nodes))
     positions_done = 0
+    live_position_previews: deque[dict[str, Any]] = deque(
+        (
+            _analysis_progress_preview(
+                node.position_fen,
+                label=node.player_san.get(node.player_moves.most_common(1)[0][0], node.trigger_move) if node.player_moves else node.trigger_move,
+                subtitle=f"{node.occurrences}x · {node.opening_name}",
+                status="Queued",
+                orientation=node.color,
+            )
+            for node in analyzed_nodes[:6]
+        ),
+        maxlen=6,
+    )
     notify(
         phase="stockfish_positions",
         progress=20 if analyzed_nodes else 68,
         positions_done=0,
         positions_total=len(analyzed_nodes),
+        live_positions=list(live_position_previews),
         message=(
             f"Stockfish is analyzing {len(analyzed_nodes)} repeated positions with "
             f"{min(worker_count, max(1, len(analyzed_nodes)))} worker(s)..."
@@ -3935,20 +4025,31 @@ def analyse_games(
     )
     if worker_count > 1 and len(analyzed_nodes) > 1:
         with ThreadPoolExecutor(max_workers=min(worker_count, len(analyzed_nodes)), thread_name_prefix="bookup-stockfish") as executor:
-            futures = [
-                executor.submit(_build_lesson_from_node, node, engine, time_sec=quick_time_sec)
+            futures = {
+                executor.submit(_build_lesson_from_node, node, engine, time_sec=quick_time_sec): node
                 for node in analyzed_nodes
-            ]
+            }
             for future in as_completed(futures):
+                node = futures[future]
                 lesson = future.result()
                 if lesson:
                     lessons.append(lesson)
+                    live_position_previews.append(
+                        _analysis_progress_preview(
+                            lesson.get("position_fen") or lesson.get("line_start_fen") or chess.STARTING_FEN,
+                            label=str(lesson.get("recommended_move") or lesson.get("best_reply") or lesson.get("line_label") or "Position"),
+                            subtitle=f"{lesson.get('frequency', node.occurrences)}x · {lesson.get('opening_name', node.opening_name)}",
+                            status="Analyzed",
+                            orientation=str(lesson.get("side") or node.color),
+                        )
+                    )
                 positions_done += 1
                 notify(
                     phase="stockfish_positions",
                     progress=20 + int((positions_done / total_positions) * 48),
                     positions_done=positions_done,
                     positions_total=len(analyzed_nodes),
+                    live_positions=list(live_position_previews),
                     message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...",
                 )
     else:
@@ -3956,12 +4057,22 @@ def analyse_games(
             lesson = _build_lesson_from_node(node, engine, time_sec=quick_time_sec)
             if lesson:
                 lessons.append(lesson)
+                live_position_previews.append(
+                    _analysis_progress_preview(
+                        lesson.get("position_fen") or lesson.get("line_start_fen") or chess.STARTING_FEN,
+                        label=str(lesson.get("recommended_move") or lesson.get("best_reply") or lesson.get("line_label") or "Position"),
+                        subtitle=f"{lesson.get('frequency', node.occurrences)}x · {lesson.get('opening_name', node.opening_name)}",
+                        status="Analyzed",
+                        orientation=str(lesson.get("side") or node.color),
+                    )
+                )
             positions_done += 1
             notify(
                 phase="stockfish_positions",
                 progress=20 + int((positions_done / total_positions) * 48),
                 positions_done=positions_done,
                 positions_total=len(analyzed_nodes),
+                live_positions=list(live_position_previews),
                 message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...",
             )
 

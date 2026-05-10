@@ -314,6 +314,7 @@ def update_analysis_status(
         if engine is not None:
             ANALYSIS_STATUS_ENGINE = engine
         clean_patch = {key: value for key, value in patch.items() if value is not None}
+        old_phase = str(ANALYSIS_STATUS.get("phase", "") or "")
         if "progress" in clean_patch:
             try:
                 next_progress = int(clean_patch["progress"] or 0)
@@ -329,9 +330,13 @@ def update_analysis_status(
                 clean_patch.pop("progress", None)
         ANALYSIS_STATUS.update(clean_patch)
         now = time.monotonic()
+        phase = str(ANALYSIS_STATUS.get("phase", "") or "")
+        if phase != old_phase:
+            ANALYSIS_STATUS["phase_started_at"] = now
         started = float(ANALYSIS_STATUS.get("started_at", now) or now)
         elapsed = max(0.001, now - started)
-        phase = str(ANALYSIS_STATUS.get("phase", "") or "")
+        phase_started = float(ANALYSIS_STATUS.get("phase_started_at", started) or started)
+        phase_elapsed = max(0.001, now - phase_started)
         position_done = int(ANALYSIS_STATUS.get("positions_done", 0) or 0)
         position_total = int(ANALYSIS_STATUS.get("positions_total", 0) or 0)
         done = position_done
@@ -350,9 +355,9 @@ def update_analysis_status(
                     done = int(ANALYSIS_STATUS.get("classified_moves", 0) or 0)
                     total = int(ANALYSIS_STATUS.get("moves_scanned", 0) or 0)
         if done > 0:
-            rate = done / elapsed
+            rate = done / phase_elapsed
             if position_done > 0:
-                ANALYSIS_STATUS["positions_per_second"] = round(position_done / elapsed, 2)
+                ANALYSIS_STATUS["positions_per_second"] = round(position_done / phase_elapsed, 2)
             ANALYSIS_STATUS["items_per_second"] = round(rate, 2)
             ANALYSIS_STATUS["eta_sec"] = round(max(0.0, (total - done) / rate), 1) if total > done and rate > 0 else 0
         elif ANALYSIS_STATUS.get("active"):
@@ -360,6 +365,7 @@ def update_analysis_status(
             ANALYSIS_STATUS["items_per_second"] = 0.0
             ANALYSIS_STATUS["eta_sec"] = None
         ANALYSIS_STATUS["elapsed_sec"] = round(elapsed, 1)
+        ANALYSIS_STATUS["phase_elapsed_sec"] = round(phase_elapsed, 1)
         current_settings = settings or ANALYSIS_STATUS_SETTINGS
         current_engine = engine or ANALYSIS_STATUS_ENGINE
         if current_settings is not None:

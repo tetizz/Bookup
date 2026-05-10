@@ -82,6 +82,7 @@ const el = {
   progressFill: document.getElementById("progressFill"),
   progressLabel: document.getElementById("progressLabel"),
   engineStatsLive: document.getElementById("engineStatsLive"),
+  analysisPreviewPanel: document.getElementById("analysisPreviewPanel"),
   heroTitle: document.getElementById("heroTitle"),
   heroSummary: document.getElementById("heroSummary"),
   summaryPositions: document.getElementById("summaryPositions"),
@@ -918,8 +919,10 @@ function stockfishStatsFromStatus(status) {
     positions_total: Number(status.positions_total ?? 0),
     positions_per_second: Number(status.positions_per_second ?? 0),
     items_per_second: Number(status.items_per_second ?? 0),
+    games_per_second: Number(status.games_per_second ?? status.items_per_second ?? 0),
     elapsed_sec: Number(status.elapsed_sec ?? 0),
     eta_sec: status.eta_sec,
+    live_positions: Array.isArray(status.live_positions) ? status.live_positions : [],
     brilliant_games_done: Number(status.brilliant_games_done ?? 0),
     brilliant_games_total: Number(status.brilliant_games_total ?? 0),
     brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
@@ -1049,7 +1052,7 @@ function renderStockfishStats(stats, options = {}) {
   const throughputCard = phase === "stockfish_positions"
     ? ["Positions/sec", formatRate(stats.positions_per_second)]
     : phase === "brilliant_scan"
-      ? ["Games/sec", formatRate(stats.items_per_second)]
+      ? ["Games/sec", formatRate(stats.games_per_second || stats.items_per_second)]
       : ["Index rate", formatRate(stats.items_per_second)];
   const memoryText = memory > 0
     ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
@@ -1057,13 +1060,13 @@ function renderStockfishStats(stats, options = {}) {
   const hashLimit = Number(stats.hash_limit_mb || 0);
   const primaryCard = analysisPrimaryCard(stats);
   const cards = [
+    throughputCard,
     primaryCard,
     ["ETA", analysisEtaText(stats)],
+    workerCard,
     [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
     ["CPU cores", cpuCoreText],
-    throughputCard,
     ["Memory", memoryText],
-    workerCard,
     ["Configured workers", workers],
     ["Threads", `${Number(stats.threads || 0)} total`],
     ["Hash budget", `${Number(stats.hash_mb || 0)} MB`],
@@ -1086,6 +1089,102 @@ function renderStockfishStats(stats, options = {}) {
       ${hashLimit ? ` Safe hash ceiling: ${hashLimit} MB.` : ""}
     </div>
   `;
+  renderAnalysisPreviewPanel(stats);
+}
+
+function renderAnalysisPreviewPanel(stats) {
+  const node = el.analysisPreviewPanel;
+  if (!node) return;
+  const previews = Array.isArray(stats?.live_positions) ? stats.live_positions.slice(0, 6) : [];
+  const active = Boolean(stats?.active);
+  if (!stats || (!active && !previews.length)) {
+    node.className = "analysis-preview-panel empty";
+    node.textContent = "Run an import to see live worker stats and the positions Bookup is analyzing.";
+    return;
+  }
+  const phase = analysisPhaseLabel(stats.phase || "");
+  const rawPhase = stats.phase || "";
+  const gamesDone = Number(stats.games_done || stats.brilliant_games_done || 0);
+  const gamesTotal = Number(stats.games_total || stats.brilliant_games_total || 0);
+  const positionDone = Number(stats.positions_analyzed || 0);
+  const positionTotal = Number(stats.positions_total || 0);
+  const gameRate = ["loading_games", "fetch_archives", "fetch_games", "indexing", "brilliant_scan"].includes(rawPhase)
+    ? Number(stats.games_per_second || stats.items_per_second || 0)
+    : 0;
+  const headerCards = [
+    ["Phase", phase],
+    ["Games/sec", formatRate(gameRate)],
+    ["Positions/sec", formatRate(stats.positions_per_second)],
+    ["Workers", `${Number(stats.active_workers || 0)}/${Number(stats.workers || 0)}`],
+    ["ETA", analysisEtaText(stats)],
+    ["CPU", stats.cpu_percent == null ? "--" : `${Number(stats.cpu_percent).toFixed(1)}%`],
+  ];
+  const workLine = gamesTotal
+    ? `${gamesDone}/${gamesTotal} games`
+    : positionTotal
+      ? `${positionDone}/${positionTotal} positions`
+      : analysisWorkSummary(stats);
+  node.className = "analysis-preview-panel";
+  node.innerHTML = `
+    <div class="analysis-preview-head">
+      <div>
+        <span class="section-label">Live Analysis</span>
+        <h3>${escapeHtml(workLine)}</h3>
+      </div>
+      <small>${escapeHtml(stats.message || "Bookup is preparing the next analysis batch.")}</small>
+    </div>
+    <div class="analysis-landscape-metrics">
+      ${headerCards.map(([label, value]) => `
+        <article>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(String(value))}</strong>
+        </article>
+      `).join("")}
+    </div>
+    <div class="analysis-live-board-grid">
+      ${previews.length ? previews.map(renderAnalysisPreviewCard).join("") : `
+        <article class="analysis-preview-card empty">
+          <div class="analysis-preview-placeholder">Waiting for the first analyzed position...</div>
+        </article>
+      `}
+    </div>
+  `;
+}
+
+function renderAnalysisPreviewCard(item) {
+  const label = item?.label || item?.move || "Position";
+  const subtitle = item?.subtitle || item?.status || "";
+  const status = item?.status || "Analyzing";
+  return `
+    <article class="analysis-preview-card">
+      <div class="analysis-preview-card-head">
+        <span>${escapeHtml(status)}</span>
+        <strong>${escapeHtml(label)}</strong>
+        ${subtitle ? `<small>${escapeHtml(subtitle)}</small>` : ""}
+      </div>
+      ${renderMiniBoard(item?.fen || START_FEN, item?.orientation || "white")}
+    </article>
+  `;
+}
+
+function renderMiniBoard(fen, orientation = "white") {
+  const squares = parseFenBoard(fen);
+  const displayFiles = orientation === "black" ? [...files].reverse() : files;
+  const displayRanks = orientation === "black" ? [...ranks].reverse() : ranks;
+  const cells = [];
+  displayRanks.forEach((rankLabel, rowIndex) => {
+    displayFiles.forEach((fileLabel, colIndex) => {
+      const file = files.indexOf(fileLabel);
+      const rank = 8 - Number(rankLabel);
+      const piece = squares[(rank * 8) + file] || "";
+      cells.push(`
+        <span class="mini-square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"}">
+          ${piece ? `<img src="${escapeHtml(PIECE_ASSETS[piece])}" alt="${escapeHtml(piece)}">` : ""}
+        </span>
+      `);
+    });
+  });
+  return `<div class="mini-board" aria-hidden="true">${cells.join("")}</div>`;
 }
 
 function stopAnalysisStatusPolling() {
@@ -1634,7 +1733,7 @@ function renderBrilliantTracker(tracker) {
   const hasScanData = Boolean(progress?.available || Number(summary.games_scanned || 0) || Number(summary.moves_scanned || 0));
   if (!high.length && !watch.length && !games.length && !hasScanData) {
     el.brilliantTracker.className = "brilliant-tracker-panel empty";
-    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported games with Stockfish MultiPV and only promotes moves that pass the current-position top-line gate.";
+    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup stores trusted Brilliant review markers from your imported PGNs and keeps engine-only tactical ideas out of the Brilliant tracker.";
     return;
   }
   el.brilliantTracker.className = "brilliant-tracker-panel";

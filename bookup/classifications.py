@@ -22,11 +22,12 @@ MOVE_CLASSIFICATION_LABELS = {
     "forced": "Forced",
 }
 
-WINTRCHESS_POINT_LOSS_BANDS = (
-    ("excellent", 0.045),
-    ("good", 0.08),
-    ("inaccuracy", 0.12),
-    ("mistake", 0.22),
+EXPECTED_POINTS_BANDS = (
+    ("excellent", 0.02),
+    ("good", 0.05),
+    ("inaccuracy", 0.10),
+    ("mistake", 0.20),
+    ("blunder", 1.00),
 )
 
 CLASSIFICATION_VALUES = {
@@ -55,10 +56,10 @@ BOOK_POPULARITY_THRESHOLD = 3.0
 CLASSIFICATION_ASSET_VERSION = "20260422c"
 BOOK_REPEAT_THRESHOLD = 2
 BOOK_ALLOWED_BASE_KEYS = {"best", "excellent", "good"}
-WINTRCHESS_EXPECTED_POINTS_GRADIENT = 0.0035
+EXPECTED_POINTS_GRADIENT = 0.0035
 GREAT_KEEP_ADVANTAGE_THRESHOLD = 0.53
 GREAT_KEEP_ADVANTAGE_CP = 20
-BRILLIANT_MATERIAL_DROP = 150
+BRILLIANT_MATERIAL_DROP = 200
 BRILLIANT_SOUND_THRESHOLD = 0.45
 BRILLIANT_ALREADY_WINNING_THRESHOLD = 0.92
 PIECE_VALUES = {
@@ -167,7 +168,7 @@ def book_classification_payload(expected_points: float, *, reason: str = "repert
 
 
 def expected_points_from_evaluation(*, score_type: str = "centipawn", score_value: int | float = 0) -> float:
-    """Directly mirrors wintrchess expected-points math for base labels."""
+    """Convert a Stockfish score into an expected-points estimate for base labels."""
     normalized_type = str(score_type or "centipawn").strip().lower()
     normalized_value = int(score_value or 0)
     if normalized_type == "mate":
@@ -175,7 +176,7 @@ def expected_points_from_evaluation(*, score_type: str = "centipawn", score_valu
             return 0.5
         return float(normalized_value > 0)
     clamped = max(-4000, min(4000, normalized_value))
-    return 1.0 / (1.0 + math.exp(-WINTRCHESS_EXPECTED_POINTS_GRADIENT * clamped))
+    return 1.0 / (1.0 + math.exp(-EXPECTED_POINTS_GRADIENT * clamped))
 
 
 def expected_points_from_record(record: dict[str, Any]) -> float:
@@ -733,8 +734,8 @@ def _consider_brilliant_classification(
         )
         for unsafe_piece in unsafe_pieces
     )
-    # Match the wintrchess/Chess.com-style conservative gate: a Brilliant move
-    # leaves a real tactical resource invested, not a fully protected fake sac.
+    # A Brilliant move should leave a real tactical resource invested, not a
+    # fully protected fake sacrifice.
     if danger_levels_protected:
         return False
 
@@ -753,12 +754,16 @@ def _consider_brilliant_classification(
 
 
 def point_loss_classification_key(loss: float, *, is_best_move: bool) -> str:
-    if is_best_move or loss < 0.01:
+    if is_best_move or loss <= 0.0005:
         return "best"
-    for key, limit in WINTRCHESS_POINT_LOSS_BANDS:
-        if loss < limit:
+    for key, limit in EXPECTED_POINTS_BANDS:
+        if loss <= limit:
             return key
     return "blunder"
+
+
+def base_classification_key(loss: float, *, is_best_move: bool) -> str:
+    return point_loss_classification_key(loss, is_best_move=is_best_move)
 
 
 def expected_points_loss_from_records(
@@ -771,13 +776,13 @@ def expected_points_loss_from_records(
     )
 
 
-def wintrchess_point_loss_classify(
+def expected_point_loss_classify(
     previous_record: dict[str, Any],
     current_record: dict[str, Any],
     *,
     is_best_move: bool = False,
 ) -> str:
-    """Port of wintrchess point-loss classification, mapped to Bookup labels."""
+    """Classify a move by expected-points loss, mapped to Bookup labels."""
     previous_score_type = score_type_from_record(previous_record)
     current_score_type = score_type_from_record(current_record)
     previous_score_value = score_value_from_record(previous_record)
@@ -838,7 +843,7 @@ def base_classification_reason(key: str, *, best_move_san: str, move_san: str) -
     if key == "great":
         return "only move that keeps the advantage"
     if key == "brilliant":
-        return "best move that keeps a tactical resource alive"
+        return "best or nearly-best move plus a good sacrifice"
     if key == "miss":
         return "fails to convert the stronger continuation"
     if key == "book":
@@ -863,13 +868,10 @@ def classify_move_record(
     move_uci = move_record.get("uci", "")
     best_expected = expected_points_from_record(best_record)
     move_expected = expected_points_from_record(move_record)
-    loss = expected_points_loss_from_records(best_record, move_record)
+    loss = max(0.0, best_expected - move_expected)
     is_best_move = move_uci == best_record.get("uci") or loss <= 0.0005
-    key = wintrchess_point_loss_classify(
-        best_record,
-        move_record,
-        is_best_move=is_best_move,
-    )
+    is_nearly_best_move = is_best_move or loss <= 0.02
+    key = base_classification_key(loss, is_best_move=is_best_move)
     reason = base_classification_reason(key, best_move_san=best_move_san, move_san=move_san)
     only_move_keeps_advantage = False
     real_piece_sacrifice = False
@@ -907,13 +909,15 @@ def classify_move_record(
             key = "great"
             only_move_keeps_advantage = True
             reason = "only move that keeps the advantage"
-        if (
-            not is_direct_checkmate
-            and CLASSIFICATION_VALUES.get(key, 0) >= CLASSIFICATION_VALUES["best"]
-            and _consider_brilliant_classification(board, move_record, second_record)
-        ):
-            key = "brilliant"
-            reason = "best move that keeps a tactical resource alive"
+        if is_nearly_best_move:
+            already_winning = best_expected >= BRILLIANT_ALREADY_WINNING_THRESHOLD
+            sound_enough = best_expected >= BRILLIANT_SOUND_THRESHOLD
+            if real_piece_sacrifice and sound_enough and not already_winning:
+                key = "brilliant"
+                reason = "best move plus a sound piece sacrifice"
+        elif is_player_move and best_expected >= 0.75 and 0.05 <= loss <= 0.20:
+            key = "miss"
+            reason = "fails to convert the stronger continuation"
 
     return classification_payload(
         key,
