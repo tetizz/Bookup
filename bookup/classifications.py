@@ -5,7 +5,7 @@ from typing import Any
 
 import chess
 
-from .opening_names import lookup_by_board
+from .opening_names import lookup_by_board, matches_opening_prefix
 
 
 MOVE_CLASSIFICATION_LABELS = {
@@ -53,17 +53,23 @@ CLASSIFICATION_NAGS = {
 }
 
 BOOK_POPULARITY_THRESHOLD = 3.0
-CLASSIFICATION_ASSET_VERSION = "20260422c"
+CLASSIFICATION_ASSET_VERSION = "20260512a"
 BOOK_REPEAT_THRESHOLD = 2
-BOOK_ALLOWED_BASE_KEYS = {"best", "excellent", "good"}
+BOOK_ALLOWED_BASE_KEYS = {"best", "excellent", "good", "inaccuracy"}
 EXPECTED_POINTS_GRADIENT = 0.0035
 GREAT_KEEP_ADVANTAGE_THRESHOLD = 0.53
 GREAT_KEEP_ADVANTAGE_CP = 20
 PRACTICAL_EDGE_CP_WINDOW = 120
 PRACTICAL_EDGE_INACCURACY_CP_DROP = 20
-BRILLIANT_MATERIAL_DROP = 1
+PRACTICAL_EDGE_RANK_LIMIT = 5
+PRACTICAL_EDGE_INACCURACY_LOSS_FLOOR = 0.045
+
+LOWER_RANK_EXCELLENT_MIN_RANK = 5
+LOWER_RANK_EXCELLENT_MIN_LOSS = 0.012
+LOWER_RANK_EXCELLENT_MIN_CP_GAP = 15
+BRILLIANT_MATERIAL_DROP = 100
 BRILLIANT_SOUND_THRESHOLD = 0.45
-BRILLIANT_ALREADY_WINNING_THRESHOLD = 0.985
+BRILLIANT_ALREADY_WINNING_THRESHOLD = 0.90
 BRILLIANT_NEAR_BEST_THRESHOLD = 0.02
 BRILLIANT_EXPANDED_THRESHOLD = 0.07
 BRILLIANT_TOP_CANDIDATE_LIMIT = 3
@@ -72,6 +78,13 @@ BRILLIANT_ACCEPTED_HANGING_TOP_LIMIT = 2
 BRILLIANT_PV_MATERIAL_DROP = 100
 BRILLIANT_PV_CONFIRM_PLIES = 6
 BRILLIANT_PV_PROFILE_PLIES = 8
+BRILLIANT_UNRECOVERED_ALLOWANCE = 330
+MISS_WINNING_EXPECTED_POINTS = 0.78
+MISS_EQUAL_OR_WORSE_EXPECTED_POINTS = 0.55
+MISS_MIN_EXPECTED_POINTS_LOSS = 0.08
+BEST_UNIQUENESS_THRESHOLD = 0.0005
+BEST_UNIQUENESS_CP_CEILING = 350
+BEST_EQUIVALENT_CP_GAP = 8
 PIECE_VALUES = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
@@ -149,6 +162,26 @@ def _move_results_in_book(board: chess.Board, move_uci: str) -> bool:
         return False
     if move not in board.legal_moves:
         return False
+    san_tokens: list[str] = []
+    if getattr(board, "move_stack", None):
+        replay = chess.Board()
+        san_tokens = []
+        try:
+            for item in board.move_stack:
+                if item not in replay.legal_moves:
+                    san_tokens = []
+                    break
+                san_tokens.append(replay.san(item))
+                replay.push(item)
+        except Exception:
+            san_tokens = []
+        if san_tokens:
+            try:
+                next_san = board.san(move)
+            except Exception:
+                next_san = ""
+            if next_san and matches_opening_prefix([*san_tokens, next_san]):
+                return True
     next_board = board.copy(stack=False)
     next_board.push(move)
     return _position_is_book(next_board)
@@ -186,7 +219,25 @@ def book_classification_payload(expected_points: float, *, reason: str = "repert
     return classification_payload("book", loss=0.0, reason=reason, expected_points=expected_points)
 
 
-def expected_points_from_evaluation(*, score_type: str = "centipawn", score_value: int | float = 0) -> float:
+def _is_miss_position(
+    *,
+    best_expected: float,
+    move_expected: float,
+    loss: float,
+) -> bool:
+    return (
+        best_expected >= MISS_WINNING_EXPECTED_POINTS
+        and move_expected <= MISS_EQUAL_OR_WORSE_EXPECTED_POINTS
+        and loss >= MISS_MIN_EXPECTED_POINTS_LOSS
+    )
+
+
+def expected_points_from_evaluation(
+    *,
+    score_type: str = "centipawn",
+    score_value: int | float = 0,
+    player_rating: int | None = None,
+) -> float:
     """Convert a Stockfish score into an expected-points estimate for base labels."""
     normalized_type = str(score_type or "centipawn").strip().lower()
     normalized_value = int(score_value or 0)
@@ -198,18 +249,20 @@ def expected_points_from_evaluation(*, score_type: str = "centipawn", score_valu
     return 1.0 / (1.0 + math.exp(-EXPECTED_POINTS_GRADIENT * clamped))
 
 
-def expected_points_from_record(record: dict[str, Any]) -> float:
+def expected_points_from_record(record: dict[str, Any], *, player_rating: int | None = None) -> float:
     if not record:
         return 0.5
     if "score_type" in record or "score_value" in record:
         return expected_points_from_evaluation(
             score_type=str(record.get("score_type", "centipawn") or "centipawn"),
             score_value=int(record.get("score_value", record.get("score_cp", 0)) or 0),
+            player_rating=player_rating,
         )
     if "score_cp" in record:
         return expected_points_from_evaluation(
             score_type="centipawn",
             score_value=int(record.get("score_cp", 0) or 0),
+            player_rating=player_rating,
         )
     return float(record.get("expected_points", 0.5) or 0.5)
 
@@ -513,6 +566,52 @@ def _moved_piece_left_unsafe(board: chess.Board, move: chess.Move) -> bool:
     )
 
 
+def _least_direct_attacker_value(board: chess.Board, square: int, color: chess.Color) -> int | None:
+    values: list[int] = []
+    for attacker_square in board.attackers(not color, square):
+        attacker_piece = board.piece_at(attacker_square)
+        if attacker_piece is None or attacker_piece.piece_type == chess.KING:
+            continue
+        values.append(PIECE_VALUES.get(attacker_piece.piece_type, 0))
+    return min(values) if values else None
+
+
+def _least_direct_defender_value(board: chess.Board, square: int, color: chess.Color) -> int | None:
+    values: list[int] = []
+    for defender_square in board.attackers(color, square):
+        defender_piece = board.piece_at(defender_square)
+        if defender_piece is None or defender_piece.piece_type == chess.KING:
+            continue
+        values.append(PIECE_VALUES.get(defender_piece.piece_type, 0))
+    return min(values) if values else None
+
+
+def _has_material_winning_direct_defender(board: chess.Board, square: int, color: chess.Color) -> bool:
+    least_attacker_value = _least_direct_attacker_value(board, square, color)
+    if least_attacker_value is None:
+        return False
+    for defender_square in board.attackers(color, square):
+        defender_piece = board.piece_at(defender_square)
+        if defender_piece is None or defender_piece.piece_type == chess.KING:
+            continue
+        if PIECE_VALUES.get(defender_piece.piece_type, 0) <= least_attacker_value:
+            return True
+    return False
+
+
+def _is_piece_materially_hanging(board: chess.Board, piece: dict[str, Any]) -> bool:
+    piece_value = PIECE_VALUES.get(piece["type"], 0)
+    least_attacker_value = _least_direct_attacker_value(board, piece["square"], piece["color"])
+    if least_attacker_value is None:
+        return False
+    if least_attacker_value > piece_value:
+        return False
+    least_defender_value = _least_direct_defender_value(board, piece["square"], piece["color"])
+    if least_defender_value is None:
+        return True
+    return least_defender_value > least_attacker_value
+
+
 def _move_targets_high_value_piece(after_board: chess.Board, move: chess.Move, mover: chess.Color) -> bool:
     moved_piece = after_board.piece_at(move.to_square)
     if moved_piece is None or moved_piece.color != mover:
@@ -657,8 +756,12 @@ def is_real_piece_sacrifice(board: chess.Board, move: chess.Move) -> bool:
     after_board = _board_after_move(board, move)
     if after_board is None:
         return False
-    enemy_attackers = list(after_board.attackers(not moved_piece.color, move.to_square))
-    if not enemy_attackers:
+    least_enemy_attacker = _least_direct_attacker_value(after_board, move.to_square, moved_piece.color)
+    if least_enemy_attacker is None:
+        return False
+    if least_enemy_attacker > PIECE_VALUES.get(moved_piece.piece_type, 0):
+        return False
+    if _has_material_winning_direct_defender(after_board, move.to_square, moved_piece.color):
         return False
 
     return True
@@ -713,7 +816,7 @@ def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dic
         if piece["square"] == move.from_square:
             continue
         piece_key = (piece["square"], piece["type"], piece["color"])
-        if piece_key in unsafe_after_keys:
+        if piece_key in unsafe_after_keys and _is_piece_materially_hanging(board, piece):
             accepted_hanging_piece_value = max(
                 accepted_hanging_piece_value,
                 PIECE_VALUES.get(piece["type"], 0),
@@ -738,6 +841,7 @@ def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dic
 
     gives_check = bool(after_board and after_board.is_check())
     high_value_threat = bool(after_board) and _move_targets_high_value_piece(after_board, move, mover)
+    materially_defended = bool(after_board) and _has_material_winning_direct_defender(after_board, move.to_square, mover)
 
     return {
         "move": move,
@@ -747,6 +851,7 @@ def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dic
         "accepted_hanging_piece": accepted_hanging_piece_value >= PIECE_VALUES[chess.KNIGHT],
         "gives_check": gives_check,
         "high_value_threat": high_value_threat,
+        "materially_defended": materially_defended,
         "min_delta": min_delta,
         "max_delta": max_delta,
         "final_delta": final_delta,
@@ -769,28 +874,58 @@ def _pv_confirms_material_investment(board: chess.Board, move_record: dict[str, 
     return forcing_signal and profile["swing"] >= BRILLIANT_PV_MATERIAL_DROP
 
 
-def _is_good_piece_sacrifice_profile(profile: dict[str, Any]) -> bool:
+def _is_good_piece_sacrifice_profile(
+    profile: dict[str, Any],
+    *,
+    move_rank: int | None = None,
+    loss: float | None = None,
+) -> bool:
     if not profile:
         return False
     direct_investment = int(profile.get("direct_investment", 0) or 0)
     moved_piece_unsafe = bool(profile.get("moved_piece_unsafe"))
     accepted_hanging_piece = bool(profile.get("accepted_hanging_piece"))
+    accepted_hanging_piece_value = int(profile.get("accepted_hanging_piece_value", 0) or 0)
     min_delta = int(profile.get("min_delta", 0) or 0)
     recovered_from_risk = bool(profile.get("recovered_from_risk"))
     gives_check = bool(profile.get("gives_check"))
     high_value_threat = bool(profile.get("high_value_threat"))
+    materially_defended = bool(profile.get("materially_defended"))
     swing = int(profile.get("swing", 0) or 0)
+    final_delta = int(profile.get("final_delta", 0) or 0)
 
-    sacrifice_committed = direct_investment >= BRILLIANT_MATERIAL_DROP or (
-        moved_piece_unsafe and min_delta <= -BRILLIANT_PV_MATERIAL_DROP
+    accepted_hanging_candidate = (
+        accepted_hanging_piece
+        and direct_investment < BRILLIANT_MATERIAL_DROP
+        and not moved_piece_unsafe
+        and not materially_defended
+        and move_rank is not None
+        and move_rank <= BRILLIANT_ACCEPTED_HANGING_TOP_LIMIT
+        and (loss is None or loss <= BRILLIANT_TOP_CANDIDATE_THRESHOLD)
     )
-    if not sacrifice_committed and accepted_hanging_piece:
+
+    sacrifice_committed = direct_investment >= BRILLIANT_MATERIAL_DROP
+    if not sacrifice_committed and accepted_hanging_candidate:
         return True
     if not sacrifice_committed:
         return False
 
+    if materially_defended and not moved_piece_unsafe:
+        return False
+
     if direct_investment >= BRILLIANT_MATERIAL_DROP:
-        return bool(recovered_from_risk or gives_check or high_value_threat or swing >= BRILLIANT_PV_MATERIAL_DROP)
+        if not moved_piece_unsafe:
+            return False
+        tolerated_deficit = -(direct_investment + BRILLIANT_UNRECOVERED_ALLOWANCE)
+        if recovered_from_risk:
+            return True
+        if final_delta < tolerated_deficit:
+            return False
+        return bool(
+            gives_check
+            or high_value_threat
+            or swing >= BRILLIANT_PV_MATERIAL_DROP
+        )
 
     return moved_piece_unsafe and recovered_from_risk
 
@@ -830,6 +965,8 @@ def _consider_critical_classification(
     move_record: dict[str, Any],
     best_record: dict[str, Any],
     second_record: dict[str, Any] | None,
+    *,
+    player_rating: int | None = None,
 ) -> bool:
     if not _is_move_critical_candidate(board, move_record, second_record):
         return False
@@ -858,8 +995,29 @@ def _consider_critical_classification(
     if not second_record:
         return False
 
-    second_top_move_point_loss = expected_points_loss_from_records(best_record, second_record)
+    second_top_move_point_loss = expected_points_loss_from_records(
+        best_record,
+        second_record,
+        player_rating=player_rating,
+    )
     return second_top_move_point_loss >= 0.1
+
+
+def _best_move_was_critical(
+    board: chess.Board,
+    best_record: dict[str, Any],
+    second_record: dict[str, Any] | None,
+) -> bool:
+    """A miss should point to a genuinely critical continuation, not any win."""
+    if not second_record:
+        return False
+    return _consider_critical_classification(
+        board,
+        best_record,
+        best_record,
+        second_record,
+        player_rating=None,
+    )
 
 
 def _consider_brilliant_classification(
@@ -868,6 +1026,7 @@ def _consider_brilliant_classification(
     second_record: dict[str, Any] | None,
     *,
     move_rank: int | None = None,
+    loss: float | None = None,
     tactical_profile: dict[str, Any] | None = None,
 ) -> bool:
     if not _is_move_critical_candidate(board, move_record, second_record):
@@ -875,9 +1034,11 @@ def _consider_brilliant_classification(
     if move_rank is not None and move_rank > BRILLIANT_TOP_CANDIDATE_LIMIT:
         return False
     profile = tactical_profile or _pv_tactical_profile(board, move_record)
-    if profile and profile.get("accepted_hanging_piece"):
-        return move_rank is not None and move_rank <= BRILLIANT_ACCEPTED_HANGING_TOP_LIMIT
-    return _is_good_piece_sacrifice_profile(profile)
+    return _is_good_piece_sacrifice_profile(
+        profile,
+        move_rank=move_rank,
+        loss=loss,
+    )
 
 
 def _brilliant_loss_limit(
@@ -891,7 +1052,7 @@ def _brilliant_loss_limit(
 
 
 def point_loss_classification_key(loss: float, *, is_best_move: bool) -> str:
-    if is_best_move or loss <= 0.0005:
+    if is_best_move:
         return "best"
     for key, limit in EXPECTED_POINTS_BANDS:
         if loss <= limit:
@@ -906,10 +1067,13 @@ def base_classification_key(loss: float, *, is_best_move: bool) -> str:
 def expected_points_loss_from_records(
     previous_record: dict[str, Any],
     current_record: dict[str, Any],
+    *,
+    player_rating: int | None = None,
 ) -> float:
     return max(
         0.0,
-        expected_points_from_record(previous_record) - expected_points_from_record(current_record),
+        expected_points_from_record(previous_record, player_rating=player_rating)
+        - expected_points_from_record(current_record, player_rating=player_rating),
     )
 
 
@@ -917,6 +1081,11 @@ def _practical_edge_floor_key(
     best_record: dict[str, Any],
     move_record: dict[str, Any],
     current_key: str,
+    *,
+    move_rank: int | None = None,
+    loss: float = 0.0,
+    opening_phase: bool = False,
+    player_rating: int | None = None,
 ) -> str:
     """Tighten labels when a move gives away a small practical edge.
 
@@ -927,16 +1096,122 @@ def _practical_edge_floor_key(
     """
     if current_key not in {"excellent", "good"}:
         return current_key
+    if opening_phase:
+        return current_key
+    if move_rank is None or move_rank <= 1 or move_rank > PRACTICAL_EDGE_RANK_LIMIT:
+        return current_key
     if score_type_from_record(best_record) != "centipawn" or score_type_from_record(move_record) != "centipawn":
         return current_key
     best_cp = int(best_record.get("score_cp", 0) or 0)
     move_cp = int(move_record.get("score_cp", 0) or 0)
     cp_drop = best_cp - move_cp
-    if cp_drop < PRACTICAL_EDGE_INACCURACY_CP_DROP:
+    cp_drop_floor = max(25, PRACTICAL_EDGE_INACCURACY_CP_DROP)
+    if cp_drop < cp_drop_floor:
+        return current_key
+    if loss < PRACTICAL_EDGE_INACCURACY_LOSS_FLOOR:
         return current_key
     if abs(best_cp) > PRACTICAL_EDGE_CP_WINDOW:
         return current_key
     return "inaccuracy"
+
+
+def _branch_quality_floor_key(
+    current_key: str,
+    *,
+    move_rank: int | None = None,
+    loss: float = 0.0,
+    opening_phase: bool = False,
+) -> str:
+    """Branch-only moves need a little more skepticism than PV candidates."""
+    if move_rank is not None:
+        return current_key
+    excellent_floor = 0.012 if opening_phase else 0.008
+    good_floor = 0.05 if opening_phase else 0.04
+    inaccuracy_floor = 0.13 if opening_phase else 0.11
+    if current_key == "excellent" and loss >= excellent_floor:
+        return "good"
+    if current_key == "good" and loss >= good_floor:
+        return "inaccuracy"
+    if current_key == "inaccuracy" and loss >= inaccuracy_floor:
+        return "mistake"
+    return current_key
+
+
+def _lower_rank_excellent_floor_key(
+    best_record: dict[str, Any],
+    move_record: dict[str, Any],
+    current_key: str,
+    *,
+    move_rank: int | None = None,
+    loss: float = 0.0,
+) -> str:
+    """Avoid over-rewarding lower-ranked PV moves as Excellent.
+
+    Some deeper PV candidates remain engine-approved but are clearly below the
+    best practical continuation. When they sit farther down the PV list and
+    give away enough centipawns, keep them in Good instead of Excellent.
+    """
+    if current_key != "excellent":
+        return current_key
+    if move_rank is None or move_rank < LOWER_RANK_EXCELLENT_MIN_RANK:
+        return current_key
+    if loss < LOWER_RANK_EXCELLENT_MIN_LOSS:
+        return current_key
+    if score_type_from_record(best_record) != "centipawn" or score_type_from_record(move_record) != "centipawn":
+        return current_key
+    best_cp = int(best_record.get("score_cp", 0) or 0)
+    move_cp = int(move_record.get("score_cp", 0) or 0)
+    if abs(best_cp - move_cp) < LOWER_RANK_EXCELLENT_MIN_CP_GAP:
+        return current_key
+    return "good"
+
+
+def _promote_near_best_key(
+    best_record: dict[str, Any],
+    move_record: dict[str, Any],
+    current_key: str,
+    *,
+    move_rank: int | None = None,
+) -> str:
+    """Promote moves that are effectively tied with the engine top line.
+
+    MultiPV ordering can still rank near-identical continuations slightly
+    apart. If the scores are effectively tied, prefer the stronger label so
+    we don't understate a move simply because it landed on PV #2 or #3.
+    """
+    if current_key not in {"excellent", "good"}:
+        return current_key
+    if move_rank is not None and move_rank > 3:
+        return current_key
+    if _records_are_effectively_tied(best_record, move_record):
+        return "best"
+    if (
+        current_key == "good"
+        and move_rank is not None
+        and move_rank <= 2
+        and score_type_from_record(best_record) == "centipawn"
+        and score_type_from_record(move_record) == "centipawn"
+        and abs(int(best_record.get("score_cp", 0) or 0) - int(move_record.get("score_cp", 0) or 0)) <= 18
+    ):
+        return "excellent"
+    return current_key
+
+
+def _records_are_effectively_tied(
+    first_record: dict[str, Any] | None,
+    second_record: dict[str, Any] | None,
+) -> bool:
+    if not first_record or not second_record:
+        return False
+    first_type = score_type_from_record(first_record)
+    second_type = score_type_from_record(second_record)
+    if first_type != second_type:
+        return False
+    first_value = score_value_from_record(first_record)
+    second_value = score_value_from_record(second_record)
+    if first_type == "mate":
+        return (first_value > 0) == (second_value > 0) and abs(first_value - second_value) <= 1
+    return abs(first_value - second_value) <= BEST_EQUIVALENT_CP_GAP
 
 
 def expected_point_loss_classify(
@@ -944,6 +1219,7 @@ def expected_point_loss_classify(
     current_record: dict[str, Any],
     *,
     is_best_move: bool = False,
+    player_rating: int | None = None,
 ) -> str:
     """Classify a move by expected-points loss, mapped to Bookup labels."""
     previous_score_type = score_type_from_record(previous_record)
@@ -984,7 +1260,11 @@ def expected_point_loss_classify(
             return "mistake"
         return "inaccuracy"
 
-    point_loss = expected_points_loss_from_records(previous_record, current_record)
+    point_loss = expected_points_loss_from_records(
+        previous_record,
+        current_record,
+        player_rating=player_rating,
+    )
     return point_loss_classification_key(point_loss, is_best_move=is_best_move)
 
 
@@ -1026,24 +1306,52 @@ def classify_move_record(
     opening_phase: bool = False,
     in_book: bool = False,
     move_rank: int | None = None,
+    player_rating: int | None = None,
 ) -> dict[str, Any]:
     best_move_san = best_record.get("move", "")
     move_san = move_record.get("move", "")
     move_uci = move_record.get("uci", "")
-    best_expected = expected_points_from_record(best_record)
-    move_expected = expected_points_from_record(move_record)
+    best_expected = expected_points_from_record(best_record, player_rating=player_rating)
+    move_expected = expected_points_from_record(move_record, player_rating=player_rating)
     loss = max(0.0, best_expected - move_expected)
-    is_best_move = move_uci == best_record.get("uci") or loss <= 0.0005
+    is_best_move = move_uci == best_record.get("uci")
     is_nearly_best_move = is_best_move or loss <= 0.02
     key = base_classification_key(loss, is_best_move=is_best_move)
-    key = _practical_edge_floor_key(best_record, move_record, key)
+    key = _practical_edge_floor_key(
+        best_record,
+        move_record,
+        key,
+        move_rank=move_rank,
+        loss=loss,
+        opening_phase=opening_phase,
+        player_rating=player_rating,
+    )
+    key = _branch_quality_floor_key(
+        key,
+        move_rank=move_rank,
+        loss=loss,
+        opening_phase=opening_phase,
+    )
+    key = _promote_near_best_key(
+        best_record,
+        move_record,
+        key,
+        move_rank=move_rank,
+    )
+    key = _lower_rank_excellent_floor_key(
+        best_record,
+        move_record,
+        key,
+        move_rank=move_rank,
+        loss=loss,
+    )
     reason = base_classification_reason(key, best_move_san=best_move_san, move_san=move_san)
     only_move_keeps_advantage = False
     real_piece_sacrifice = False
     tactical_brilliant_shape = False
-    pv_confirmed_sacrifice = False
     tactical_profile: dict[str, Any] = {}
     good_piece_sacrifice = False
+    best_move_is_critical = _best_move_was_critical(board, best_record, second_record)
 
     if board.legal_moves.count() <= 1:
         return classification_payload(
@@ -1058,6 +1366,16 @@ def classify_move_record(
             move_expected,
             reason="opening book move",
         )
+
+    if (
+        key == "best"
+        and second_record
+        and float(second_loss or 0.0) <= BEST_UNIQUENESS_THRESHOLD
+        and score_type_from_record(best_record) == "centipawn"
+        and abs(int(best_record.get("score_cp", 0) or 0)) <= BEST_UNIQUENESS_CP_CEILING
+    ):
+        key = "excellent"
+        reason = "very close to best"
 
     try:
         move = chess.Move.from_uci(move_uci)
@@ -1080,11 +1398,17 @@ def classify_move_record(
             move_record,
             second_record,
             move_rank=move_rank,
+            loss=loss,
             tactical_profile=tactical_profile,
         )
-        pv_confirmed_sacrifice = _pv_confirms_material_investment(board, move_record)
-        good_piece_sacrifice = bool(real_piece_sacrifice or tactical_brilliant_shape or pv_confirmed_sacrifice)
-        if is_best_move and _consider_critical_classification(board, move_record, best_record, second_record):
+        good_piece_sacrifice = bool(real_piece_sacrifice or tactical_brilliant_shape)
+        if is_best_move and _consider_critical_classification(
+            board,
+            move_record,
+            best_record,
+            second_record,
+            player_rating=player_rating,
+        ):
             key = "great"
             only_move_keeps_advantage = True
             reason = "only move that keeps the advantage"
@@ -1110,9 +1434,18 @@ def classify_move_record(
             if good_piece_sacrifice and sound_enough and not already_winning:
                 key = "brilliant"
                 reason = "best or nearly-best move plus a good piece sacrifice"
-        elif is_player_move and best_expected >= 0.75 and 0.05 <= loss <= 0.20:
+        elif (
+            is_player_move
+            and best_move_is_critical
+            and move_uci != best_record.get("uci")
+            and _is_miss_position(
+                best_expected=best_expected,
+                move_expected=move_expected,
+                loss=loss,
+            )
+        ):
             key = "miss"
-            reason = "fails to convert the stronger continuation"
+            reason = "misses the critical continuation"
 
     return classification_payload(
         key,
@@ -1120,7 +1453,7 @@ def classify_move_record(
         reason=reason,
         expected_points=move_expected,
         is_only_move_that_keeps_advantage=only_move_keeps_advantage,
-        is_real_piece_sacrifice=bool(real_piece_sacrifice or good_piece_sacrifice),
+        is_real_piece_sacrifice=bool(real_piece_sacrifice),
     )
 
 
@@ -1132,27 +1465,31 @@ def annotate_candidate_classifications(
     repeated_counts: dict[str, int] | None = None,
     popularity_by_uci: dict[str, float] | None = None,
     line_status: str = "",
+    player_rating: int | None = None,
 ) -> list[dict[str, Any]]:
     if not candidate_lines:
         return candidate_lines
     repeated_counts = repeated_counts or {}
     popularity_by_uci = popularity_by_uci or {}
     best_record = candidate_lines[0]
-    best_expected = float(best_record.get("expected_points", 0.0))
+    best_expected = float(expected_points_from_record(best_record, player_rating=player_rating))
     second_loss = 0.0
     if len(candidate_lines) > 1:
-        second_loss = max(0.0, best_expected - float(candidate_lines[1].get("expected_points", 0.0)))
+        second_loss = max(
+            0.0,
+            best_expected - float(expected_points_from_record(candidate_lines[1], player_rating=player_rating)),
+        )
     great_keeps_advantage_count = sum(
         1
         for line in candidate_lines
         if keeps_advantage(
-            expected_points_from_record(line),
+            expected_points_from_record(line, player_rating=player_rating),
             int(line.get("score_cp", 0)),
         )
     )
     for index, line in enumerate(candidate_lines, start=1):
         line["rank"] = index
-        line["expected_points"] = round(expected_points_from_record(line), 4)
+        line["expected_points"] = round(expected_points_from_record(line, player_rating=player_rating), 4)
         line["expected_points_loss"] = round(max(0.0, best_expected - float(line.get("expected_points", 0.0))), 4)
     for line in candidate_lines:
         move_uci = str(line.get("uci", "") or "")
@@ -1172,6 +1509,7 @@ def annotate_candidate_classifications(
                 or popularity >= BOOK_POPULARITY_THRESHOLD
             ),
             move_rank=int(line.get("rank", 0) or 0),
+            player_rating=player_rating,
         )
         line["classification_label"] = line["classification"]["label"]
         line["classification_icon"] = line["classification"]["icon"]

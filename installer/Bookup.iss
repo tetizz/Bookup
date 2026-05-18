@@ -2,7 +2,7 @@
 #ifndef MyAppVersion
 #define MyAppVersion "dev"
 #endif
-#define MyAppPublisher "Bookup"
+#define MyAppPublisher "tetizz"
 #define MyAppExeName "Bookup.exe"
 
 [Setup]
@@ -10,6 +10,7 @@ AppId={{2B5F822C-74A3-4E92-A3CC-9359D0BE2F60}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL=https://github.com/tetizz/Bookup
 DefaultDirName={localappdata}\Programs\Bookup
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes

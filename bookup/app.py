@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+import webbrowser
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -16,7 +17,10 @@ from urllib.request import urlopen
 import chess
 import chess.pgn
 from flask import Flask, jsonify, render_template, request
-import webview
+try:
+    import webview
+except Exception:
+    webview = None
 
 from .analysis import (
     analyse_games,
@@ -27,10 +31,12 @@ from .analysis import (
     database_context_for_board,
     generate_theory_line,
 )
+from .chessnut_bridge import default_chessnut_db_path, extract_chessnut_games_as_pgn
 from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_class, normalize_time_classes
 from .classifications import book_classification_payload
 from .engine import EnginePool, EngineSettings, default_engine_path
 from .opening_names import lookup_by_board
+from .realign import START_FEN as REALIGN_START_FEN, build_realign_plan
 from .storage import LocalStore, deserialize_games, serialize_games
 
 
@@ -42,9 +48,12 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 23
+PROFILE_SCHEMA_VERSION = 24
 GAMES_CACHE_SCHEMA_VERSION = 20
-ENGINE_DEFAULTS_VERSION = 6
+ENGINE_DEFAULTS_VERSION = 7
+MAX_SAFE_PARALLEL_WORKERS = 8
+WEB_MODE = False
+ENABLE_BRILLIANT_TRACKER = True
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
@@ -303,6 +312,9 @@ def reset_analysis_status(kind: str, username: str, settings: EngineSettings, en
             "positions_done": 0,
             "positions_total": 0,
             "positions_per_second": 0.0,
+            "live_positions": [],
+            "scan_active_workers": 0,
+            "scan_active_slots": [],
             "resources": engine_resource_snapshot(settings, engine),
         }
 
@@ -336,6 +348,14 @@ def update_analysis_status(
                     clean_patch["progress"] = current_progress
             except (TypeError, ValueError):
                 clean_patch.pop("progress", None)
+        next_phase = str(clean_patch.get("phase", ANALYSIS_STATUS.get("phase", "")) or "")
+        live_preview_phases = {"stockfish_positions", "brilliant_scan"}
+        phase_changed = bool(next_phase) and next_phase != old_phase
+        if phase_changed and next_phase not in live_preview_phases:
+            clean_patch.setdefault("live_positions", [])
+            clean_patch.setdefault("scan_active_workers", 0)
+            clean_patch.setdefault("scan_active_slots", [])
+            clean_patch.setdefault("active_workers", 0)
         ANALYSIS_STATUS.update(clean_patch)
         now = time.monotonic()
         phase = str(ANALYSIS_STATUS.get("phase", "") or "")
@@ -386,6 +406,9 @@ def finish_analysis_status(*, ok: bool, message: str = "") -> None:
         ANALYSIS_STATUS["phase"] = "complete" if ok else "failed"
         ANALYSIS_STATUS["progress"] = 100 if ok else 0
         ANALYSIS_STATUS["eta_sec"] = 0
+        ANALYSIS_STATUS["live_positions"] = []
+        ANALYSIS_STATUS["scan_active_workers"] = 0
+        ANALYSIS_STATUS["scan_active_slots"] = []
         if message:
             ANALYSIS_STATUS["message"] = message
         ANALYSIS_STATUS["completed_at"] = time.monotonic()
@@ -406,6 +429,9 @@ def reset_analysis_status_to_idle(message: str = "Ready.") -> None:
             "positions_done": 0,
             "positions_total": 0,
             "positions_per_second": 0.0,
+            "live_positions": [],
+            "scan_active_workers": 0,
+            "scan_active_slots": [],
             "resources": {},
         }
 
@@ -427,7 +453,7 @@ def recommended_engine_defaults() -> dict:
     safe_hash = safe_stockfish_hash_limit_mb()
     preferred_hash = max(2048, int(snapshot["available_mb"] * 0.60))
     hash_mb = max(2048, (min(safe_hash, preferred_hash) // 128) * 128)
-    workers = max(1, min(12, CPU_THREADS // 2 if CPU_THREADS >= 12 else CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
+    workers = max(1, min(MAX_SAFE_PARALLEL_WORKERS, CPU_THREADS // 2 if CPU_THREADS >= 12 else CPU_THREADS // 4 if CPU_THREADS >= 8 else 1))
     return {
         "depth": 26,
         "threads": max(1, min(CPU_THREADS, 16)),
@@ -453,6 +479,10 @@ def migrate_engine_defaults(config: dict) -> dict:
                 migrated[key] = max(int(current), int(value))
             except (TypeError, ValueError):
                 migrated[key] = value
+    try:
+        migrated["parallel_workers"] = max(1, min(MAX_SAFE_PARALLEL_WORKERS, int(migrated.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"])))
+    except (TypeError, ValueError):
+        migrated["parallel_workers"] = defaults["parallel_workers"]
     migrated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
     if not str(migrated.get("engine_path", "")).strip():
         migrated["engine_path"] = default_engine_path()
@@ -477,7 +507,7 @@ def build_engine_settings(payload: dict) -> EngineSettings:
         parallel_workers = int(payload.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"])
     except (TypeError, ValueError):
         parallel_workers = int(defaults["parallel_workers"])
-    parallel_workers = max(1, min(12, parallel_workers))
+    parallel_workers = max(1, min(MAX_SAFE_PARALLEL_WORKERS, parallel_workers))
     try:
         requested_hash_mb = int(payload.get("hash_mb", defaults["hash_mb"]))
     except (TypeError, ValueError):
@@ -564,10 +594,15 @@ def build_defaults_payload(config: dict) -> dict:
     migrated = migrate_engine_defaults(config)
     settings = build_engine_settings(migrated)
     return {
-        "username": migrated.get("username", "trixize1234"),
+        "username": migrated.get("username", ""),
+        "main_platform": str(migrated.get("main_platform", "chesscom") or "chesscom").strip().lower() or "chesscom",
+        "main_username": str(migrated.get("main_username", "") or "").strip(),
+        "lichess_username": str(migrated.get("lichess_username", "") or "").strip(),
         "time_classes": migrated.get("time_classes", "all"),
         "max_games": int(migrated.get("max_games", 0)),
         "auto_import_on_startup": bool(migrated.get("auto_import_on_startup", True)),
+        "chessnut_db_path": str(migrated.get("chessnut_db_path", "") or default_chessnut_db_path()).strip(),
+        "chessnut_player_color": "black" if str(migrated.get("chessnut_player_color", "white")).strip().lower() == "black" else "white",
         "lichess_token": local_lichess_token(migrated),
         "engine_path": settings.path,
         "depth": settings.depth,
@@ -576,7 +611,34 @@ def build_defaults_payload(config: dict) -> dict:
         "multipv": settings.multipv,
         "think_time_sec": settings.think_time_sec,
         "parallel_workers": settings.parallel_workers,
+        "web_mode": WEB_MODE,
+        "enable_brilliant_tracker": ENABLE_BRILLIANT_TRACKER,
     }
+
+
+def primary_chesscom_username(config: dict | None = None) -> str:
+    migrated = migrate_engine_defaults(config or load_config())
+    explicit = str(migrated.get("username", "") or "").strip()
+    if explicit:
+        return explicit
+    platform = str(migrated.get("main_platform", "chesscom") or "chesscom").strip().lower()
+    main_username = str(migrated.get("main_username", "") or "").strip()
+    if platform == "chesscom" and main_username:
+        return main_username
+    return ""
+
+
+def resolve_username(preferred: object = "", config: dict | None = None) -> str:
+    explicit = str(preferred or "").strip()
+    if explicit:
+        return explicit
+    return primary_chesscom_username(config)
+
+
+def configure_runtime_mode(*, web_mode: bool, enable_brilliant_tracker: bool) -> None:
+    global WEB_MODE, ENABLE_BRILLIANT_TRACKER
+    WEB_MODE = bool(web_mode)
+    ENABLE_BRILLIANT_TRACKER = bool(enable_brilliant_tracker)
 
 
 def profile_request_key(
@@ -600,6 +662,10 @@ def profile_request_key(
                 "hash_mb": settings.hash_mb,
                 "multipv": settings.multipv,
                 "think_time_sec": settings.think_time_sec,
+            },
+            "runtime": {
+                "web_mode": WEB_MODE,
+                "brilliant_tracker": ENABLE_BRILLIANT_TRACKER,
             },
         },
         sort_keys=True,
@@ -662,12 +728,34 @@ def profile_response_payload(
             else "Add a Lichess token to use the live Lichess opening database for richer repertoire branching."
         ),
         "schema_version": PROFILE_SCHEMA_VERSION,
-        "profile": profile_data,
+        "profile": browser_profile_view(profile_data),
         "training_progress": progress.get("lessons", {}),
         "training_summary": progress.get("summary", {}),
         "cached": cached,
         "reused_games": reused_games,
     }
+
+
+def browser_profile_view(profile_data: dict | None) -> dict | None:
+    if profile_data is None:
+        return None
+    if ENABLE_BRILLIANT_TRACKER:
+        return profile_data
+    profile_copy = dict(profile_data)
+    profile_copy["brilliant_tracker"] = {
+        "enabled": False,
+        "summary": {
+            "moves_scanned": 0,
+            "classified_moves": 0,
+            "cached_hits": 0,
+            "live_hits": 0,
+        },
+        "high_confidence": [],
+        "watchlist": [],
+        "games": [],
+        "message": "Brilliant Tracker is disabled in browser mode.",
+    }
+    return profile_copy
 
 
 def _safe_number(value: object, default: float = 0.0) -> float:
@@ -808,7 +896,21 @@ def index() -> str:
 
 @app.get("/api/local-state")
 def local_state() -> tuple:
-    username = str(request.args.get("username", "")).strip() or "trixize1234"
+    username = resolve_username(request.args.get("username", ""))
+    if not username:
+        return jsonify(
+            {
+                "username": "",
+                "profile": None,
+                "games_imported": 0,
+                "archives_found": 0,
+                "games": [],
+                "saved_at": None,
+                "training_progress": {},
+                "training_summary": {},
+                "schema_version": 0,
+            }
+        )
     snapshot = STORE.load_snapshot(username)
     progress = STORE.load_progress(username)
     return jsonify(
@@ -831,6 +933,18 @@ def save_settings() -> tuple:
     payload = request.get_json(force=True)
     config = migrate_engine_defaults(load_config())
 
+    if "username" in payload:
+        config["username"] = str(payload.get("username", "") or "").strip()
+    if "main_platform" in payload:
+        config["main_platform"] = str(payload.get("main_platform", "chesscom") or "chesscom").strip().lower() or "chesscom"
+    if "main_username" in payload:
+        config["main_username"] = str(payload.get("main_username", "") or "").strip()
+    if "lichess_username" in payload:
+        config["lichess_username"] = str(payload.get("lichess_username", "") or "").strip()
+    if "chessnut_db_path" in payload:
+        config["chessnut_db_path"] = str(payload.get("chessnut_db_path", "") or "").strip()
+    if "chessnut_player_color" in payload:
+        config["chessnut_player_color"] = "black" if str(payload.get("chessnut_player_color", "white")).strip().lower() == "black" else "white"
     if "engine_path" in payload:
         engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
         config["engine_path"] = engine_path
@@ -888,7 +1002,7 @@ def save_settings() -> tuple:
 def auto_import_status() -> tuple:
     payload = request.get_json(force=True)
     config = migrate_engine_defaults(load_config())
-    username = str(payload.get("username") or config.get("username") or "").strip()
+    username = resolve_username(payload.get("username"), config)
     if not username:
         return jsonify({"needs_import": False, "message": "No Chess.com username is saved yet."})
 
@@ -975,7 +1089,16 @@ def auto_import_status() -> tuple:
 
 @app.get("/api/cache-stats")
 def cache_stats() -> tuple:
-    username = str(request.args.get("username", "")).strip() or "trixize1234"
+    username = resolve_username(request.args.get("username", ""))
+    if not username:
+        return jsonify(
+            {
+                "engine_entries": 0,
+                "profile_entries": 0,
+                "game_entries": 0,
+                "total_bytes": 0,
+            }
+        )
     return jsonify(STORE.cache_stats(username))
 
 
@@ -987,7 +1110,9 @@ def analysis_status() -> tuple:
 @app.post("/api/reset-local-workspace")
 def reset_local_workspace() -> tuple:
     payload = request.get_json(force=True)
-    username = str(payload.get("username", "")).strip() or "trixize1234"
+    username = resolve_username(payload.get("username", ""))
+    if not username:
+        return jsonify({"error": "Save a Chess.com import username before resetting the local workspace."}), 400
     clear_engine_cache = bool(payload.get("clear_engine_cache", True))
 
     with ANALYSIS_STATUS_LOCK:
@@ -1202,6 +1327,7 @@ def profile() -> tuple:
             games,
             engine,
             progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
+            enable_brilliant_tracker=ENABLE_BRILLIANT_TRACKER,
         )
         finish_analysis_status(ok=True, message="Analysis complete.")
     except FileNotFoundError:
@@ -1306,6 +1432,7 @@ def import_pgn() -> tuple:
             games,
             engine,
             progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
+            enable_brilliant_tracker=ENABLE_BRILLIANT_TRACKER,
         )
         finish_analysis_status(ok=True, message="PGN analysis complete.")
     except FileNotFoundError:
@@ -1360,6 +1487,125 @@ def import_pgn() -> tuple:
             reused_games=False,
         )
     )
+
+
+@app.post("/api/import-chessnut")
+def import_chessnut() -> tuple:
+    payload = request.get_json(force=True)
+    username = str(payload.get("username", "")).strip() or "Chessnut Player"
+    db_path = str(payload.get("db_path") or payload.get("chessnut_db_path") or "").strip()
+    player_color = "black" if str(payload.get("player_color") or payload.get("chessnut_player_color") or "white").strip().lower() == "black" else "white"
+
+    try:
+        bundle = extract_chessnut_games_as_pgn(db_path, username=username, player_color=player_color)
+    except (FileNotFoundError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    games = import_games_from_pgn_text(bundle.pgn_text, username, fallback_color=player_color)
+    if not games:
+        return jsonify({"error": "No valid OTB PGN games were found in the NewChessnut database."}), 400
+
+    config = migrate_engine_defaults(load_config())
+    lichess_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
+    settings = build_engine_settings(payload)
+    engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
+    if not engine_path:
+        return jsonify({"error": "Stockfish path is required."}), 400
+    configure_lichess(lichess_token)
+
+    save_config(
+        apply_engine_settings_to_config(
+            {
+                **config,
+                "username": username,
+                "time_classes": "chessnut",
+                "max_games": len(games),
+                "lichess_token": lichess_token,
+                "engine_path": engine_path,
+                "chessnut_db_path": bundle.db_path,
+                "chessnut_player_color": player_color,
+            },
+            settings,
+        )
+    )
+
+    try:
+        engine = shared_engine_for(settings)
+        reset_analysis_status("chessnut", username, settings, engine)
+        profile_data = analyse_games(
+            games,
+            engine,
+            progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
+            enable_brilliant_tracker=ENABLE_BRILLIANT_TRACKER,
+        )
+        finish_analysis_status(ok=True, message="NewChessnut OTB import complete.")
+    except FileNotFoundError:
+        finish_analysis_status(ok=False, message="The Stockfish executable could not be opened.")
+        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
+    except Exception as exc:
+        finish_analysis_status(ok=False, message=f"NewChessnut OTB import failed: {exc}")
+        return jsonify({"error": f"NewChessnut OTB import failed: {exc}"}), 500
+
+    serialized_games = serialize_games(games)
+    pgn_hash = hashlib.sha256(bundle.pgn_text.encode("utf-8")).hexdigest()
+    request_key = json.dumps(
+        {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "source": "chessnut",
+            "username": username,
+            "db_path": bundle.db_path,
+            "player_color": player_color,
+            "pgn_hash": pgn_hash,
+            "settings": {
+                "path": settings.path,
+                "depth": settings.depth,
+                "threads": settings.threads,
+                "hash_mb": settings.hash_mb,
+                "multipv": settings.multipv,
+                "think_time_sec": settings.think_time_sec,
+            },
+        },
+        sort_keys=True,
+    )
+    STORE.save_snapshot(
+        username,
+        {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "request_key": request_key,
+            "games_request_key": f"chessnut:{pgn_hash}",
+            "archives_found": 0,
+            "games_imported": len(games),
+            "games": serialized_games,
+            "profile": profile_data,
+        },
+    )
+    progress = STORE.load_progress(username)
+    return jsonify(
+        profile_response_payload(
+            username=username,
+            normalized_time_classes=["chessnut otb"],
+            archives_found=0,
+            games=serialized_games,
+            profile_data=profile_data,
+            progress=progress,
+            lichess_token=lichess_token,
+            cached=False,
+            reused_games=False,
+        )
+    )
+
+
+@app.post("/api/realign-plan")
+def realign_plan() -> tuple:
+    payload = request.get_json(force=True) or {}
+    source_fen = str(payload.get("source_fen") or "").strip() or REALIGN_START_FEN
+    target_fen = str(payload.get("target_fen") or "").strip() or REALIGN_START_FEN
+    target_label = str(payload.get("target_label") or "").strip()
+    try:
+        plan = build_realign_plan(source_fen, target_fen, target_label=target_label)
+    except ValueError as exc:
+        return jsonify({"error": f"Could not build the Chessnut realign plan: {exc}"}), 400
+    return jsonify(plan), 200
 
 
 @app.post("/api/position-insight")
@@ -1584,7 +1830,9 @@ def trainer_attempt() -> tuple:
 @app.post("/api/review-progress")
 def review_progress() -> tuple:
     payload = request.get_json(force=True)
-    username = str(payload.get("username", "")).strip() or "trixize1234"
+    username = resolve_username(payload.get("username", ""))
+    if not username:
+        return jsonify({"error": "A username is required to save review progress."}), 400
     lessons = payload.get("lessons", {})
     summary = payload.get("summary", {})
     if not isinstance(lessons, dict):
@@ -1597,7 +1845,34 @@ def review_progress() -> tuple:
 
 
 def run_app() -> None:
+    configure_runtime_mode(web_mode=False, enable_brilliant_tracker=True)
+    if webview is None:
+        run_browser_app()
+        return
     port = 8877
+    url = _start_local_server(port)
+    webview.create_window(
+        "Bookup",
+        url,
+        width=1500,
+        height=980,
+        min_size=(1120, 760),
+        text_select=True,
+    )
+    try:
+        webview.start()
+    except Exception as exc:
+        print(f"Bookup desktop webview failed; opening browser fallback instead: {exc}", file=sys.stderr)
+        configure_runtime_mode(web_mode=True, enable_brilliant_tracker=False)
+        webbrowser.open(url, new=2)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            return
+
+
+def _start_local_server(port: int) -> str:
     url = f"http://127.0.0.1:{port}/"
     server = threading.Thread(
         target=lambda: app.run(host="127.0.0.1", port=port, debug=False, threaded=True, use_reloader=False),
@@ -1615,13 +1890,15 @@ def run_app() -> None:
         except Exception:
             pass
         threading.Event().wait(0.1)
+    return url
 
-    webview.create_window(
-        "Bookup",
-        url,
-        width=1500,
-        height=980,
-        min_size=(1120, 760),
-        text_select=True,
-    )
-    webview.start()
+
+def run_browser_app() -> None:
+    configure_runtime_mode(web_mode=True, enable_brilliant_tracker=False)
+    url = _start_local_server(8877)
+    webbrowser.open(url, new=2)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        return

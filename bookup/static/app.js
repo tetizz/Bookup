@@ -1,6 +1,8 @@
-﻿const defaults = window.APP_DEFAULTS || {};
+const defaults = window.APP_DEFAULTS || {};
+const webMode = Boolean(defaults.web_mode);
+const brilliantTrackerEnabled = defaults.enable_brilliant_tracker !== false;
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 23;
+const PROFILE_SCHEMA_VERSION = 24;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -60,6 +62,9 @@ const REVIEW_INTERVALS = [0, 1, 3, 7, 14];
 const INALTERABLE_CLASSIFICATION_KEYS = new Set(["best", "great", "brilliant", "book", "forced"]);
 
 const el = {
+  mainPlatform: document.getElementById("mainPlatformInput"),
+  mainUsername: document.getElementById("mainUsernameInput"),
+  lichessUsername: document.getElementById("lichessUsernameInput"),
   username: document.getElementById("usernameInput"),
   timeClasses: document.getElementById("timeClassesInput"),
   maxGames: document.getElementById("maxGamesInput"),
@@ -77,6 +82,10 @@ const el = {
   pgnImport: document.getElementById("pgnImportInput"),
   importPgn: document.getElementById("importPgnBtn"),
   pgnImportStatus: document.getElementById("pgnImportStatus"),
+  chessnutDbPath: document.getElementById("chessnutDbPathInput"),
+  chessnutPlayerColor: document.getElementById("chessnutPlayerColorInput"),
+  importChessnut: document.getElementById("importChessnutBtn"),
+  chessnutImportStatus: document.getElementById("chessnutImportStatus"),
   status: document.getElementById("status"),
   progressTrack: document.getElementById("progressTrack"),
   progressFill: document.getElementById("progressFill"),
@@ -98,6 +107,7 @@ const el = {
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
   healthDashboard: document.getElementById("healthDashboard"),
   statsSummary: document.getElementById("statsSummaryPanel"),
+  brilliantTrackerSection: document.getElementById("brilliantTrackerSection"),
   ratingProgress: document.getElementById("ratingProgressPanel"),
   brilliantTracker: document.getElementById("brilliantTrackerPanel"),
   memoryScorePanel: document.getElementById("memoryScorePanel"),
@@ -163,6 +173,11 @@ const el = {
   studyHash: document.getElementById("studyHashInput"),
   studyApplySettings: document.getElementById("studyApplySettingsBtn"),
   studySettingsStatus: document.getElementById("studySettingsStatus"),
+  realignSourceFen: document.getElementById("realignSourceFenInput"),
+  realignUseStart: document.getElementById("realignUseStartBtn"),
+  realignGenerate: document.getElementById("realignGenerateBtn"),
+  realignStatus: document.getElementById("realignStatus"),
+  realignOutput: document.getElementById("realignOutput"),
   trainerCoach: document.getElementById("trainerCoach"),
   trainerDecision: document.getElementById("trainerDecision"),
   trainerInsight: document.getElementById("trainerInsight"),
@@ -252,13 +267,15 @@ async function init() {
   sessionStorage.removeItem("bookup-status-message");
   sessionStorage.removeItem("bookup-auto-rebuild");
   preloadClassificationIcons();
-  el.username.value = defaults.username || "trixize1234";
+  syncIdentityDefaults();
   el.timeClasses.value = defaults.time_classes || "all";
   el.maxGames.value = defaults.max_games ?? 0;
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
   if (el.autoImportStartup) el.autoImportStartup.checked = defaults.auto_import_on_startup !== false;
   el.lichessToken.value = defaults.lichess_token || "";
   el.enginePath.value = defaults.engine_path || "";
+  if (el.chessnutDbPath) el.chessnutDbPath.value = defaults.chessnut_db_path || "";
+  if (el.chessnutPlayerColor) el.chessnutPlayerColor.value = defaults.chessnut_player_color || "white";
   el.depth.value = defaults.depth || 24;
   if (el.thinkTime) el.thinkTime.value = String(defaults.think_time_sec ?? 5);
   el.multiPv.value = defaults.multipv || 5;
@@ -269,6 +286,7 @@ async function init() {
 
   el.analyze.addEventListener("click", runAnalysis);
   el.importPgn?.addEventListener("click", importPgnGames);
+  el.importChessnut?.addEventListener("click", importChessnutGames);
   el.importAllGames?.addEventListener("change", syncImportScope);
   el.autoImportStartup?.addEventListener("change", () => { void saveStartupImportSetting(); });
   el.reclassifyFresh?.addEventListener("click", () => { void resetLocalWorkspace({ rebuild: true }); });
@@ -276,10 +294,21 @@ async function init() {
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
   el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
+  el.realignUseStart?.addEventListener("click", () => {
+    if (el.realignSourceFen) {
+      el.realignSourceFen.value = START_FEN;
+    }
+    if (el.realignStatus) {
+      el.realignStatus.textContent = "Using the standard starting position as your current Chessnut setup.";
+    }
+  });
+  el.realignGenerate?.addEventListener("click", () => { void generateRealignPlan(); });
   el.generateTheory?.addEventListener("click", () => { void generateTheoryLine(); });
   [el.lichessToken, el.enginePath, el.depth, el.multiPv, el.threads, el.parallelWorkers, el.hash].forEach((input) => {
     input?.addEventListener("change", syncStudySettingsFromSetup);
   });
+  el.mainPlatform?.addEventListener("change", handleMainIdentityChange);
+  el.mainUsername?.addEventListener("input", handleMainIdentityChange);
   el.thinkTime?.addEventListener("change", syncStudySettingsFromSetup);
   el.tabButtons.forEach((button) => {
     button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "setup"));
@@ -382,6 +411,9 @@ async function init() {
   document.addEventListener("pointercancel", clearDragState);
 
   syncImportScope();
+  if (!brilliantTrackerEnabled && el.brilliantTrackerSection) {
+    el.brilliantTrackerSection.hidden = true;
+  }
   renderCoords();
   renderBoard(START_FEN, { animate: false });
   setActiveTab("setup");
@@ -413,6 +445,46 @@ function syncStudySettingsFromSetup() {
   if (el.studyHash) el.studyHash.value = el.hash?.value || defaults.hash_mb || 2048;
 }
 
+function resolveConfiguredUsername() {
+  const direct = String(el.username?.value || "").trim();
+  if (direct) return direct;
+  const mainPlatform = String(el.mainPlatform?.value || defaults.main_platform || "chesscom").trim().toLowerCase();
+  const mainUsername = String(el.mainUsername?.value || defaults.main_username || "").trim();
+  if (mainPlatform === "chesscom" && mainUsername) return mainUsername;
+  return String(defaults.username || "").trim();
+}
+
+function syncIdentityDefaults() {
+  if (el.mainPlatform) {
+    el.mainPlatform.value = String(defaults.main_platform || "chesscom").trim().toLowerCase() || "chesscom";
+  }
+  if (el.mainUsername) {
+    el.mainUsername.value = defaults.main_username || "";
+  }
+  if (el.lichessUsername) {
+    el.lichessUsername.value = defaults.lichess_username || "";
+  }
+  const importUsername = String(defaults.username || "").trim();
+  if (el.username) {
+    el.username.value = importUsername;
+    if (!el.username.value && String(el.mainPlatform?.value || "").toLowerCase() === "chesscom") {
+      el.username.value = String(el.mainUsername?.value || "").trim();
+    }
+  }
+}
+
+function handleMainIdentityChange() {
+  if (!el.username) return;
+  const currentImport = String(el.username.value || "").trim();
+  const previousDefault = String(defaults.username || "").trim();
+  if (currentImport && currentImport !== previousDefault) return;
+  if (String(el.mainPlatform?.value || "").toLowerCase() === "chesscom") {
+    el.username.value = String(el.mainUsername?.value || "").trim();
+  } else if (!currentImport || currentImport === previousDefault) {
+    el.username.value = "";
+  }
+}
+
 function applyStudySettingsToSetup(saved = {}) {
   if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token")) el.lichessToken.value = saved.lichess_token || "";
   if (el.enginePath && Object.prototype.hasOwnProperty.call(saved, "engine_path")) el.enginePath.value = saved.engine_path || "";
@@ -429,6 +501,7 @@ function applyDefaultsToState(saved = {}) {
   Object.entries(saved || {}).forEach(([key, value]) => {
     defaults[key] = value;
   });
+  syncIdentityDefaults();
 }
 
 function currentLichessToken() {
@@ -475,10 +548,15 @@ function currentStudySettingsPayload() {
 
 function currentSetupSettingsPayload() {
   return {
-    username: String(el.username?.value || defaults.username || "trixize1234").trim(),
+    username: resolveConfiguredUsername(),
+    main_platform: String(el.mainPlatform?.value || defaults.main_platform || "chesscom").trim().toLowerCase(),
+    main_username: String(el.mainUsername?.value || defaults.main_username || "").trim(),
+    lichess_username: String(el.lichessUsername?.value || defaults.lichess_username || "").trim(),
     time_classes: String(el.timeClasses?.value || defaults.time_classes || "all").trim(),
     max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames?.value || defaults.max_games || 0),
     auto_import_on_startup: el.autoImportStartup?.checked !== false,
+    chessnut_db_path: String(el.chessnutDbPath?.value || defaults.chessnut_db_path || "").trim(),
+    chessnut_player_color: String(el.chessnutPlayerColor?.value || defaults.chessnut_player_color || "white").trim().toLowerCase(),
     ...currentStudySettingsPayload(),
   };
 }
@@ -531,6 +609,112 @@ async function saveStudySettings() {
     }
   } finally {
     el.studyApplySettings.disabled = false;
+  }
+}
+
+function renderRealignPlan(plan) {
+  if (!el.realignOutput) return;
+  const moveSteps = Array.isArray(plan?.move_steps) ? plan.move_steps : [];
+  const removeSteps = Array.isArray(plan?.remove_steps) ? plan.remove_steps : [];
+  const placeSteps = Array.isArray(plan?.place_steps) ? plan.place_steps : [];
+  const sections = [];
+
+  if (moveSteps.length) {
+    sections.push(`
+      <div class="realign-step-group">
+        <div class="section-label">Move pieces</div>
+        <div class="realign-step-list">
+          ${moveSteps.map((step) => `<div class="realign-step">${escapeHtml(step.text || "")}</div>`).join("")}
+        </div>
+      </div>
+    `);
+  }
+  if (removeSteps.length) {
+    sections.push(`
+      <div class="realign-step-group">
+        <div class="section-label">Remove extras</div>
+        <div class="realign-step-list">
+          ${removeSteps.map((step) => `<div class="realign-step">${escapeHtml(step.text || "")}</div>`).join("")}
+        </div>
+      </div>
+    `);
+  }
+  if (placeSteps.length) {
+    sections.push(`
+      <div class="realign-step-group">
+        <div class="section-label">Place missing pieces</div>
+        <div class="realign-step-list">
+          ${placeSteps.map((step) => `<div class="realign-step">${escapeHtml(step.text || "")}</div>`).join("")}
+        </div>
+      </div>
+    `);
+  }
+
+  const targetLabel = String(plan?.target_label || "").trim() || "Current analysis position";
+  if (plan?.already_aligned) {
+    el.realignOutput.className = "realign-output";
+    el.realignOutput.innerHTML = `
+      <div class="realign-summary">
+        <strong>Your physical board already matches the current analysis position.</strong>
+        <span>Target: ${escapeHtml(targetLabel)} · ${Number(plan?.target_piece_count || 0)} pieces in place</span>
+      </div>
+    `;
+    return;
+  }
+
+  el.realignOutput.className = "realign-output";
+  el.realignOutput.innerHTML = `
+    <div class="realign-summary">
+      <strong>${Number(plan?.total_actions || 0)} actions to realign your Chessnut board</strong>
+      <span>Target: ${escapeHtml(targetLabel)} · unchanged ${Number(plan?.unchanged_count || 0)}/${Number(plan?.target_piece_count || 0)} pieces</span>
+    </div>
+    ${sections.join("") || `<div class="line-note">No changes were required.</div>`}
+  `;
+}
+
+async function generateRealignPlan() {
+  if (!el.realignGenerate) return;
+  const sourceFen = String(el.realignSourceFen?.value || "").trim();
+  const targetFen = normalizeFen(state.boardFen || START_FEN);
+  const targetLabel = String(el.boardTitle?.textContent || "").trim() || "Current analysis position";
+  el.realignGenerate.disabled = true;
+  if (el.realignStatus) {
+    el.realignStatus.textContent = "Building the Chessnut realign plan for the current analysis position...";
+  }
+  if (el.realignOutput) {
+    el.realignOutput.className = "realign-output empty";
+    el.realignOutput.textContent = "Generating plan...";
+  }
+  try {
+    const response = await fetch("/api/realign-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_fen: sourceFen,
+        target_fen: targetFen,
+        target_label: targetLabel,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Could not build the Chessnut realign plan.");
+    }
+    renderRealignPlan(data);
+    if (el.realignStatus) {
+      el.realignStatus.textContent = data.already_aligned
+        ? "Your Chessnut board already matches the analysis board."
+        : `Plan ready. Follow the ${Number(data.total_actions || 0)} realign steps on your physical board.`;
+    }
+  } catch (error) {
+    if (el.realignOutput) {
+      el.realignOutput.className = "realign-output empty";
+      el.realignOutput.textContent = error.message || "Could not build the Chessnut realign plan.";
+    }
+    if (el.realignStatus) {
+      el.realignStatus.textContent = error.message || "Could not build the Chessnut realign plan.";
+    }
+  } finally {
+    el.realignGenerate.disabled = false;
   }
 }
 
@@ -605,7 +789,7 @@ function applyBoardState(payload, options = {}) {
 }
 
 async function resetLocalWorkspace({ rebuild = false } = {}) {
-  const username = String(el.username?.value || defaults.username || "trixize1234").trim();
+  const username = resolveConfiguredUsername();
   if (!username) {
     setProgress(0, "Enter a Chess.com username before resetting the local workspace.", { allowDecrease: true });
     return;
@@ -616,7 +800,7 @@ async function resetLocalWorkspace({ rebuild = false } = {}) {
   if (!window.confirm(prompt)) {
     return;
   }
-  const disabledButtons = [el.analyze, el.importPgn, el.reclassifyFresh, el.resetWorkspace].filter(Boolean);
+  const disabledButtons = [el.analyze, el.importPgn, el.importChessnut, el.reclassifyFresh, el.resetWorkspace].filter(Boolean);
   disabledButtons.forEach((button) => { button.disabled = true; });
   stopAnalysisProgress();
   setProgress(6, rebuild ? "Clearing local cache before a full reclassification..." : "Clearing local cache and saved analysis...", { allowDecrease: true });
@@ -776,50 +960,64 @@ function squareCenter(squareName) {
   };
 }
 
+function boardSquareSize() {
+  const board = el.board;
+  if (!(board instanceof HTMLElement) || !board.offsetWidth) return 80;
+  return board.offsetWidth / 8;
+}
+
 function arrowMetrics(from, to) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const distance = Math.hypot(dx, dy);
   if (!distance) return null;
-  const startX = from.x;
-  const startY = from.y;
-  const endX = to.x;
-  const endY = to.y;
+  const squareSize = boardSquareSize();
+  const unitX = dx / distance;
+  const unitY = dy / distance;
+  const tailInset = Math.min(squareSize * 0.18, distance * 0.18);
+  const headInset = Math.min(squareSize * 0.34, distance * 0.24);
+  const startX = from.x + unitX * tailInset;
+  const startY = from.y + unitY * tailInset;
+  const endX = to.x - unitX * headInset;
+  const endY = to.y - unitY * headInset;
   const length = Math.hypot(endX - startX, endY - startY);
-  if (length < 8) return null;
+  if (length < 12) return null;
   return {
-    x: startX,
-    y: startY,
+    startX,
+    startY,
+    endX,
+    endY,
     length,
-    angle: `${Math.atan2(dy, dx) * 180 / Math.PI}deg`,
+    thickness: Math.max(14, Math.min(squareSize * 0.18, 18)),
+    headSize: Math.max(20, Math.min(squareSize * 0.42, 30)),
   };
 }
 
+// Board-arrow overlay approach adapted from tetizz/play, with Bookup-specific colors and labels.
 function renderArrowGroup(lines = [], role = "engine") {
+  const palette = role === "threat"
+    ? { marker: "threatArrowHead", color: "226, 84, 84", minOpacity: 0.5, falloff: 0.08 }
+    : { marker: "engineArrowHead", color: "90, 176, 255", minOpacity: 0.42, falloff: 0.06 };
   return lines.map((line, index) => {
     const uci = String(line?.uci || "");
     if (uci.length < 4) return "";
     const from = squareCenter(uci.slice(0, 2));
     const to = squareCenter(uci.slice(2, 4));
     if (!from || !to) return "";
-    const emphasis = role === "threat" ? Math.max(0.48, 0.72 - index * 0.08) : Math.max(0.36, 0.62 - index * 0.06);
-    const thickness = 20;
-    const head = 34;
     const metrics = arrowMetrics(from, to);
     if (!metrics) return "";
+    const emphasis = Math.max(palette.minOpacity, 0.72 - index * palette.falloff);
     return `
-      <div
-        class="board-arrow ${role}-arrow"
-        style="
-          --arrow-x: ${metrics.x}px;
-          --arrow-y: ${metrics.y}px;
-          --arrow-length: ${metrics.length}px;
-          --arrow-angle: ${metrics.angle};
-          --arrow-thickness: ${thickness}px;
-          --arrow-head: ${head}px;
-          --arrow-opacity: ${emphasis};
-        "
-      ></div>
+      <line
+        class="board-arrow-line ${role}-arrow-line"
+        x1="${metrics.startX.toFixed(2)}"
+        y1="${metrics.startY.toFixed(2)}"
+        x2="${metrics.endX.toFixed(2)}"
+        y2="${metrics.endY.toFixed(2)}"
+        stroke="rgba(${palette.color}, ${emphasis.toFixed(3)})"
+        stroke-width="${metrics.thickness.toFixed(2)}"
+        marker-end="url(#${palette.marker})"
+      />
     `;
   }).join("");
 }
@@ -830,10 +1028,26 @@ function renderArrows(insight = null) {
   const engineLines = Array.isArray(insight?.candidate_lines) ? insight.candidate_lines.slice(0, 5) : [];
   const threatLines = Array.isArray(insight?.threat_lines) ? insight.threat_lines.slice(0, 3) : [];
   if (!engineLines.length && !threatLines.length) return;
-  el.boardArrows.innerHTML = [
-    renderArrowGroup(threatLines, "threat"),
-    renderArrowGroup(engineLines, "engine"),
-  ].join("");
+  const board = el.board;
+  const width = board instanceof HTMLElement && board.offsetWidth ? board.offsetWidth : 640;
+  const height = board instanceof HTMLElement && board.offsetHeight ? board.offsetHeight : 640;
+  const squareSize = boardSquareSize();
+  const headSize = Math.max(18, Math.min(squareSize * 0.4, 28));
+  const markerHalf = Math.max(9, headSize * 0.42);
+  el.boardArrows.innerHTML = `
+    <svg class="board-arrow-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <marker id="engineArrowHead" markerWidth="${headSize}" markerHeight="${headSize}" refX="${headSize - 2}" refY="${markerHalf}" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M 0 0 L ${headSize} ${markerHalf} L 0 ${headSize} L ${headSize * 0.28} ${markerHalf} Z" fill="rgba(90, 176, 255, 0.92)"></path>
+        </marker>
+        <marker id="threatArrowHead" markerWidth="${headSize}" markerHeight="${headSize}" refX="${headSize - 2}" refY="${markerHalf}" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M 0 0 L ${headSize} ${markerHalf} L 0 ${headSize} L ${headSize * 0.28} ${markerHalf} Z" fill="rgba(226, 84, 84, 0.92)"></path>
+        </marker>
+      </defs>
+      <g class="board-arrow-group threat-arrows">${renderArrowGroup(threatLines, "threat")}</g>
+      <g class="board-arrow-group engine-arrows">${renderArrowGroup(engineLines, "engine")}</g>
+    </svg>
+  `;
 }
 
 function clearDragState() {
@@ -913,6 +1127,7 @@ function setProgress(value, message = "", options = {}) {
     state.analysisProgressTimer
     || el.analyze?.disabled
     || el.importPgn?.disabled
+    || el.importChessnut?.disabled
     || state.autoImportRunning
   );
   const current = Number.isFinite(Number(state.analysisProgressValue))
@@ -977,6 +1192,8 @@ function stockfishStatsFromStatus(status) {
     elapsed_sec: Number(status.elapsed_sec ?? 0),
     eta_sec: status.eta_sec,
     live_positions: Array.isArray(status.live_positions) ? status.live_positions : [],
+    scan_active_workers: Number(status.scan_active_workers ?? 0),
+    scan_active_slots: Array.isArray(status.scan_active_slots) ? status.scan_active_slots : [],
     brilliant_games_done: Number(status.brilliant_games_done ?? 0),
     brilliant_games_total: Number(status.brilliant_games_total ?? 0),
     brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
@@ -993,13 +1210,13 @@ function stockfishStatsFromStatus(status) {
 function analysisPhaseLabel(phase) {
   const labels = {
     starting: "Starting",
-    loading_games: "Loading games",
+    loading_games: "Loading",
     fetch_archives: "Checking archives",
-    fetch_games: "Importing games",
-    indexing: "Indexing games",
-    position_index: "Preparing Stockfish",
-    stockfish_positions: "Analyzing positions",
-    brilliant_scan: "Classifying moves",
+    fetch_games: "Importing",
+    indexing: "Indexing",
+    position_index: "Preparing engine",
+    stockfish_positions: "Analyzing",
+    brilliant_scan: "Classifying",
     complete: "Complete",
     failed: "Failed",
   };
@@ -1056,6 +1273,27 @@ function analysisPrimaryCard(stats) {
   return ["Positions/sec", formatRate(stats.positions_per_second)];
 }
 
+function analysisRemainingCard(stats) {
+  const phase = stats.phase || "";
+  if (["loading_games", "fetch_archives", "fetch_games", "indexing"].includes(phase)) {
+    const done = Number(stats.games_done || 0);
+    const total = Number(stats.games_total || 0);
+    return ["Games left", total ? Math.max(0, total - done) : "--"];
+  }
+  if (phase === "brilliant_scan") {
+    const scanDone = Number(stats.brilliant_games_done || 0);
+    const scanTotal = Number(stats.brilliant_games_total || 0);
+    if (scanTotal) return ["Games left", Math.max(0, scanTotal - scanDone)];
+    const scanned = Number(stats.brilliant_moves_scanned || 0);
+    const playerMoves = Number(stats.brilliant_player_moves_total || scanned || 0);
+    const classified = Number(stats.brilliant_moves_classified || 0);
+    return ["Moves left", playerMoves ? Math.max(0, playerMoves - classified) : "--"];
+  }
+  const done = Number(stats.positions_analyzed || stats.positions_done || 0);
+  const total = Number(stats.positions_total || 0);
+  return ["Positions left", total ? Math.max(0, total - done) : "--"];
+}
+
 function analysisEtaText(stats) {
   if (!stats.active) return "Done";
   const eta = Number(stats.eta_sec);
@@ -1092,7 +1330,9 @@ function renderStockfishStats(stats, options = {}) {
   const memory = Number(stats.memory_mb || 0);
   const freeMemory = Number(stats.system_available_ram_mb || 0);
   const totalMemory = Number(stats.system_ram_mb || 0);
-  const activeWorkers = Number(stats.active_workers || 0);
+  const activeWorkers = phase === "brilliant_scan" || phase === "stockfish_positions"
+    ? Number(stats.scan_active_workers || stats.active_workers || 0)
+    : Number(stats.active_workers || 0);
   const workers = Number(stats.workers || 1);
   const hasLiveCpu = stats.cpu_percent != null && (isEnginePhase || activeWorkers > 0 || Number(stats.jobs_started || 0) > 0);
   const cpu = hasLiveCpu ? stats.cpu_percent : stats.cpu_budget_percent;
@@ -1113,9 +1353,11 @@ function renderStockfishStats(stats, options = {}) {
     : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
   const hashLimit = Number(stats.hash_limit_mb || 0);
   const primaryCard = analysisPrimaryCard(stats);
+  const remainingCard = analysisRemainingCard(stats);
   const cards = [
     throughputCard,
     primaryCard,
+    remainingCard,
     ["ETA", analysisEtaText(stats)],
     workerCard,
     [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
@@ -1151,15 +1393,36 @@ function renderStockfishStats(stats, options = {}) {
 function renderAnalysisPreviewPanel(stats) {
   const node = el.analysisPreviewPanel;
   if (!node) return;
-  const previews = Array.isArray(stats?.live_positions) ? stats.live_positions.slice(0, 6) : [];
+  const workerSlots = Math.min(Math.max(Number(stats?.workers || 0), 0) || 8, 8);
+  const previews = Array.isArray(stats?.live_positions) ? stats.live_positions.slice(0, workerSlots) : [];
+  const activeSlots = new Set(Array.isArray(stats?.scan_active_slots) ? stats.scan_active_slots.map((slot) => Number(slot)) : []);
   const active = Boolean(stats?.active);
-  if (!stats || (!active && !previews.length)) {
+  const rawPhase = stats?.phase || "";
+  const liveBoardPhase = rawPhase === "brilliant_scan" || rawPhase === "stockfish_positions";
+  const hasPreviewContent = previews.some(Boolean);
+  if (!stats || (!active && !hasPreviewContent)) {
     node.className = "analysis-preview-panel empty";
     node.textContent = "Run an import to see live worker stats and the positions Bookup is analyzing.";
     return;
   }
-  const phase = analysisPhaseLabel(stats.phase || "");
-  const rawPhase = stats.phase || "";
+  const phase = analysisPhaseLabel(rawPhase);
+  if (!liveBoardPhase) {
+    node.className = "analysis-preview-panel empty";
+    node.innerHTML = `
+      <div class="analysis-preview-head">
+        <div>
+          <span class="section-label">Live Analysis</span>
+          <h3>${escapeHtml(analysisWorkSummary(stats))}</h3>
+        </div>
+        <small>${escapeHtml(stats.message || "Bookup is preparing the next analysis batch.")}</small>
+      </div>
+    `;
+    return;
+  }
+  const remainingCard = analysisRemainingCard(stats);
+  const renderedActiveWorkers = rawPhase === "brilliant_scan" || rawPhase === "stockfish_positions"
+    ? Math.max(Number(stats.scan_active_workers || stats.active_workers || 0), activeSlots.size)
+    : Number(stats.active_workers || 0);
   const gamesDone = Number(stats.games_done || stats.brilliant_games_done || 0);
   const gamesTotal = Number(stats.games_total || stats.brilliant_games_total || 0);
   const positionDone = Number(stats.positions_analyzed || 0);
@@ -1168,53 +1431,73 @@ function renderAnalysisPreviewPanel(stats) {
     ? Number(stats.games_per_second || stats.items_per_second || 0)
     : 0;
   const headerCards = [
-    ["Phase", phase],
-    ["Games/sec", formatRate(gameRate)],
-    ["Positions/sec", formatRate(stats.positions_per_second)],
-    ["Workers", `${Number(stats.active_workers || 0)}/${Number(stats.workers || 0)}`],
-    ["ETA", analysisEtaText(stats)],
-    ["CPU", stats.cpu_percent == null ? "--" : `${Number(stats.cpu_percent).toFixed(1)}%`],
+    { label: "Games/sec", value: formatRate(gameRate) },
+    { label: "Positions/sec", value: formatRate(stats.positions_per_second) },
+    { label: "Workers", value: `${renderedActiveWorkers}/${Number(stats.workers || 0)}` },
+    { label: remainingCard[0], value: String(remainingCard[1]) },
+    { label: "ETA", value: analysisEtaText(stats) },
+    { label: "CPU", value: stats.cpu_percent == null ? "--" : `${Number(stats.cpu_percent).toFixed(1)}%` },
   ];
   const workLine = gamesTotal
     ? `${gamesDone}/${gamesTotal} games`
     : positionTotal
       ? `${positionDone}/${positionTotal} positions`
       : analysisWorkSummary(stats);
+  const previewCards = [];
+  for (let index = 0; index < Math.max(workerSlots, 1); index += 1) {
+    previewCards.push(renderAnalysisPreviewCard(previews[index] || null, {
+      slot: index,
+      busy: activeSlots.has(index),
+    }));
+  }
   node.className = "analysis-preview-panel";
   node.innerHTML = `
     <div class="analysis-preview-head">
       <div>
         <span class="section-label">Live Analysis</span>
+        <div class="analysis-preview-phase-row">
+          <span class="analysis-phase-pill">${escapeHtml(phase)}</span>
+        </div>
         <h3>${escapeHtml(workLine)}</h3>
       </div>
       <small>${escapeHtml(stats.message || "Bookup is preparing the next analysis batch.")}</small>
     </div>
     <div class="analysis-landscape-metrics">
-      ${headerCards.map(([label, value]) => `
-        <article>
+      ${headerCards.map(({ label, value, className = "" }) => `
+        <article class="${className}">
           <span>${escapeHtml(label)}</span>
           <strong>${escapeHtml(String(value))}</strong>
         </article>
       `).join("")}
     </div>
     <div class="analysis-live-board-grid">
-      ${previews.length ? previews.map(renderAnalysisPreviewCard).join("") : `
-        <article class="analysis-preview-card empty">
-          <div class="analysis-preview-placeholder">Waiting for the first analyzed position...</div>
-        </article>
-      `}
+      ${previewCards.join("")}
     </div>
   `;
 }
 
-function renderAnalysisPreviewCard(item) {
+function renderAnalysisPreviewCard(item, options = {}) {
+  const slot = Number(options.slot || 0);
+  const busy = Boolean(options.busy);
+  if (!item) {
+    return `
+      <article class="analysis-preview-card empty ${busy ? "busy" : ""}">
+        <div class="analysis-preview-card-head">
+          <span>${busy ? `Worker ${slot + 1}` : "Idle"}</span>
+          <strong>${busy ? "Loading next position" : "Waiting for work"}</strong>
+          <small>${busy ? "This worker is preparing its next position now." : "This slot will populate as soon as a worker is assigned."}</small>
+        </div>
+        ${renderMiniBoard(START_FEN, "white")}
+      </article>
+    `;
+  }
   const label = item?.label || item?.move || "Position";
   const subtitle = item?.subtitle || item?.status || "";
   const status = item?.status || "Analyzing";
   return `
     <article class="analysis-preview-card">
       <div class="analysis-preview-card-head">
-        <span>${escapeHtml(status)}</span>
+        <span>${escapeHtml(`${status}${busy ? ` · Worker ${slot + 1}` : ""}`)}</span>
         <strong>${escapeHtml(label)}</strong>
         ${subtitle ? `<small>${escapeHtml(subtitle)}</small>` : ""}
       </div>
@@ -1267,6 +1550,7 @@ async function pollAnalysisStatus() {
       && !state.analysisProgressTimer
       && !el.analyze?.disabled
       && !el.importPgn?.disabled
+      && !el.importChessnut?.disabled
     ) {
       stopAnalysisStatusPolling();
       renderStockfishStats(stats, { live: true });
@@ -1280,7 +1564,7 @@ function startAnalysisStatusPolling() {
   stopAnalysisStatusPolling();
   state.analysisStatusPollStartedAt = Date.now();
   void pollAnalysisStatus();
-  state.analysisStatusTimer = window.setInterval(pollAnalysisStatus, 1000);
+  state.analysisStatusTimer = window.setInterval(pollAnalysisStatus, 400);
 }
 
 function stopAnalysisProgress() {
@@ -1296,7 +1580,15 @@ function startAnalysisProgress() {
   const startedAt = Date.now();
   state.analysisProgressValue = 0;
   setProgress(4, "Preparing import...", { allowDecrease: true });
-  renderStockfishStats(null, { live: true });
+  renderAnalysisPreviewPanel({
+    active: true,
+    phase: "loading_games",
+    workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
+    live_positions: [],
+    scan_active_slots: [],
+    scan_active_workers: 0,
+    message: "Loading saved games or checking Chess.com archives...",
+  });
   startAnalysisStatusPolling();
   state.analysisProgressTimer = window.setInterval(() => {
     const elapsed = Date.now() - startedAt;
@@ -1355,7 +1647,7 @@ async function runAnalysis(options = {}) {
   startAnalysisProgress();
   el.analyze.disabled = true;
   try {
-    const payload = await fetchProfilePayload(el.username.value.trim(), {
+    const payload = await fetchProfilePayload(resolveConfiguredUsername(), {
       forceRefresh: Boolean(options.forceRefresh),
     });
     state.payload = payload;
@@ -1394,7 +1686,7 @@ async function runAnalysis(options = {}) {
 
 async function checkAutoImportOnStartup() {
   if (!el.autoImportStartup || el.autoImportStartup.checked === false || state.autoImportRunning) return;
-  const username = String(el.username?.value || "").trim();
+  const username = resolveConfiguredUsername();
   if (!username) return;
   state.autoImportRunning = true;
   try {
@@ -1440,7 +1732,7 @@ async function importPgnGames() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: el.username.value.trim() || "PGN Player",
+        username: resolveConfiguredUsername() || "PGN Player",
         pgn,
         player_color: "white",
         lichess_token: el.lichessToken.value.trim(),
@@ -1466,6 +1758,57 @@ async function importPgnGames() {
     if (el.pgnImportStatus) el.pgnImportStatus.textContent = error.message || "PGN import failed.";
   } finally {
     stopAnalysisProgress();
+    if (el.importPgn) el.importPgn.disabled = false;
+  }
+}
+
+async function importChessnutGames() {
+  const dbPath = (el.chessnutDbPath?.value || defaults.chessnut_db_path || "").trim();
+  const playerColor = (el.chessnutPlayerColor?.value || defaults.chessnut_player_color || "white").trim().toLowerCase() === "black" ? "black" : "white";
+  if (!dbPath) {
+    if (el.chessnutImportStatus) el.chessnutImportStatus.textContent = "Pick the local NewChessnut data.mdb path first.";
+    return;
+  }
+  startAnalysisProgress();
+  if (el.importChessnut) el.importChessnut.disabled = true;
+  if (el.importPgn) el.importPgn.disabled = true;
+  if (el.chessnutImportStatus) el.chessnutImportStatus.textContent = "Reading NewChessnut OTB games and building your local repertoire...";
+  try {
+    const response = await fetch("/api/import-chessnut", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: resolveConfiguredUsername() || "Chessnut Player",
+        db_path: dbPath,
+        player_color: playerColor,
+        chessnut_db_path: dbPath,
+        chessnut_player_color: playerColor,
+        lichess_token: el.lichessToken.value.trim(),
+        engine_path: el.enginePath.value.trim(),
+        depth: Number(el.depth.value || defaults.depth || 24),
+        multipv: Number(el.multiPv.value || defaults.multipv || 5),
+        threads: Number(el.threads.value || defaults.threads || 8),
+        parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
+        hash_mb: Number(el.hash.value || defaults.hash_mb || 2048),
+        think_time_sec: Number(el.thinkTime.value || defaults.think_time_sec || 5),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "NewChessnut import failed.");
+    defaults.chessnut_db_path = dbPath;
+    defaults.chessnut_player_color = playerColor;
+    state.payload = payload;
+    state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
+    state.games = payload.games || [];
+    renderProfile(payload);
+    setProgress(100, `Imported ${payload.games_imported} NewChessnut OTB game${payload.games_imported === 1 ? "" : "s"} into your local Bookup workspace.`);
+    if (el.chessnutImportStatus) el.chessnutImportStatus.textContent = "Chessnut import complete. The move tree, theory, and trainer are ready.";
+  } catch (error) {
+    setProgress(0, error.message || "NewChessnut import failed.", { allowDecrease: true });
+    if (el.chessnutImportStatus) el.chessnutImportStatus.textContent = error.message || "NewChessnut import failed.";
+  } finally {
+    stopAnalysisProgress();
+    if (el.importChessnut) el.importChessnut.disabled = false;
     if (el.importPgn) el.importPgn.disabled = false;
   }
 }
@@ -1497,7 +1840,12 @@ async function fetchProfilePayload(username, options = {}) {
 
 async function bootstrapLocalState() {
   try {
-    const username = el.username.value.trim() || "trixize1234";
+    const username = resolveConfiguredUsername();
+    if (!username) {
+      state.reviewStats = loadReviewStats("");
+      setProgress(0, "Ready.");
+      return;
+    }
     const response = await fetch(`/api/local-state?username=${encodeURIComponent(username)}`);
     const payload = await response.json();
     if (!response.ok) return;
@@ -1532,7 +1880,7 @@ async function bootstrapLocalState() {
       setProgress(0, "Ready.");
     }
   } catch {
-    state.reviewStats = loadReviewStats(el.username.value.trim() || "trixize1234");
+    state.reviewStats = loadReviewStats(resolveConfiguredUsername());
     setProgress(0, "Ready.");
   }
 }
@@ -1577,7 +1925,9 @@ function renderProfile(payload) {
   renderHealthDashboard(profile.health_dashboard || null);
   renderStatsSummary(profile, payload);
   renderRatingProgress(profile.rating_progress || null);
-  renderBrilliantTracker(profile.brilliant_tracker || null);
+  if (brilliantTrackerEnabled) {
+    renderBrilliantTracker(profile.brilliant_tracker || null);
+  }
   renderMemoryScores(profile.memory_scores || null);
   renderOpeningDrift(profile.opening_drift || null);
   renderPrepPack(profile.prep_pack || null);
@@ -2082,20 +2432,20 @@ function bindBrilliantProgressEvents() {
     button.addEventListener("click", () => {
       state.brilliantProgressRange = button.dataset.brilliantRange || "90";
       state.brilliantProgressPointIndex = null;
-      renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
+      if (brilliantTrackerEnabled) renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
     });
   });
   el.brilliantTracker.querySelectorAll("[data-brilliant-time-class]").forEach((button) => {
     button.addEventListener("click", () => {
       state.brilliantProgressTimeClass = button.dataset.brilliantTimeClass || "";
       state.brilliantProgressPointIndex = null;
-      renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
+      if (brilliantTrackerEnabled) renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
     });
   });
   el.brilliantTracker.querySelectorAll("[data-brilliant-index]").forEach((button) => {
     const update = () => {
       state.brilliantProgressPointIndex = Number(button.dataset.brilliantIndex);
-      renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
+      if (brilliantTrackerEnabled) renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
     };
     button.addEventListener("click", update);
     button.addEventListener("focus", update);
@@ -2633,7 +2983,12 @@ function renderPrepPack(pack) {
 async function refreshCacheDashboard() {
   if (!el.cacheDashboard) return;
   try {
-    const username = state.payload?.username || el.username?.value?.trim() || "trixize1234";
+    const username = state.payload?.username || resolveConfiguredUsername();
+    if (!username) {
+      el.cacheDashboard.className = "stack empty";
+      el.cacheDashboard.textContent = "Choose your main Chess.com username in Setup to load local cache stats.";
+      return;
+    }
     const response = await fetch(`/api/cache-stats?username=${encodeURIComponent(username)}`);
     const stats = await response.json();
     if (!response.ok) throw new Error(stats.error || "Cache stats unavailable.");

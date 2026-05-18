@@ -29,7 +29,7 @@ from .classifications import (
     expected_points_from_evaluation,
 )
 from .engine import EngineSession
-from .opening_names import lookup_by_board, lookup_by_eco
+from .opening_names import lookup_by_board, lookup_by_eco, matches_opening_prefix, opening_prefix_count
 
 
 OPENING_LIBRARY: ChessOpeningsLibrary | None = None
@@ -46,13 +46,14 @@ EXPLORER_HEADERS = {
 }
 KNOWN_LINE_THRESHOLD = 100
 OPENING_PLIES = 16
+EARLY_BOOK_FREE_PLIES = 5
 PV_LENGTH = 12
 REPERTOIRE_LOCK_PLIES = 8
 REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
-ENGINE_CACHE_SCHEMA_VERSION = 9
+ENGINE_CACHE_SCHEMA_VERSION = 11
 BRILLIANT_TRACKER_GAME_LIMIT = 0
 BRILLIANT_TRACKER_MAX_PLIES = 0  # 0 means no ply cap; scan every move made by the imported player.
 BRILLIANT_TRACKER_LIVE_BUDGET = 0  # 0 means no cap; every scanned move gets a current-position MultiPV gate.
@@ -1211,6 +1212,8 @@ def _book_state_for_line(play_uci: list[str] | None, board: chess.Board | None =
 
     probe = chess.Board()
     last_book_ply = 0
+    san_tokens: list[str] = []
+    last_prefix_count = 0
     for ply_index, move_uci in enumerate(play_uci, start=1):
         try:
             move = chess.Move.from_uci(move_uci)
@@ -1230,9 +1233,12 @@ def _book_state_for_line(play_uci: list[str] | None, board: chess.Board | None =
                 "last_book_ply": last_book_ply,
                 "position_matches_prefix": False,
             }
+        san_tokens.append(probe.san(move))
         probe.push(move)
-        if ply_index <= 2 or _position_has_book_name(probe):
+        prefix_count = opening_prefix_count(san_tokens)
+        if ply_index <= EARLY_BOOK_FREE_PLIES or prefix_count > 0 or _position_has_book_name(probe):
             last_book_ply = ply_index
+            last_prefix_count = prefix_count
             continue
         return {
             "active": False,
@@ -1240,6 +1246,8 @@ def _book_state_for_line(play_uci: list[str] | None, board: chess.Board | None =
             "ply": ply_index,
             "last_book_ply": last_book_ply,
             "position_matches_prefix": board.epd() == probe.epd() if board is not None else True,
+            "san_tokens": san_tokens,
+            "prefix_count": last_prefix_count,
         }
 
     return {
@@ -1248,6 +1256,8 @@ def _book_state_for_line(play_uci: list[str] | None, board: chess.Board | None =
         "ply": len(play_uci),
         "last_book_ply": last_book_ply,
         "position_matches_prefix": board.epd() == probe.epd() if board is not None else True,
+        "san_tokens": san_tokens,
+        "prefix_count": last_prefix_count,
     }
 
 
@@ -1258,6 +1268,7 @@ def _move_is_book_candidate(
     book_state: dict[str, Any] | None = None,
     popularity_by_uci: dict[str, float] | None = None,
     repeated_count: int = 0,
+    move_rank: int | None = None,
 ) -> bool:
     if not (book_state or {}).get("active", False):
         return False
@@ -1265,7 +1276,23 @@ def _move_is_book_candidate(
         return True
     if float((popularity_by_uci or {}).get(move_uci, 0.0) or 0.0) >= 3.0:
         return True
-    return _resulting_position_is_book(board, move_uci)
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        return False
+    if move not in board.legal_moves:
+        return False
+    next_tokens = [*list((book_state or {}).get("san_tokens") or []), board.san(move)]
+    if matches_opening_prefix(next_tokens):
+        return True
+    moving_piece = board.piece_at(move.from_square)
+    if (
+        (book_state or {}).get("ply", 0) <= 4
+        and moving_piece is not None
+        and moving_piece.piece_type != chess.QUEEN
+    ):
+        return True
+    return False
 
 
 def _move_purpose(board: chess.Board, move: chess.Move) -> str:
@@ -1863,11 +1890,14 @@ def _build_branch_line(
         branch_line["popularity"] = popularity
         return branch_line
 
+    branch_time_sec = None
+    if time_sec is not None:
+        branch_time_sec = min(4.0, max(1.5, float(time_sec or 0.0) * 2.0))
     analysis = engine.analyse(
         branch_board,
-        depth=max(8, min(14, engine.settings.depth - 4)),
+        depth=max(14, int(engine.settings.depth or 14)),
         multipv=1,
-        time_sec=time_sec,
+        time_sec=branch_time_sec,
     )
     if not analysis:
         return None
@@ -3423,6 +3453,55 @@ def _build_game_brilliant_tracker(
     total_games = len(ordered_games)
     configured_workers = max(1, int(getattr(engine, "worker_count", 1) or 1))
     scan_workers = max(1, min(configured_workers, total_games or 1))
+    live_scan_lock = threading.Lock()
+    live_scan_previews: list[dict[str, Any] | None] = [None] * scan_workers
+    # Keep brilliant-scan lanes stable for the full executor lifetime so the
+    # wall reflects configured worker slots instead of flickering between
+    # "active" and "idle" while threads pick up the next game.
+    live_scan_active_slots: set[int] = set(range(scan_workers))
+    last_live_preview_emit = 0.0
+
+    def worker_slot_index() -> int:
+        if scan_workers <= 1:
+            return 0
+        thread_name = threading.current_thread().name
+        if "_" in thread_name:
+            suffix = thread_name.rsplit("_", 1)[-1]
+            try:
+                return max(0, min(scan_workers - 1, int(suffix)))
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    def snapshot_live_scan_previews() -> list[dict[str, Any] | None]:
+        with live_scan_lock:
+            return list(live_scan_previews)
+
+    def snapshot_live_scan_active_count() -> int:
+        with live_scan_lock:
+            return len(live_scan_active_slots)
+
+    def snapshot_live_scan_active_slots() -> list[int]:
+        with live_scan_lock:
+            return sorted(live_scan_active_slots)
+
+    def publish_live_preview(slot: int, preview: dict[str, Any] | None = None, *, clear: bool = False, force: bool = False) -> None:
+        nonlocal last_live_preview_emit
+        if not progress_callback:
+            return
+        with live_scan_lock:
+            if clear:
+                live_scan_previews[slot] = None
+            else:
+                live_scan_previews[slot] = preview
+            now = time.perf_counter()
+            if not force and now - last_live_preview_emit < 0.08:
+                return
+            last_live_preview_emit = now
+            payload = list(live_scan_previews)
+            active_count = len(live_scan_active_slots)
+            active_slots = sorted(live_scan_active_slots)
+        notify(live_positions=payload, scan_active_workers=active_count, scan_active_slots=active_slots)
 
     def scan_game(game_index: int, imported: ImportedGame) -> dict[str, Any]:
         player_color = imported.player_color if imported.player_color in {"white", "black"} else "white"
@@ -3454,6 +3533,16 @@ def _build_game_brilliant_tracker(
         time_class = imported.time_class or "unknown"
         node = imported.game
         ply_index = 0
+        slot = worker_slot_index()
+        initial_preview = _analysis_progress_preview(
+            board.fen(),
+            label="Assigned",
+            subtitle=f"{date_label} · vs {opponent}",
+            status="Loading",
+            orientation=player_color,
+        )
+        local_live_positions.append(initial_preview)
+        publish_live_preview(slot, initial_preview, force=True)
         while node.variations:
             child = node.variation(0)
             move = child.move
@@ -3474,16 +3563,15 @@ def _build_game_brilliant_tracker(
             if should_scan:
                 local_moves_scanned += 1
                 played_uci = move.uci()
-                if len(local_live_positions) < 3:
-                    local_live_positions.append(
-                        _analysis_progress_preview(
-                            board.fen(),
-                            label=san,
-                            subtitle=f"{date_label} · vs {opponent}",
-                            status="Classifying",
-                            orientation=player_color,
-                        )
-                    )
+                live_preview = _analysis_progress_preview(
+                    board.fen(),
+                    label=san,
+                    subtitle=f"{date_label} · vs {opponent}",
+                    status="Classifying",
+                    orientation=player_color,
+                )
+                local_live_positions.append(live_preview)
+                publish_live_preview(slot, live_preview)
                 candidate_lines, database_moves, from_cache = _cached_candidate_lines_for_brilliant_scan(
                     board,
                     engine,
@@ -3551,6 +3639,7 @@ def _build_game_brilliant_tracker(
             path_san.append(san)
             path_uci.append(move.uci())
             node = child
+        publish_live_preview(slot, force=True)
 
         game_row = {
             "source_index": game_index,
@@ -3627,9 +3716,6 @@ def _build_game_brilliant_tracker(
         brilliant_moves.extend(result.get("brilliant_moves", []))
         if result.get("brilliant_game"):
             brilliant_games.append(result["brilliant_game"])
-        for preview in result.get("live_positions", []) or []:
-            live_scan_previews.append(preview)
-
     def notify_scan_progress(force: bool = False) -> None:
         if not force and games_scanned != 1 and games_scanned % 5 != 0 and games_scanned != total_games:
             return
@@ -3652,24 +3738,36 @@ def _build_game_brilliant_tracker(
             eta_sec=round(eta, 1),
             items_per_second=round(rate, 2),
             games_per_second=round(rate, 2),
-            live_positions=list(live_scan_previews),
+            live_positions=snapshot_live_scan_previews(),
+            scan_active_workers=snapshot_live_scan_active_count(),
+            scan_active_slots=snapshot_live_scan_active_slots(),
             message=f"Scanning Brilliant candidates in your moves {games_scanned}/{total_games} games with {scan_workers} workers...",
         )
+    notify_scan_progress(force=True)
 
-    live_scan_previews: deque[dict[str, Any]] = deque(maxlen=6)
     if scan_workers > 1 and total_games > 1:
-        with ThreadPoolExecutor(max_workers=scan_workers, thread_name_prefix="bookup-brilliant") as executor:
-            futures = [
-                executor.submit(scan_game, game_index, imported)
-                for game_index, imported in enumerate(ordered_games, start=1)
-            ]
-            for future in as_completed(futures):
-                merge_scan_result(future.result())
-                notify_scan_progress()
+        try:
+            with ThreadPoolExecutor(max_workers=scan_workers, thread_name_prefix="bookup-brilliant") as executor:
+                futures = [
+                    executor.submit(scan_game, game_index, imported)
+                    for game_index, imported in enumerate(ordered_games, start=1)
+                ]
+                for future in as_completed(futures):
+                    merge_scan_result(future.result())
+                    notify_scan_progress()
+        except RuntimeError:
+            for game_index, imported in enumerate(ordered_games, start=1):
+                merge_scan_result(scan_game(game_index, imported))
+                notify_scan_progress(force=True)
     else:
         for game_index, imported in enumerate(ordered_games, start=1):
             merge_scan_result(scan_game(game_index, imported))
             notify_scan_progress()
+
+    with live_scan_lock:
+        live_scan_active_slots.clear()
+        for slot_index in range(len(live_scan_previews)):
+            live_scan_previews[slot_index] = None
 
     notify_scan_progress(force=True)
 
@@ -3951,6 +4049,8 @@ def analyse_games(
     games: list[ImportedGame],
     engine: EngineSession,
     progress_callback: Callable[..., None] | None = None,
+    *,
+    enable_brilliant_tracker: bool = True,
 ) -> dict[str, Any]:
     analysis_started = time.perf_counter()
 
@@ -3979,25 +4079,97 @@ def analyse_games(
     worker_count = max(1, int(getattr(engine, "worker_count", 1) or 1))
     total_positions = max(1, len(analyzed_nodes))
     positions_done = 0
-    live_position_previews: deque[dict[str, Any]] = deque(
-        (
-            _analysis_progress_preview(
-                node.position_fen,
-                label=node.player_san.get(node.player_moves.most_common(1)[0][0], node.trigger_move) if node.player_moves else node.trigger_move,
-                subtitle=f"{node.occurrences}x · {node.opening_name}",
-                status="Queued",
-                orientation=node.color,
-            )
-            for node in analyzed_nodes[:6]
-        ),
-        maxlen=6,
-    )
+    preview_slot_count = max(1, min(worker_count, 8))
+    live_position_lock = threading.Lock()
+    live_position_previews: list[dict[str, Any] | None] = [None] * preview_slot_count
+    live_position_active_slots: set[int] = set()
+    last_position_preview_emit = 0.0
+
+    def _node_preview(node: PositionNode, status: str) -> dict[str, Any]:
+        return _analysis_progress_preview(
+            node.position_fen,
+            label=node.player_san.get(node.player_moves.most_common(1)[0][0], node.trigger_move) if node.player_moves else node.trigger_move,
+            subtitle=f"{node.occurrences}x · {node.opening_name}",
+            status=status,
+            orientation=node.color,
+        )
+
+    def _lesson_preview(node: PositionNode, lesson: dict[str, Any], status: str = "Analyzed") -> dict[str, Any]:
+        return _analysis_progress_preview(
+            lesson.get("position_fen") or lesson.get("line_start_fen") or chess.STARTING_FEN,
+            label=str(lesson.get("recommended_move") or lesson.get("best_reply") or lesson.get("line_label") or "Position"),
+            subtitle=f"{lesson.get('frequency', node.occurrences)}x · {lesson.get('opening_name', node.opening_name)}",
+            status=status,
+            orientation=str(lesson.get("side") or node.color),
+        )
+
+    def _current_worker_slot() -> int:
+        suffix = threading.current_thread().name.rsplit("_", 1)[-1]
+        if suffix.isdigit():
+            return int(suffix) % preview_slot_count
+        return 0
+
+    def _live_position_snapshot() -> list[dict[str, Any] | None]:
+        with live_position_lock:
+            return list(live_position_previews)
+
+    def _live_position_active_count() -> int:
+        with live_position_lock:
+            return len(live_position_active_slots)
+
+    def _live_position_active_slots() -> list[int]:
+        with live_position_lock:
+            return sorted(live_position_active_slots)
+
+    def _publish_live_position(
+        slot: int,
+        preview: dict[str, Any] | None = None,
+        *,
+        active: bool = True,
+        force: bool = False,
+    ) -> bool:
+        nonlocal last_position_preview_emit
+        now = time.monotonic()
+        with live_position_lock:
+            if preview is not None:
+                live_position_previews[slot] = preview
+            if active:
+                live_position_active_slots.add(slot)
+            else:
+                live_position_active_slots.discard(slot)
+            should_emit = force or now - last_position_preview_emit >= 0.25
+            if should_emit:
+                last_position_preview_emit = now
+        return should_emit
+
+    for slot, node in enumerate(analyzed_nodes[:preview_slot_count]):
+        live_position_previews[slot] = _node_preview(node, "Queued")
+
+    def _build_lesson_for_live_worker(node: PositionNode) -> tuple[PositionNode, dict[str, Any] | None, int]:
+        slot = _current_worker_slot()
+        _publish_live_position(slot, _node_preview(node, "Analyzing"), active=True, force=True)
+        return node, _build_lesson_from_node(node, engine, time_sec=quick_time_sec), slot
+
+    def _notify_stockfish_positions(*, message: str, force: bool = False) -> None:
+        notify(
+            phase="stockfish_positions",
+            progress=20 + int((positions_done / total_positions) * 48),
+            positions_done=positions_done,
+            positions_total=len(analyzed_nodes),
+            live_positions=_live_position_snapshot(),
+            scan_active_workers=_live_position_active_count(),
+            scan_active_slots=_live_position_active_slots(),
+            message=message,
+        )
+
     notify(
         phase="stockfish_positions",
         progress=20 if analyzed_nodes else 68,
         positions_done=0,
         positions_total=len(analyzed_nodes),
-        live_positions=list(live_position_previews),
+        live_positions=_live_position_snapshot(),
+        scan_active_workers=0,
+        scan_active_slots=[],
         message=(
             f"Stockfish is analyzing {len(analyzed_nodes)} repeated positions with "
             f"{min(worker_count, max(1, len(analyzed_nodes)))} worker(s)..."
@@ -4006,57 +4178,54 @@ def analyse_games(
         ),
     )
     if worker_count > 1 and len(analyzed_nodes) > 1:
-        with ThreadPoolExecutor(max_workers=min(worker_count, len(analyzed_nodes)), thread_name_prefix="bookup-stockfish") as executor:
-            futures = {
-                executor.submit(_build_lesson_from_node, node, engine, time_sec=quick_time_sec): node
-                for node in analyzed_nodes
-            }
-            for future in as_completed(futures):
-                node = futures[future]
-                lesson = future.result()
+        try:
+            parallel_workers = min(worker_count, len(analyzed_nodes))
+            with live_position_lock:
+                live_position_active_slots.clear()
+                live_position_active_slots.update(range(min(parallel_workers, preview_slot_count)))
+            with ThreadPoolExecutor(max_workers=parallel_workers, thread_name_prefix="bookup-stockfish") as executor:
+                futures = {executor.submit(_build_lesson_for_live_worker, node): node for node in analyzed_nodes}
+                for future in as_completed(futures):
+                    node, lesson, slot = future.result()
+                    if lesson:
+                        lessons.append(lesson)
+                        _publish_live_position(slot, _lesson_preview(node, lesson), active=True, force=True)
+                    else:
+                        _publish_live_position(slot, _node_preview(node, "Skipped"), active=True, force=True)
+                    positions_done += 1
+                    _notify_stockfish_positions(message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...", force=True)
+        except RuntimeError:
+            with live_position_lock:
+                live_position_active_slots.clear()
+                live_position_active_slots.add(0)
+            for node in analyzed_nodes:
+                _publish_live_position(0, _node_preview(node, "Analyzing"), active=True, force=True)
+                lesson = _build_lesson_from_node(node, engine, time_sec=quick_time_sec)
                 if lesson:
                     lessons.append(lesson)
-                    live_position_previews.append(
-                        _analysis_progress_preview(
-                            lesson.get("position_fen") or lesson.get("line_start_fen") or chess.STARTING_FEN,
-                            label=str(lesson.get("recommended_move") or lesson.get("best_reply") or lesson.get("line_label") or "Position"),
-                            subtitle=f"{lesson.get('frequency', node.occurrences)}x · {lesson.get('opening_name', node.opening_name)}",
-                            status="Analyzed",
-                            orientation=str(lesson.get("side") or node.color),
-                        )
-                    )
+                    _publish_live_position(0, _lesson_preview(node, lesson), active=True, force=True)
+                else:
+                    _publish_live_position(0, _node_preview(node, "Skipped"), active=True, force=True)
                 positions_done += 1
-                notify(
-                    phase="stockfish_positions",
-                    progress=20 + int((positions_done / total_positions) * 48),
-                    positions_done=positions_done,
-                    positions_total=len(analyzed_nodes),
-                    live_positions=list(live_position_previews),
-                    message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...",
-                )
+                _notify_stockfish_positions(message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...", force=True)
     else:
+        with live_position_lock:
+            live_position_active_slots.clear()
+            if analyzed_nodes:
+                live_position_active_slots.add(0)
         for node in analyzed_nodes:
+            _publish_live_position(0, _node_preview(node, "Analyzing"), active=True, force=True)
             lesson = _build_lesson_from_node(node, engine, time_sec=quick_time_sec)
             if lesson:
                 lessons.append(lesson)
-                live_position_previews.append(
-                    _analysis_progress_preview(
-                        lesson.get("position_fen") or lesson.get("line_start_fen") or chess.STARTING_FEN,
-                        label=str(lesson.get("recommended_move") or lesson.get("best_reply") or lesson.get("line_label") or "Position"),
-                        subtitle=f"{lesson.get('frequency', node.occurrences)}x · {lesson.get('opening_name', node.opening_name)}",
-                        status="Analyzed",
-                        orientation=str(lesson.get("side") or node.color),
-                    )
-                )
+                _publish_live_position(0, _lesson_preview(node, lesson), active=True, force=True)
+            else:
+                _publish_live_position(0, _node_preview(node, "Skipped"), active=True, force=True)
             positions_done += 1
-            notify(
-                phase="stockfish_positions",
-                progress=20 + int((positions_done / total_positions) * 48),
-                positions_done=positions_done,
-                positions_total=len(analyzed_nodes),
-                live_positions=list(live_position_previews),
-                message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...",
-            )
+            _notify_stockfish_positions(message=f"Stockfish analyzed {positions_done}/{len(analyzed_nodes)} repeated positions...", force=True)
+
+    with live_position_lock:
+        live_position_active_slots.clear()
 
     lessons.sort(key=lambda item: (-item["priority"], -item["frequency"], item["line_label"]))
     for lesson in lessons:
@@ -4137,8 +4306,23 @@ def analyse_games(
     prep_pack = _build_prep_pack(queue_due, queue_new, database_training, known_line_archive)
     study_plan = _build_study_plan(queue_due, queue_new, known_line_archive, memory_scores, database_training)
     confidence_graph = _build_confidence_graph(lessons)
-    notify(phase="brilliant_scan", progress=78, message="Classifying Brilliant moves from imported games...")
-    brilliant_tracker = _build_game_brilliant_tracker(games, lessons, engine, progress_callback=notify)
+    if enable_brilliant_tracker:
+        notify(phase="brilliant_scan", progress=78, message="Classifying Brilliant moves from imported games...")
+        brilliant_tracker = _build_game_brilliant_tracker(games, lessons, engine, progress_callback=notify)
+    else:
+        brilliant_tracker = {
+            "enabled": False,
+            "summary": {
+                "moves_scanned": 0,
+                "classified_moves": 0,
+                "cached_hits": 0,
+                "live_hits": 0,
+            },
+            "high_confidence": [],
+            "watchlist": [],
+            "games": [],
+            "message": "Brilliant Tracker is disabled in browser mode.",
+        }
     drift_fixes = _build_drift_fixes(opening_drift)
     import_speed_report = _build_import_speed_report(games, nodes, analyzed_nodes, lessons)
     elapsed_sec = max(0.001, time.perf_counter() - analysis_started)

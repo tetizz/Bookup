@@ -11,6 +11,8 @@ import time
 import chess
 import chess.engine
 
+MAX_SAFE_PARALLEL_WORKERS = 8
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else ROOT_DIR
@@ -23,8 +25,6 @@ DEFAULT_ENGINE_HINTS = [
     RUNTIME_DIR / "stockfish" / "stockfish-windows-x86-64-avx2.exe",
     ROOT_DIR / "stockfish.exe",
     ROOT_DIR / "stockfish" / "stockfish-windows-x86-64-avx2.exe",
-    Path(r"C:\Users\adria\Downloads\Brilliant-move-finder\stockfish\stockfish-windows-x86-64-avx2.exe"),
-    Path(r"C:\Users\adria\Downloads\Brilliant-move-finder\release\Brilliant Move Finder\stockfish\stockfish-windows-x86-64-avx2.exe"),
 ]
 
 
@@ -154,7 +154,7 @@ class EnginePool:
 
     def __init__(self, settings: EngineSettings) -> None:
         self.settings = settings
-        self.worker_count = max(1, int(settings.parallel_workers or 1))
+        self.worker_count = max(1, min(MAX_SAFE_PARALLEL_WORKERS, int(settings.parallel_workers or 1)))
         self._available: Queue[EngineSession] = Queue()
         self._sessions: list[EngineSession] = []
         self._open_lock = threading.Lock()
@@ -210,11 +210,20 @@ class EnginePool:
             except Empty:
                 if time.monotonic() >= deadline:
                     break
-        for session in set(returned_sessions):
+        # Close every known session, not just the idle ones that made it back to
+        # the queue. Otherwise active Stockfish workers can survive app shutdown.
+        for session in set(sessions + returned_sessions):
             try:
                 session.close()
             except Exception:
                 pass
+        while True:
+            try:
+                self._available.get_nowait()
+            except Empty:
+                break
+        with self._stats_lock:
+            self._active_jobs = 0
 
     def worker_pids(self) -> list[int]:
         pids: list[int] = []

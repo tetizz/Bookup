@@ -10,7 +10,7 @@ import requests
 
 
 HEADERS = {
-    "User-Agent": "Bookup/0.2 (username: trixize1234; contact: https://github.com/tetizz/Bookup)",
+    "User-Agent": "Bookup/0.2 (contact: https://github.com/tetizz/Bookup)",
 }
 
 
@@ -203,11 +203,18 @@ def fetch_games(
 
     max_workers = min(8, max(2, len(ordered_archives))) if ordered_archives else 2
     futures: list[Future[list[ImportedGame]]] = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for archive_url in ordered_archives:
+                futures.append(executor.submit(_fetch_archive_games, archive_url, username_lc, target))
+            for future in as_completed(futures):
+                imported.extend(future.result())
+                if max_games is not None and len(imported) >= max_games:
+                    return imported[:max_games]
+    except RuntimeError:
+        imported.clear()
         for archive_url in ordered_archives:
-            futures.append(executor.submit(_fetch_archive_games, archive_url, username_lc, target))
-        for future in as_completed(futures):
-            imported.extend(future.result())
+            imported.extend(_fetch_archive_games(archive_url, username_lc, target))
             if max_games is not None and len(imported) >= max_games:
                 return imported[:max_games]
     return imported

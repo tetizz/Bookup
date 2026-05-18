@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="author" content="tetizz">
   <title>Bookup</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,6 +22,7 @@
         <div class="eyebrow">Opening Repertoire Trainer</div>
         <h1>Build your lines. Drill your moves.</h1>
         <p class="subhead">Bookup turns your real games into a repertoire tree, shows the branches that matter most, and drills the continuations until they stick.</p>
+        <p class="author-note">Authored by tetizz · browser board arrows adapted from tetizz/play.</p>
       </div>
       <div class="hero-stats">
         <div class="hero-stat">
@@ -57,8 +59,23 @@
           <h2 class="section-title">Import your games, build your repertoire tree, and start training.</h2>
           <div class="form-grid">
             <label class="field">
-              <span>Chess.com username</span>
-              <input id="usernameInput" type="text" placeholder="trixize1234">
+              <span>Main platform</span>
+              <select id="mainPlatformInput">
+                <option value="chesscom">Chess.com</option>
+                <option value="lichess">Lichess</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Main username</span>
+              <input id="mainUsernameInput" type="text" placeholder="your main chess account">
+            </label>
+            <label class="field">
+              <span>Lichess username (optional)</span>
+              <input id="lichessUsernameInput" type="text" placeholder="your lichess handle">
+            </label>
+            <label class="field">
+              <span>Chess.com import username</span>
+              <input id="usernameInput" type="text" placeholder="your Chess.com handle">
             </label>
             <label class="field">
               <span>Time classes</span>
@@ -120,7 +137,7 @@
             </label>
             <label class="field compact">
               <span>Stockfish workers</span>
-              <input id="parallelWorkersInput" type="number" min="1" max="12">
+              <input id="parallelWorkersInput" type="number" min="1" max="8">
             </label>
             <label class="field compact">
               <span>Hash MB</span>
@@ -151,6 +168,27 @@
               <span id="pgnImportStatus" class="line-note">Uses the same Stockfish and Lichess settings above.</span>
             </div>
           </details>
+          <details class="import-pgn-panel">
+            <summary>Import NewChessnut OTB games</summary>
+            <p class="summary-copy">Pull over-the-board PGNs from the local NewChessnut database and build them into the same Bookup repertoire.</p>
+            <div class="two-up">
+              <label class="field">
+                <span>NewChessnut data.mdb path</span>
+                <input id="chessnutDbPathInput" type="text" placeholder="C:\Users\...\Documents\chessnut\data.mdb" />
+              </label>
+              <label class="field compact">
+                <span>Your color on the board</span>
+                <select id="chessnutPlayerColorInput">
+                  <option value="white">White</option>
+                  <option value="black">Black</option>
+                </select>
+              </label>
+            </div>
+            <div class="chip-row">
+              <button id="importChessnutBtn" class="launch-btn" type="button">Import Chessnut Games</button>
+              <span id="chessnutImportStatus" class="line-note">Reads NewChessnut’s local OTB database without modifying it.</span>
+            </div>
+          </details>
         </section>
 
         <section class="card summary-card">
@@ -159,9 +197,6 @@
             <div class="summary-copy-block">
               <h2 id="heroTitle" class="section-title">No repertoire loaded yet</h2>
               <p id="heroSummary" class="summary-copy">Run an import to build your repertoire map, needs-work queue, and trainable branches from the games you actually play.</p>
-            </div>
-            <div id="analysisPreviewPanel" class="analysis-preview-panel empty">
-              Run an import to see live worker stats and the positions Bookup is analyzing.
             </div>
           </div>
           <div class="summary-grid">
@@ -184,6 +219,11 @@
           </div>
         </section>
       </div>
+      <section class="setup-live-analysis-shell">
+        <div id="analysisPreviewPanel" class="analysis-preview-panel empty">
+          Run an import to see live worker stats and the positions Bookup is analyzing.
+        </div>
+      </section>
     </section>
 
     <section class="workspace-panel" data-tab-panel="repertoire-map">
@@ -250,7 +290,7 @@
         <div id="ratingProgressPanel" class="rating-progress-panel empty">Import rated games to see your 30-day, 90-day, and all-time progress graph.</div>
       </section>
 
-      <section class="section-block">
+      <section id="brilliantTrackerSection" class="section-block">
         <div class="section-label">Brilliant Tracker</div>
         <h2 class="section-title">Brilliants, great moves, and tactical chances from your repertoire</h2>
         <div id="brilliantTrackerPanel" class="brilliant-tracker-panel empty">Bookup will track brilliant candidates after Stockfish classifies your repertoire positions.</div>
@@ -549,6 +589,23 @@
                 <button id="studyApplySettingsBtn" class="launch-btn" type="button">Apply settings</button>
               </div>
               <div id="studySettingsStatus" class="line-note">These settings drive live study analysis and arrows.</div>
+            </div>
+
+            <div class="study-panel-section">
+              <div class="study-section-header">
+                <span>Chessnut Realign</span>
+                <span class="line-badge">Current board target</span>
+              </div>
+              <label class="field">
+                <span>Current physical board FEN</span>
+                <input id="realignSourceFenInput" type="text" placeholder="Leave blank to assume the starting position">
+              </label>
+              <div class="chip-row realign-controls">
+                <button id="realignUseStartBtn" class="ghost-btn" type="button">Use start position</button>
+                <button id="realignGenerateBtn" class="launch-btn" type="button">Generate realign plan</button>
+              </div>
+              <div id="realignStatus" class="line-note">Bookup will compare your current physical setup against the analysis-board position.</div>
+              <div id="realignOutput" class="realign-output empty">No realign plan generated yet.</div>
             </div>
           </section>
 
