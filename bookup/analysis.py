@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 from .chesscom import ImportedGame
 from .classifications import (
+    PIECE_VALUES,
     annotate_candidate_classifications,
     book_classification_payload,
     classify_move_record,
@@ -1329,6 +1330,160 @@ def _matching_database_move(database_moves: list[dict[str, Any]], move_uci: str,
     return None
 
 
+def _append_unique(items: list[str], value: str) -> None:
+    normalized = value.strip()
+    if normalized and normalized not in items:
+        items.append(normalized)
+
+
+def _captured_piece_for_reaction(board: chess.Board, move: chess.Move) -> chess.Piece | None:
+    captured = board.piece_at(move.to_square)
+    if captured is not None:
+        return captured
+    if board.is_en_passant(move):
+        offset = -8 if board.turn == chess.WHITE else 8
+        return board.piece_at(move.to_square + offset)
+    return None
+
+
+def _reaction_tone_for_key(key: str, *, database_hit: bool, book_active: bool) -> str:
+    if key == "book" and book_active:
+        return "book"
+    if key == "brilliant":
+        return "brilliant"
+    if key == "great":
+        return "great"
+    if key in {"best", "excellent"}:
+        return "positive"
+    if key == "good" or database_hit:
+        return "steady"
+    if key in {"inaccuracy", "miss"}:
+        return "warning"
+    if key in {"mistake", "blunder"}:
+        return "danger"
+    return "neutral"
+
+
+def _reaction_tone_label(tone: str) -> str:
+    return {
+        "book": "Book memory",
+        "brilliant": "Tactical spark",
+        "great": "Only-move find",
+        "positive": "Clean choice",
+        "steady": "Practical choice",
+        "warning": "Needs a look",
+        "danger": "Repair point",
+        "neutral": "Move note",
+    }.get(tone, "Move note")
+
+
+def _move_motif_tags(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    after: chess.Board | None,
+    classification_key: str,
+    database_hit: dict[str, Any] | None,
+    book_active: bool,
+    best_line: dict[str, Any] | None,
+) -> list[str]:
+    motifs: list[str] = []
+    moving_piece = board.piece_at(move.from_square)
+    captured_piece = _captured_piece_for_reaction(board, move)
+    mover = board.turn
+    enemy = not mover
+
+    if book_active and (classification_key == "book" or database_hit):
+        _append_unique(motifs, "book")
+    if database_hit:
+        _append_unique(motifs, "database")
+    if best_line and best_line.get("uci") == move.uci():
+        _append_unique(motifs, "engine top")
+    if classification_key == "great":
+        _append_unique(motifs, "only move")
+    if classification_key == "brilliant":
+        _append_unique(motifs, "sacrifice")
+
+    if after is not None and after.is_checkmate():
+        _append_unique(motifs, "mate")
+    elif after is not None and after.is_check():
+        _append_unique(motifs, "check")
+    if board.is_capture(move):
+        _append_unique(motifs, "capture")
+    if board.is_castling(move):
+        _append_unique(motifs, "king safety")
+
+    if moving_piece:
+        destination = chess.square_name(move.to_square)
+        if moving_piece.piece_type in (chess.KNIGHT, chess.BISHOP) and chess.square_rank(move.from_square) in (0, 7):
+            _append_unique(motifs, "development")
+        if moving_piece.piece_type == chess.PAWN and destination in {"c4", "d4", "e4", "c5", "d5", "e5"}:
+            _append_unique(motifs, "center")
+        if moving_piece.piece_type in (chess.ROOK, chess.QUEEN):
+            _append_unique(motifs, "heavy piece")
+
+    if moving_piece and after is not None:
+        moved_value = PIECE_VALUES.get(moving_piece.piece_type, 0)
+        captured_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
+        destination_attacked = after.is_attacked_by(enemy, move.to_square)
+        destination_defended = after.is_attacked_by(mover, move.to_square)
+        if destination_attacked and moved_value >= PIECE_VALUES[chess.KNIGHT]:
+            if board.is_capture(move) and moved_value > captured_value + 100:
+                _append_unique(motifs, "material investment")
+            elif not board.is_capture(move):
+                _append_unique(motifs, "piece offered")
+        if destination_attacked and destination_defended:
+            _append_unique(motifs, "contested square")
+
+    if after is not None and after.is_check() and (board.is_capture(move) or classification_key in {"brilliant", "great"}):
+        _append_unique(motifs, "zwischenzug")
+
+    return motifs[:7]
+
+
+def _move_momentum_summary(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    classification_key: str,
+    label: str,
+    best_line: dict[str, Any] | None,
+    database_hit: dict[str, Any] | None,
+    book_active: bool,
+) -> str:
+    san = board.san(move) if move in board.legal_moves else move.uci()
+    if classification_key == "book" and book_active:
+        return f"{san} stays in the prepared opening path, so Bookup keeps engine coaching light here."
+    if classification_key == "brilliant":
+        return f"{san} is treated as a strong sacrifice idea because the move stays sound while creating a tactical resource."
+    if classification_key == "great":
+        return f"{san} is the critical practical move: alternatives lose the advantage or let the position slip."
+    if best_line and best_line.get("uci") == move.uci():
+        return f"{san} matches the current top engine continuation from this exact board."
+    if classification_key in {"inaccuracy", "mistake", "blunder", "miss"}:
+        best_san = best_line.get("move") if best_line else ""
+        if best_san and best_line.get("uci") != move.uci():
+            return f"{san} gives up momentum; {best_san} is the cleaner way to handle this position."
+        return f"{san} gives up momentum compared with the engine's preferred plan."
+    if database_hit:
+        return f"{san} is a practical database move, even if it is not the very top engine choice."
+    return f"{san} is {label.lower()} and keeps the position understandable."
+
+
+def _move_next_step(
+    move: chess.Move,
+    *,
+    classification_key: str,
+    best_line: dict[str, Any] | None,
+) -> str:
+    if classification_key in {"book", "best", "excellent", "good", "great", "brilliant"}:
+        return "Keep following the continuation and watch the opponent's most common reply."
+    best_san = best_line.get("move") if best_line else ""
+    if best_san and best_line.get("uci") != move.uci():
+        return f"Compare this with {best_san}, then replay the branch once from the live board."
+    return "Replay the position once and look for the forcing move before choosing."
+
+
 def _move_reaction_for_board(
     board: chess.Board,
     move: chess.Move,
@@ -1359,6 +1514,16 @@ def _move_reaction_for_board(
     features: list[str] = []
     database_hit = _matching_database_move(database_moves or [], move.uci(), san)
     book_active = (book_state or {}).get("active", True)
+    tone = _reaction_tone_for_key(key, database_hit=bool(database_hit), book_active=book_active)
+    motifs = _move_motif_tags(
+        board,
+        move,
+        after=after,
+        classification_key=key,
+        database_hit=database_hit,
+        book_active=book_active,
+        best_line=best_line,
+    )
 
     if moving_piece:
         piece_name = chess.piece_name(moving_piece.piece_type)
@@ -1427,9 +1592,22 @@ def _move_reaction_for_board(
         "uci": move.uci(),
         "label": label,
         "classification_key": key,
+        "tone": tone,
+        "tone_label": _reaction_tone_label(tone),
         "headline": headline,
+        "summary": _move_momentum_summary(
+            board,
+            move,
+            classification_key=key,
+            label=label,
+            best_line=best_line,
+            database_hit=database_hit,
+            book_active=book_active,
+        ),
+        "next_step": _move_next_step(move, classification_key=key, best_line=best_line),
         "reasons": reasons[:4],
         "features": features[:6],
+        "motifs": motifs,
         "side": "white" if mover == chess.WHITE else "black",
     }
 
@@ -2947,14 +3125,21 @@ def _build_prep_pack(
 
 
 def _compact_training_card(item: dict[str, Any]) -> dict[str, Any]:
+    queue_explainer = item.get("queue_explainer") or {}
+    classification = item.get("recommended_classification") or {}
+    your_classification = item.get("your_move_classification") or {}
     return {
         "lesson_id": item.get("lesson_id", ""),
         "line_label": item.get("line_label", ""),
         "opening_name": item.get("opening_name", ""),
         "opening_code": item.get("opening_code", ""),
+        "color": item.get("color", ""),
+        "after": item.get("intro_line_san") or item.get("line_label", ""),
         "position_fen": item.get("position_fen", ""),
         "recommended_move": item.get("recommended_move", ""),
+        "recommended_move_uci": item.get("recommended_move_uci") or item.get("best_reply_uci", ""),
         "your_repeated_move": item.get("your_repeated_move", item.get("your_top_move", "")),
+        "your_repeated_move_uci": item.get("your_repeated_move_uci") or item.get("your_top_move_uci", ""),
         "continuation_san": item.get("continuation_san", ""),
         "frequency": item.get("frequency", 0),
         "priority": item.get("priority", 0),
@@ -2963,7 +3148,13 @@ def _compact_training_card(item: dict[str, Any]) -> dict[str, Any]:
         "confidence": item.get("confidence", 0),
         "memory_score": item.get("memory_score", 0),
         "line_status": item.get("line_status", ""),
-        "classification": item.get("recommended_classification") or {},
+        "classification": classification,
+        "classification_label": classification.get("label", ""),
+        "your_classification": your_classification,
+        "your_classification_label": your_classification.get("label", ""),
+        "reason": queue_explainer.get("summary") or item.get("coach_explanation", ""),
+        "first_seen_label": item.get("first_seen_label", ""),
+        "last_seen_label": item.get("last_seen_label", ""),
     }
 
 
@@ -2974,51 +3165,174 @@ def _build_study_plan(
     memory_scores: dict[str, Any],
     database_training: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    def number(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def unique_lessons(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        output: list[dict[str, Any]] = []
+        for item in items:
+            lesson_id = str(item.get("lesson_id") or "")
+            if not lesson_id or lesson_id in seen:
+                continue
+            seen.add(lesson_id)
+            output.append(item)
+            if len(output) >= limit:
+                break
+        return output
+
+    def severity(item: dict[str, Any]) -> float:
+        mistake_weight = number(item.get("repeat_mistake_count")) * 42
+        priority_weight = number(item.get("priority"))
+        frequency_weight = number(item.get("frequency")) * 3
+        confidence_penalty = max(0.0, 100.0 - number(item.get("confidence"))) * 1.2
+        value_loss = number(item.get("value_lost_cp")) * 0.8
+        memory_penalty = max(0.0, 100.0 - number(item.get("memory_score"), 100.0))
+        return mistake_weight + priority_weight + frequency_weight + confidence_penalty + value_loss + memory_penalty
+
+    def card_with_action(item: dict[str, Any], *, action: str, note: str = "") -> dict[str, Any]:
+        card = _compact_training_card(item)
+        card["action"] = action
+        card["note"] = note
+        card["study_score"] = round(severity(item), 1)
+        return card
+
     fragile = memory_scores.get("fragile_lines", []) if memory_scores else []
-    focus = fragile[:4] or queue_due[:4]
-    new_preview = queue_new[:3]
-    replies = database_training[:3]
-    maintenance = known_line_archive[:2]
-    minutes = 8 + (len(focus) * 3) + (len(new_preview) * 2) + (len(replies) * 2)
-    blocks = [
-        {
-            "title": "Warm up known lines",
-            "minutes": 4,
-            "goal": "Start with easy wins so the board feels familiar.",
-            "items": [_compact_training_card(item) for item in maintenance],
-        },
-        {
-            "title": "Repair fragile branches",
-            "minutes": max(6, len(focus) * 3),
-            "goal": "Repeat the exact positions that have the lowest memory score or highest priority.",
-            "items": [_compact_training_card(item) for item in focus],
-        },
-        {
-            "title": "Opponent reply simulator",
-            "minutes": max(4, len(replies) * 2),
-            "goal": "Answer common practical replies from the database, not random engine fantasy.",
-            "items": [
-                {
-                    "lesson_id": item.get("lesson_id", ""),
-                    "line_label": item.get("line_label", ""),
-                    "opponent_reply": (item.get("top_database_reply") or {}).get("san") or (item.get("top_database_reply") or {}).get("uci", ""),
-                    "response": item.get("recommended_move", ""),
-                    "popularity": (item.get("top_database_reply") or {}).get("popularity", 0),
-                }
-                for item in replies
-            ],
-        },
-        {
-            "title": "Preview new branches",
-            "minutes": max(4, len(new_preview) * 2),
-            "goal": "Look at new-but-not-urgent positions without polluting the due queue.",
-            "items": [_compact_training_card(item) for item in new_preview],
-        },
-    ]
+    fragile_by_id = {str(item.get("lesson_id") or ""): item for item in fragile if item.get("lesson_id")}
+    repair_pool = sorted(unique_lessons([*fragile, *queue_due], 16), key=severity, reverse=True)
+    repair_now = repair_pool[:5]
+    new_preview = sorted(unique_lessons(queue_new, 12), key=lambda item: (-number(item.get("priority")), -number(item.get("frequency"))))[:4]
+    replies = sorted(
+        database_training,
+        key=lambda item: (
+            -number((item.get("top_database_reply") or {}).get("popularity")),
+            -number(item.get("priority")),
+            -number(item.get("frequency")),
+        ),
+    )[:4]
+    maintenance = sorted(
+        known_line_archive,
+        key=lambda item: (-number(item.get("repeat_count")), -number(item.get("confidence")), -number(item.get("frequency"))),
+    )[:3]
+
+    minutes = 0
+    blocks: list[dict[str, Any]] = []
+
+    def add_block(title: str, minutes_value: int, goal: str, items: list[dict[str, Any]], *, kind: str, empty: str) -> None:
+        nonlocal minutes
+        minutes += minutes_value
+        blocks.append(
+            {
+                "kind": kind,
+                "title": title,
+                "minutes": minutes_value,
+                "goal": goal,
+                "empty": empty,
+                "items": items,
+            }
+        )
+
+    add_block(
+        "1. Warm up known lines",
+        4 if maintenance else 2,
+        "Start with positions you already know so the first reps are smooth.",
+        [card_with_action(item, action="warmup", note="Known branch") for item in maintenance],
+        kind="warmup",
+        empty="No stable known lines yet. Bookup will use this slot after a few successful reviews.",
+    )
+    add_block(
+        "2. Fix the fragile branch",
+        max(8, len(repair_now) * 3) if repair_now else 4,
+        "Train repeated positions where your usual move differs from Bookup's recommended repertoire move.",
+        [
+            card_with_action(
+                item,
+                action="repair",
+                note="Fragile memory line" if str(item.get("lesson_id") or "") in fragile_by_id else "Due repeated mistake",
+            )
+            for item in repair_now
+        ],
+        kind="repair",
+        empty="No due repeated-mistake lines. Nice, the queue is quiet.",
+    )
+    add_block(
+        "3. Drill practical replies",
+        max(5, len(replies) * 2) if replies else 3,
+        "Use the database move the opponent is most likely to play, then answer with your repertoire.",
+        [
+            {
+                "lesson_id": item.get("lesson_id", ""),
+                "line_label": item.get("line_label", ""),
+                "position_fen": item.get("position_fen", ""),
+                "recommended_move": item.get("recommended_move", ""),
+                "recommended_move_uci": item.get("recommended_move_uci", ""),
+                "opponent_reply": (item.get("top_database_reply") or {}).get("san") or (item.get("top_database_reply") or {}).get("uci", ""),
+                "response": item.get("recommended_move", ""),
+                "popularity": round(number((item.get("top_database_reply") or {}).get("popularity")), 1),
+                "frequency": item.get("frequency", 0),
+                "priority": item.get("priority", 0),
+                "action": "simulate",
+                "note": "Most common database reply",
+            }
+            for item in replies
+        ],
+        kind="database",
+        empty="No database reply data is available for today's queue yet.",
+    )
+    add_block(
+        "4. Preview new branches",
+        max(6, len(new_preview) * 2) if new_preview else 3,
+        "Spend a few minutes on useful new branches without letting them crowd out urgent repairs.",
+        [card_with_action(item, action="preview", note="New branch") for item in new_preview],
+        kind="preview",
+        empty="No new branch previews are waiting.",
+    )
+
+    due_count = len(queue_due)
+    fragile_count = len(repair_now)
+    reply_count = len(replies)
+    new_count = len(new_preview)
+    if due_count >= 12:
+        focus = "repair-heavy"
+    elif not due_count and maintenance:
+        focus = "maintenance"
+    elif new_count > fragile_count:
+        focus = "expansion"
+    else:
+        focus = "balanced"
+
     return {
+        "version": 2,
         "estimated_minutes": minutes,
-        "summary": f"{minutes} minute session: repair {len(focus)} fragile branches, rehearse {len(replies)} common replies, and preview {len(new_preview)} new lines.",
+        "focus": focus,
+        "counts": {
+            "due": due_count,
+            "repair": fragile_count,
+            "database_replies": reply_count,
+            "new": new_count,
+            "known_warmups": len(maintenance),
+        },
+        "summary": (
+            f"{minutes} minute {focus.replace('-', ' ')} session: "
+            f"{fragile_count} repair reps, {reply_count} practical reply drills, "
+            f"{new_count} new previews, {len(maintenance)} warmups."
+        ),
         "blocks": blocks,
+        "quick_actions": [
+            {
+                "label": "Start highest-priority line",
+                "lesson_id": (repair_now[0] if repair_now else (new_preview[0] if new_preview else {})).get("lesson_id", ""),
+                "kind": "trainer",
+            },
+            {
+                "label": "Review known warmup",
+                "lesson_id": (maintenance[0] if maintenance else {}).get("lesson_id", ""),
+                "kind": "warmup",
+            },
+        ],
     }
 
 

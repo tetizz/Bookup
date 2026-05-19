@@ -98,6 +98,68 @@ CLASSIFICATION_ICON_ALIASES = {
     "forced": "best",
 }
 
+CLASSIFICATION_CACHE_LIMIT = 12000
+_MATERIAL_VALUE_CACHE: dict[tuple[Any, ...], int] = {}
+_MATERIAL_BALANCE_CACHE: dict[tuple[Any, ...], int] = {}
+_LEGAL_CAPTURE_CACHE: dict[tuple[Any, ...], list[chess.Move]] = {}
+_SEE_GAIN_CACHE: dict[tuple[Any, ...], int] = {}
+_SEE_MOVE_CACHE: dict[tuple[Any, ...], int] = {}
+_MATERIAL_INVESTMENT_CACHE: dict[tuple[Any, ...], int] = {}
+_UNSAFE_PIECES_CACHE: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+_PV_PROFILE_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_POSITION_BOOK_CACHE: dict[tuple[Any, ...], bool] = {}
+_MOVE_RESULTS_IN_BOOK_CACHE: dict[tuple[Any, ...], bool] = {}
+_EXPECTED_POINTS_CACHE: dict[tuple[Any, ...], float] = {}
+_CLASSIFY_RECORD_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+
+def _position_cache_key(board: chess.Board) -> tuple[Any, ...]:
+    """Compact position key for hot classification helpers."""
+    return (
+        int(board.occupied_co[chess.WHITE]),
+        int(board.occupied_co[chess.BLACK]),
+        int(board.pawns),
+        int(board.knights),
+        int(board.bishops),
+        int(board.rooks),
+        int(board.queens),
+        int(board.kings),
+        int(getattr(board, "promoted", 0)),
+        bool(board.turn),
+        int(board.castling_rights),
+        int(board.ep_square) if board.ep_square is not None else -1,
+    )
+
+
+def _cache_store(cache: dict[Any, Any], key: Any, value: Any) -> Any:
+    if len(cache) >= CLASSIFICATION_CACHE_LIMIT:
+        cache.clear()
+    cache[key] = value
+    return value
+
+
+def _safe_cache_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+
+def _record_signature(record: dict[str, Any] | None) -> tuple[Any, ...]:
+    """Stable cache signature for engine line records used by classification."""
+    if not record:
+        return ()
+    line_uci = tuple(str(item) for item in (record.get("line_uci") or ()))
+    has_engine_score = "score_type" in record or "score_value" in record or "score_cp" in record
+    return (
+        str(record.get("uci", "") or ""),
+        str(record.get("move", "") or ""),
+        _safe_cache_scalar(record.get("score_type")),
+        _safe_cache_scalar(record.get("score_value")),
+        _safe_cache_scalar(record.get("score_cp")),
+        None if has_engine_score else _safe_cache_scalar(record.get("expected_points")),
+        line_uci,
+    )
+
 
 def _piece_key(piece: chess.Piece | None) -> tuple[bool, int] | None:
     if piece is None:
@@ -142,26 +204,44 @@ def _board_pieces(board: chess.Board) -> list[dict[str, Any]]:
 
 
 def _material_value(board: chess.Board, color: chess.Color) -> int:
+    cache_key = (*_position_cache_key(board), "material", bool(color))
+    cached = _MATERIAL_VALUE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     total = 0
     for square, piece in board.piece_map().items():
         if piece.color != color or piece.piece_type == chess.KING:
             continue
         total += PIECE_VALUES.get(piece.piece_type, 0)
-    return total
+    return _cache_store(_MATERIAL_VALUE_CACHE, cache_key, total)
 
 
 def _position_is_book(board: chess.Board) -> bool:
+    cache_key = (*_position_cache_key(board), "position_book")
+    cached = _POSITION_BOOK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     match = lookup_by_board(board)
-    return bool(str(match.get("name", "") or "").strip() or str(match.get("eco", "") or "").strip())
+    result = bool(str(match.get("name", "") or "").strip() or str(match.get("eco", "") or "").strip())
+    return _cache_store(_POSITION_BOOK_CACHE, cache_key, result)
 
 
 def _move_results_in_book(board: chess.Board, move_uci: str) -> bool:
+    cache_key = (
+        *_position_cache_key(board),
+        "move_results_book",
+        move_uci,
+        tuple(item.uci() for item in getattr(board, "move_stack", ()) or ()),
+    )
+    cached = _MOVE_RESULTS_IN_BOOK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         move = chess.Move.from_uci(move_uci)
     except ValueError:
-        return False
+        return _cache_store(_MOVE_RESULTS_IN_BOOK_CACHE, cache_key, False)
     if move not in board.legal_moves:
-        return False
+        return _cache_store(_MOVE_RESULTS_IN_BOOK_CACHE, cache_key, False)
     san_tokens: list[str] = []
     if getattr(board, "move_stack", None):
         replay = chess.Board()
@@ -181,10 +261,10 @@ def _move_results_in_book(board: chess.Board, move_uci: str) -> bool:
             except Exception:
                 next_san = ""
             if next_san and matches_opening_prefix([*san_tokens, next_san]):
-                return True
+                return _cache_store(_MOVE_RESULTS_IN_BOOK_CACHE, cache_key, True)
     next_board = board.copy(stack=False)
     next_board.push(move)
-    return _position_is_book(next_board)
+    return _cache_store(_MOVE_RESULTS_IN_BOOK_CACHE, cache_key, _position_is_book(next_board))
 
 
 def classification_icon(key: str) -> str:
@@ -252,19 +332,31 @@ def expected_points_from_evaluation(
 def expected_points_from_record(record: dict[str, Any], *, player_rating: int | None = None) -> float:
     if not record:
         return 0.5
+    cache_key = ("expected_points", _record_signature(record), player_rating)
+    cached = _EXPECTED_POINTS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     if "score_type" in record or "score_value" in record:
-        return expected_points_from_evaluation(
-            score_type=str(record.get("score_type", "centipawn") or "centipawn"),
-            score_value=int(record.get("score_value", record.get("score_cp", 0)) or 0),
-            player_rating=player_rating,
+        return _cache_store(
+            _EXPECTED_POINTS_CACHE,
+            cache_key,
+            expected_points_from_evaluation(
+                score_type=str(record.get("score_type", "centipawn") or "centipawn"),
+                score_value=int(record.get("score_value", record.get("score_cp", 0)) or 0),
+                player_rating=player_rating,
+            ),
         )
     if "score_cp" in record:
-        return expected_points_from_evaluation(
-            score_type="centipawn",
-            score_value=int(record.get("score_cp", 0) or 0),
-            player_rating=player_rating,
+        return _cache_store(
+            _EXPECTED_POINTS_CACHE,
+            cache_key,
+            expected_points_from_evaluation(
+                score_type="centipawn",
+                score_value=int(record.get("score_cp", 0) or 0),
+                player_rating=player_rating,
+            ),
         )
-    return float(record.get("expected_points", 0.5) or 0.5)
+    return _cache_store(_EXPECTED_POINTS_CACHE, cache_key, float(record.get("expected_points", 0.5) or 0.5))
 
 
 def score_type_from_record(record: dict[str, Any]) -> str:
@@ -304,11 +396,15 @@ def keeps_advantage(expected_points: float, score_cp: int = 0) -> bool:
 
 
 def _material_balance(board: chess.Board, turn: chess.Color) -> int:
+    cache_key = (*_position_cache_key(board), "balance", bool(turn))
+    cached = _MATERIAL_BALANCE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     score = 0
     for piece in board.piece_map().values():
         value = PIECE_VALUES[piece.piece_type]
         score += value if piece.color == turn else -value
-    return score
+    return _cache_store(_MATERIAL_BALANCE_CACHE, cache_key, score)
 
 
 def _direct_attacking_moves(board: chess.Board, piece: dict[str, Any]) -> list[dict[str, Any]]:
@@ -509,6 +605,17 @@ def _get_unsafe_pieces(
             captured_piece = board.piece_at(_capture_square(board, played_move))
             captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
 
+    cache_key = (
+        *_position_cache_key(board),
+        "unsafe",
+        bool(color),
+        played_move.uci() if played_move is not None else "",
+        int(captured_piece_value or 0),
+    )
+    cached = _UNSAFE_PIECES_CACHE.get(cache_key)
+    if cached is not None:
+        return [dict(piece) for piece in cached]
+
     pieces = []
     for piece in _board_pieces(board):
         if piece["color"] != color:
@@ -519,6 +626,7 @@ def _get_unsafe_pieces(
             continue
         if not _is_piece_safe(board, piece, played_move, captured_piece_value=captured_piece_value):
             pieces.append(piece)
+    _cache_store(_UNSAFE_PIECES_CACHE, cache_key, [dict(piece) for piece in pieces])
     return pieces
 
 
@@ -529,6 +637,99 @@ def _board_after_move(board: chess.Board, move: chess.Move) -> chess.Board | Non
         return after_board
     except Exception:
         return None
+
+
+def _legal_captures_to_square(board: chess.Board, square: int, color: chess.Color) -> list[chess.Move]:
+    """Return legal captures of the piece on `square`, ordered by least valuable attacker."""
+    cache_key = (*_position_cache_key(board), "captures", int(square), bool(color))
+    cached = _LEGAL_CAPTURE_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached)
+
+    probe = board.copy(stack=False)
+    probe.turn = color
+    captures: list[tuple[int, chess.Move]] = []
+    for attacker_square in probe.attackers(color, square):
+        attacker = probe.piece_at(attacker_square)
+        if attacker is None or attacker.piece_type == chess.KING:
+            continue
+        promotion = None
+        if attacker.piece_type == chess.PAWN and chess.square_rank(square) in {0, 7}:
+            promotion = chess.QUEEN
+        move = chess.Move(attacker_square, square, promotion=promotion)
+        if move not in probe.legal_moves or not probe.is_capture(move):
+            continue
+        if _capture_square(probe, move) != square:
+            continue
+        captures.append((PIECE_VALUES.get(attacker.piece_type, 0), move))
+    captures.sort(key=lambda item: item[0])
+    result = [move for _, move in captures]
+    _cache_store(_LEGAL_CAPTURE_CACHE, cache_key, result)
+    return list(result)
+
+
+def _static_exchange_gain(board: chess.Board, square: int, color: chess.Color, depth: int = 0) -> int:
+    """Best material gain for `color` if it starts a legal capture sequence on `square`.
+
+    This is a real static exchange evaluator: it recursively plays legal captures
+    on the target square and assumes each side can decline unfavorable recaptures.
+    Positive output means the side to capture can win material on that square.
+    """
+    if depth > 32:
+        return 0
+    cache_key = (*_position_cache_key(board), "see_gain", int(square), bool(color))
+    cached = _SEE_GAIN_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    victim = board.piece_at(square)
+    if victim is None or victim.color == color or victim.piece_type == chess.KING:
+        return 0
+
+    best_gain = 0
+    victim_value = PIECE_VALUES.get(victim.piece_type, 0)
+    for capture in _legal_captures_to_square(board, square, color):
+        reply_board = board.copy(stack=False)
+        reply_board.turn = color
+        try:
+            reply_board.push(capture)
+        except Exception:
+            continue
+        reply_gain = _static_exchange_gain(reply_board, square, not color, depth + 1)
+        best_gain = max(best_gain, victim_value - max(0, reply_gain))
+    return _cache_store(_SEE_GAIN_CACHE, cache_key, best_gain)
+
+
+def static_exchange_eval(board: chess.Board, move: chess.Move) -> int:
+    """Return the immediate SEE score of `move` from the mover's perspective.
+
+    Captures start with the captured piece value, then subtract the opponent's
+    best legal exchange on the destination square. Quiet moves can still be
+    sacrifices when the moved piece lands on a square where it can be won.
+    """
+    if move not in board.legal_moves:
+        return 0
+    cache_key = (*_position_cache_key(board), "see_move", move.uci())
+    cached = _SEE_MOVE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    moved_piece = board.piece_at(move.from_square)
+    if moved_piece is None or moved_piece.piece_type == chess.KING:
+        return 0
+    captured_piece = board.piece_at(_capture_square(board, move))
+    captured_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
+    after_board = _board_after_move(board, move)
+    if after_board is None:
+        return _cache_store(_SEE_MOVE_CACHE, cache_key, captured_value)
+    opponent_gain = _static_exchange_gain(after_board, move.to_square, not moved_piece.color)
+    return _cache_store(_SEE_MOVE_CACHE, cache_key, captured_value - max(0, opponent_gain))
+
+
+def _static_material_investment(board: chess.Board, move: chess.Move) -> int:
+    cache_key = (*_position_cache_key(board), "investment", move.uci())
+    cached = _MATERIAL_INVESTMENT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    return _cache_store(_MATERIAL_INVESTMENT_CACHE, cache_key, max(0, -static_exchange_eval(board, move)))
 
 
 def _direct_material_investment(board: chess.Board, move: chess.Move) -> int:
@@ -543,13 +744,26 @@ def _direct_material_investment(board: chess.Board, move: chess.Move) -> int:
     return max(0, moved_value - captured_value)
 
 
-def _moved_piece_left_unsafe(board: chess.Board, move: chess.Move) -> bool:
+def _moved_piece_left_unsafe(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    after_board: chess.Board | None = None,
+    see_investment: int | None = None,
+    captured_piece_value: int | None = None,
+) -> bool:
     moved_piece = board.piece_at(move.from_square)
     if moved_piece is None:
         return False
-    captured_piece = board.piece_at(_capture_square(board, move)) if move in board.legal_moves else None
-    captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
-    after_board = _board_after_move(board, move)
+    if see_investment is None:
+        see_investment = _static_material_investment(board, move)
+    if see_investment >= BRILLIANT_MATERIAL_DROP:
+        return True
+    if captured_piece_value is None:
+        captured_piece = board.piece_at(_capture_square(board, move)) if move in board.legal_moves else None
+        captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
+    if after_board is None:
+        after_board = _board_after_move(board, move)
     if after_board is None:
         return False
     unsafe_after = _get_unsafe_pieces(
@@ -601,6 +815,10 @@ def _has_material_winning_direct_defender(board: chess.Board, square: int, color
 
 def _is_piece_materially_hanging(board: chess.Board, piece: dict[str, Any]) -> bool:
     piece_value = PIECE_VALUES.get(piece["type"], 0)
+    if piece_value <= 0:
+        return False
+    if _static_exchange_gain(board, piece["square"], not bool(piece["color"])) >= BRILLIANT_MATERIAL_DROP:
+        return True
     least_attacker_value = _least_direct_attacker_value(board, piece["square"], piece["color"])
     if least_attacker_value is None:
         return False
@@ -741,20 +959,37 @@ def _is_piece_trapped(board: chess.Board, piece: dict[str, Any], danger_levels: 
     return (not standing_piece_safety) and all_moves_unsafe
 
 
-def is_real_piece_sacrifice(board: chess.Board, move: chess.Move) -> bool:
+def is_real_piece_sacrifice(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    after_board: chess.Board | None = None,
+    see_investment: int | None = None,
+) -> bool:
     moved_piece = board.piece_at(move.from_square)
     if moved_piece is None or moved_piece.piece_type == chess.KING:
         return False
+
+    if see_investment is None:
+        see_investment = _static_material_investment(board, move)
+    if see_investment >= BRILLIANT_MATERIAL_DROP:
+        return True
 
     investment = _direct_material_investment(board, move)
     if investment < BRILLIANT_MATERIAL_DROP:
         return False
 
-    if not _moved_piece_left_unsafe(board, move):
+    if after_board is None:
+        after_board = _board_after_move(board, move)
+    if after_board is None:
         return False
 
-    after_board = _board_after_move(board, move)
-    if after_board is None:
+    if not _moved_piece_left_unsafe(
+        board,
+        move,
+        after_board=after_board,
+        see_investment=see_investment,
+    ):
         return False
     least_enemy_attacker = _least_direct_attacker_value(after_board, move.to_square, moved_piece.color)
     if least_enemy_attacker is None:
@@ -767,7 +1002,13 @@ def is_real_piece_sacrifice(board: chess.Board, move: chess.Move) -> bool:
     return True
 
 
-def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dict[str, Any]:
+def _pv_tactical_profile(
+    board: chess.Board,
+    move_record: dict[str, Any],
+    *,
+    after_board: chess.Board | None = None,
+    see_investment: int | None = None,
+) -> dict[str, Any]:
     move_uci = str(move_record.get("uci", "") or "")
     line_uci = list(move_record.get("line_uci") or [])
     if not move_uci:
@@ -788,15 +1029,28 @@ def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dic
         preview_uci = [move_uci]
     elif preview_uci[0] != move_uci:
         preview_uci.insert(0, move_uci)
+    cache_key = (*_position_cache_key(board), "pv_profile", tuple(preview_uci))
+    cached = _PV_PROFILE_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
 
     mover = board.turn
     material_before = _material_value(board, mover)
     unsafe_before = _get_unsafe_pieces(board, mover)
-    after_board = _board_after_move(board, move)
-    direct_investment = _direct_material_investment(board, move)
-    moved_piece_unsafe = _moved_piece_left_unsafe(board, move)
+    if after_board is None:
+        after_board = _board_after_move(board, move)
+    if see_investment is None:
+        see_investment = _static_material_investment(board, move)
+    direct_investment = max(_direct_material_investment(board, move), see_investment)
     captured_piece = board.piece_at(_capture_square(board, move)) if move in board.legal_moves else None
     captured_piece_value = PIECE_VALUES.get(captured_piece.piece_type, 0) if captured_piece else 0
+    moved_piece_unsafe = _moved_piece_left_unsafe(
+        board,
+        move,
+        after_board=after_board,
+        see_investment=see_investment,
+        captured_piece_value=captured_piece_value,
+    )
     unsafe_after = (
         _get_unsafe_pieces(
             after_board,
@@ -841,11 +1095,16 @@ def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dic
 
     gives_check = bool(after_board and after_board.is_check())
     high_value_threat = bool(after_board) and _move_targets_high_value_piece(after_board, move, mover)
-    materially_defended = bool(after_board) and _has_material_winning_direct_defender(after_board, move.to_square, mover)
+    materially_defended = (
+        bool(after_board)
+        and see_investment < BRILLIANT_MATERIAL_DROP
+        and _has_material_winning_direct_defender(after_board, move.to_square, mover)
+    )
 
-    return {
+    profile = {
         "move": move,
         "direct_investment": direct_investment,
+        "see_investment": see_investment,
         "moved_piece_unsafe": moved_piece_unsafe,
         "accepted_hanging_piece_value": accepted_hanging_piece_value,
         "accepted_hanging_piece": accepted_hanging_piece_value >= PIECE_VALUES[chess.KNIGHT],
@@ -858,10 +1117,16 @@ def _pv_tactical_profile(board: chess.Board, move_record: dict[str, Any]) -> dic
         "swing": max_delta - min_delta,
         "recovered_from_risk": min_delta <= -BRILLIANT_PV_MATERIAL_DROP and (final_delta - min_delta) >= BRILLIANT_PV_MATERIAL_DROP,
     }
+    _cache_store(_PV_PROFILE_CACHE, cache_key, dict(profile))
+    return profile
 
 
-def _pv_confirms_material_investment(board: chess.Board, move_record: dict[str, Any]) -> bool:
-    profile = _pv_tactical_profile(board, move_record)
+def _pv_confirms_material_investment(
+    board: chess.Board,
+    move_record: dict[str, Any],
+    tactical_profile: dict[str, Any] | None = None,
+) -> bool:
+    profile = tactical_profile or _pv_tactical_profile(board, move_record)
     if not profile:
         return False
     forcing_signal = profile["gives_check"] or profile["high_value_threat"]
@@ -1294,6 +1559,20 @@ def base_classification_reason(key: str, *, best_move_san: str, move_san: str) -
     return f"{move_san} trails the best move {best_move_san}."
 
 
+def _has_at_most_one_legal_move(board: chess.Board) -> bool:
+    """Cheap forced-move check without materializing/counting every legal move."""
+    legal_moves = iter(board.legal_moves)
+    try:
+        next(legal_moves)
+    except StopIteration:
+        return True
+    try:
+        next(legal_moves)
+    except StopIteration:
+        return True
+    return False
+
+
 def classify_move_record(
     board: chess.Board,
     move_record: dict[str, Any],
@@ -1308,6 +1587,28 @@ def classify_move_record(
     move_rank: int | None = None,
     player_rating: int | None = None,
 ) -> dict[str, Any]:
+    classification_cache_key = (
+        *_position_cache_key(board),
+        "classify",
+        _record_signature(move_record),
+        _record_signature(best_record),
+        _record_signature(second_record),
+        round(float(second_loss or 0.0), 6),
+        int(great_keeps_advantage_count or 0),
+        bool(is_player_move),
+        bool(opening_phase),
+        bool(in_book),
+        int(move_rank or 0),
+        player_rating,
+    )
+    cached_classification = _CLASSIFY_RECORD_CACHE.get(classification_cache_key)
+    if cached_classification is not None:
+        return dict(cached_classification)
+
+    def _remember_classification(payload: dict[str, Any]) -> dict[str, Any]:
+        _cache_store(_CLASSIFY_RECORD_CACHE, classification_cache_key, dict(payload))
+        return payload
+
     best_move_san = best_record.get("move", "")
     move_san = move_record.get("move", "")
     move_uci = move_record.get("uci", "")
@@ -1315,7 +1616,6 @@ def classify_move_record(
     move_expected = expected_points_from_record(move_record, player_rating=player_rating)
     loss = max(0.0, best_expected - move_expected)
     is_best_move = move_uci == best_record.get("uci")
-    is_nearly_best_move = is_best_move or loss <= 0.02
     key = base_classification_key(loss, is_best_move=is_best_move)
     key = _practical_edge_floor_key(
         best_record,
@@ -1350,22 +1650,20 @@ def classify_move_record(
     real_piece_sacrifice = False
     tactical_brilliant_shape = False
     tactical_profile: dict[str, Any] = {}
-    good_piece_sacrifice = False
-    best_move_is_critical = _best_move_was_critical(board, best_record, second_record)
 
-    if board.legal_moves.count() <= 1:
-        return classification_payload(
+    if _has_at_most_one_legal_move(board):
+        return _remember_classification(classification_payload(
             "forced",
             loss=loss,
             reason="forced move",
             expected_points=move_expected,
-        )
+        ))
 
     if opening_phase and in_book and key in BOOK_ALLOWED_BASE_KEYS:
-        return book_classification_payload(
+        return _remember_classification(book_classification_payload(
             move_expected,
             reason="opening book move",
-        )
+        ))
 
     if (
         key == "best"
@@ -1383,25 +1681,15 @@ def classify_move_record(
         move = None
 
     is_direct_checkmate = False
+    after_board = None
     if move is not None:
-        checkmate_board = _board_after_move(board, move)
-        if checkmate_board is not None and checkmate_board.is_checkmate():
+        after_board = _board_after_move(board, move)
+        if after_board is not None and after_board.is_checkmate():
             is_direct_checkmate = True
             key = "best"
             reason = "engine top move"
 
     if move is not None:
-        real_piece_sacrifice = is_real_piece_sacrifice(board, move)
-        tactical_profile = _pv_tactical_profile(board, move_record)
-        tactical_brilliant_shape = _consider_brilliant_classification(
-            board,
-            move_record,
-            second_record,
-            move_rank=move_rank,
-            loss=loss,
-            tactical_profile=tactical_profile,
-        )
-        good_piece_sacrifice = bool(real_piece_sacrifice or tactical_brilliant_shape)
         if is_best_move and _consider_critical_classification(
             board,
             move_record,
@@ -1412,49 +1700,101 @@ def classify_move_record(
             key = "great"
             only_move_keeps_advantage = True
             reason = "only move that keeps the advantage"
-        gives_check = False
-        after_board = _board_after_move(board, move)
-        if after_board is not None:
-            gives_check = after_board.is_check()
-        brilliant_loss_limit = _brilliant_loss_limit(
-            tactical_shape=tactical_brilliant_shape,
-            gives_check=gives_check,
-        )
-        qualifies_for_brilliant = is_best_move or loss <= brilliant_loss_limit
+        gives_check = bool(after_board is not None and after_board.is_check())
         top_candidate_brilliant = (
             move_rank is not None
             and move_rank <= BRILLIANT_TOP_CANDIDATE_LIMIT
             and loss <= BRILLIANT_TOP_CANDIDATE_THRESHOLD
         )
-        if not qualifies_for_brilliant and top_candidate_brilliant:
-            qualifies_for_brilliant = True
-        if qualifies_for_brilliant:
+
+        # Brilliant detection is the expensive path: it runs SEE and PV shape
+        # checks. Gate it with cheap rank/loss/soundness tests so normal move
+        # labels do not pay that cost.
+        preliminary_brilliant_loss_limit = _brilliant_loss_limit(
+            tactical_shape=False,
+            gives_check=gives_check,
+        )
+        could_be_brilliant = (
+            not is_direct_checkmate
+            and move_expected >= BRILLIANT_SOUND_THRESHOLD
+            and best_expected < BRILLIANT_ALREADY_WINNING_THRESHOLD
+            and (
+                is_best_move
+                or loss <= preliminary_brilliant_loss_limit
+                or top_candidate_brilliant
+                or (
+                    move_rank is not None
+                    and move_rank <= BRILLIANT_TOP_CANDIDATE_LIMIT
+                    and loss <= BRILLIANT_EXPANDED_THRESHOLD
+                )
+            )
+        )
+        brilliant_applied = False
+        if could_be_brilliant:
+            see_investment = _static_material_investment(board, move)
+            real_piece_sacrifice = is_real_piece_sacrifice(
+                board,
+                move,
+                after_board=after_board,
+                see_investment=see_investment,
+            )
+            tactical_profile = _pv_tactical_profile(
+                board,
+                move_record,
+                after_board=after_board,
+                see_investment=see_investment,
+            )
+            tactical_brilliant_shape = _consider_brilliant_classification(
+                board,
+                move_record,
+                second_record,
+                move_rank=move_rank,
+                loss=loss,
+                tactical_profile=tactical_profile,
+            )
+            # SEE can spot that material is invested, but that alone is not enough
+            # for Brilliant. A sacrifice still needs a confirming PV profile so
+            # ordinary "best move, piece can be taken" positions do not flood the
+            # Brilliant tracker with false positives.
+            confirmed_real_sacrifice = real_piece_sacrifice and _pv_confirms_material_investment(
+                board,
+                move_record,
+                tactical_profile=tactical_profile,
+            )
+            good_piece_sacrifice = bool(tactical_brilliant_shape or confirmed_real_sacrifice)
+            brilliant_loss_limit = _brilliant_loss_limit(
+                tactical_shape=tactical_brilliant_shape,
+                gives_check=gives_check,
+            )
+            qualifies_for_brilliant = is_best_move or loss <= brilliant_loss_limit or top_candidate_brilliant
             already_winning = best_expected >= BRILLIANT_ALREADY_WINNING_THRESHOLD
             sound_enough = move_expected >= BRILLIANT_SOUND_THRESHOLD
-            if good_piece_sacrifice and sound_enough and not already_winning:
+            if qualifies_for_brilliant and good_piece_sacrifice and sound_enough and not already_winning:
                 key = "brilliant"
                 reason = "best or nearly-best move plus a good piece sacrifice"
-        elif (
-            is_player_move
-            and best_move_is_critical
+                brilliant_applied = True
+        if (
+            not brilliant_applied
+            and is_player_move
             and move_uci != best_record.get("uci")
             and _is_miss_position(
                 best_expected=best_expected,
                 move_expected=move_expected,
                 loss=loss,
             )
+            and _best_move_was_critical(board, best_record, second_record)
         ):
             key = "miss"
             reason = "misses the critical continuation"
 
-    return classification_payload(
+    return _remember_classification(classification_payload(
         key,
         loss=loss,
         reason=reason,
         expected_points=move_expected,
         is_only_move_that_keeps_advantage=only_move_keeps_advantage,
         is_real_piece_sacrifice=bool(real_piece_sacrifice),
-    )
+    ))
 
 
 def annotate_candidate_classifications(
@@ -1472,25 +1812,21 @@ def annotate_candidate_classifications(
     repeated_counts = repeated_counts or {}
     popularity_by_uci = popularity_by_uci or {}
     best_record = candidate_lines[0]
-    best_expected = float(expected_points_from_record(best_record, player_rating=player_rating))
+    expected_points_by_index = [
+        float(expected_points_from_record(line, player_rating=player_rating))
+        for line in candidate_lines
+    ]
+    best_expected = expected_points_by_index[0]
     second_loss = 0.0
     if len(candidate_lines) > 1:
-        second_loss = max(
-            0.0,
-            best_expected - float(expected_points_from_record(candidate_lines[1], player_rating=player_rating)),
-        )
-    great_keeps_advantage_count = sum(
-        1
-        for line in candidate_lines
-        if keeps_advantage(
-            expected_points_from_record(line, player_rating=player_rating),
-            int(line.get("score_cp", 0)),
-        )
-    )
-    for index, line in enumerate(candidate_lines, start=1):
+        second_loss = max(0.0, best_expected - expected_points_by_index[1])
+    # The current Great/Miss rules compare top lines directly, so avoid a full
+    # repeated "keeps advantage" pass over every candidate during hot UI refreshes.
+    great_keeps_advantage_count = 0
+    for index, (line, expected_points) in enumerate(zip(candidate_lines, expected_points_by_index), start=1):
         line["rank"] = index
-        line["expected_points"] = round(expected_points_from_record(line, player_rating=player_rating), 4)
-        line["expected_points_loss"] = round(max(0.0, best_expected - float(line.get("expected_points", 0.0))), 4)
+        line["expected_points"] = round(expected_points, 4)
+        line["expected_points_loss"] = round(max(0.0, best_expected - expected_points), 4)
     for line in candidate_lines:
         move_uci = str(line.get("uci", "") or "")
         repeated_count = int(repeated_counts.get(move_uci, 0) or 0)

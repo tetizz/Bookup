@@ -11,6 +11,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -443,7 +444,82 @@ def analysis_status_payload() -> dict[str, object]:
         payload = dict(ANALYSIS_STATUS)
     if settings is not None:
         payload["resources"] = engine_resource_snapshot(settings, engine)
+    payload = _augment_analysis_status(payload)
     return payload
+
+
+def _numeric_status_value(payload: dict[str, object], key: str) -> float:
+    try:
+        return float(payload.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _int_status_value(payload: dict[str, object], key: str) -> int:
+    return max(0, int(_numeric_status_value(payload, key)))
+
+
+def _augment_analysis_status(payload: dict[str, object]) -> dict[str, object]:
+    """Add derived status fields so the UI does not infer stale worker state."""
+    enriched = dict(payload)
+    resources = enriched.get("resources")
+    resources = resources if isinstance(resources, dict) else {}
+    workers = _int_status_value(enriched, "workers") or int(resources.get("workers", 0) or 0)
+    if workers:
+        enriched["workers"] = workers
+
+    positions_done = _int_status_value(enriched, "positions_done") or _int_status_value(enriched, "positions_analyzed")
+    positions_total = _int_status_value(enriched, "positions_total")
+    games_done = _int_status_value(enriched, "games_done")
+    games_total = _int_status_value(enriched, "games_total")
+    brilliant_games_done = _int_status_value(enriched, "brilliant_games_done")
+    brilliant_games_total = _int_status_value(enriched, "brilliant_games_total")
+    classified_moves = _int_status_value(enriched, "classified_moves")
+    player_moves_total = _int_status_value(enriched, "player_moves_total") or _int_status_value(enriched, "moves_scanned")
+
+    enriched["positions_left"] = max(0, positions_total - positions_done) if positions_total else 0
+    enriched["games_left"] = max(0, games_total - games_done) if games_total else 0
+    enriched["brilliant_games_left"] = max(0, brilliant_games_total - brilliant_games_done) if brilliant_games_total else 0
+    enriched["moves_left"] = max(0, player_moves_total - classified_moves) if player_moves_total else 0
+
+    slots = enriched.get("scan_active_slots")
+    live_positions = enriched.get("live_positions")
+    slot_count = len(slots) if isinstance(slots, list) else 0
+    preview_count = len(live_positions) if isinstance(live_positions, list) else 0
+    reported_active = _int_status_value(enriched, "active_workers") or _int_status_value(enriched, "scan_active_workers")
+    if bool(enriched.get("active")) and str(enriched.get("phase", "")) in {"stockfish_positions", "brilliant_scan"}:
+        # Worker previews are pushed asynchronously; keep the status dashboard tied to
+        # actual slots/previews so it does not flash 0/8 while jobs are in flight.
+        active_workers = max(1 if workers else 0, reported_active, slot_count, min(workers or preview_count, preview_count))
+    else:
+        active_workers = reported_active
+    if workers:
+        active_workers = min(workers, active_workers)
+    enriched["active_workers"] = active_workers
+    enriched["scan_active_workers"] = active_workers if str(enriched.get("phase", "")) in {"stockfish_positions", "brilliant_scan"} else _int_status_value(enriched, "scan_active_workers")
+
+    phase = str(enriched.get("phase", "") or "")
+    if phase == "brilliant_scan":
+        total = brilliant_games_total or player_moves_total
+        done = brilliant_games_done or classified_moves
+        left = max(0, total - done) if total else 0
+        rate = _numeric_status_value(enriched, "games_per_second") or _numeric_status_value(enriched, "items_per_second") or _numeric_status_value(enriched, "positions_per_second")
+    elif phase in {"loading_games", "fetch_archives", "fetch_games", "indexing"}:
+        total = games_total
+        done = games_done
+        left = max(0, total - done) if total else 0
+        rate = _numeric_status_value(enriched, "games_per_second") or _numeric_status_value(enriched, "items_per_second")
+    else:
+        total = positions_total
+        done = positions_done
+        left = max(0, total - done) if total else 0
+        rate = _numeric_status_value(enriched, "positions_per_second") or _numeric_status_value(enriched, "items_per_second")
+    enriched["work_total"] = total
+    enriched["work_done"] = done
+    enriched["work_left"] = left
+    if bool(enriched.get("active")) and left > 0 and rate > 0:
+        enriched["eta_sec"] = max(1, int(round(left / rate)))
+    return enriched
 
 
 def recommended_engine_defaults() -> dict:
@@ -830,6 +906,89 @@ def serialize_legal_moves(board: chess.Board) -> list[dict]:
             }
         )
     return moves
+
+
+def board_ply(board: chess.Board) -> int:
+    return max(0, (board.fullmove_number - 1) * 2 + (0 if board.turn == chess.WHITE else 1))
+
+
+def _collect_lesson_move_uci(value: Any, moves: set[str]) -> None:
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) in {4, 5}:
+            try:
+                chess.Move.from_uci(text)
+            except ValueError:
+                return
+            moves.add(text)
+        return
+    if isinstance(value, dict):
+        for key in ("uci", "move_uci", "best_reply_uci", "preferred_branch_uci"):
+            _collect_lesson_move_uci(value.get(key), moves)
+        for key in ("line_uci", "moves_uci", "continuation_moves_uci", "training_line_uci", "locked_training_line_uci"):
+            _collect_lesson_move_uci(value.get(key), moves)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _collect_lesson_move_uci(item, moves)
+
+
+def lesson_book_move_set(lesson: Any) -> set[str]:
+    moves: set[str] = set()
+    if not isinstance(lesson, dict):
+        return moves
+    for key in (
+        "best_reply_uci",
+        "preferred_branch_uci",
+        "continuation_moves_uci",
+        "training_line_uci",
+        "locked_training_line_uci",
+        "intro_line_uci",
+        "branch_lines",
+        "branches",
+        "database_moves",
+        "common_replies",
+        "player_move_frequency",
+        "transposition_targets",
+    ):
+        _collect_lesson_move_uci(lesson.get(key), moves)
+    return moves
+
+
+def move_book_context(board: chess.Board, move: chess.Move, payload: dict | None = None) -> tuple[dict | None, dict]:
+    payload = payload or {}
+    lesson = payload.get("lesson") if isinstance(payload, dict) else {}
+    ply_before = board_ply(board)
+    current_opening = lookup_by_board(board)
+    next_board = board.copy(stack=False)
+    next_board.push(move)
+    next_opening = lookup_by_board(next_board)
+    lesson_moves = lesson_book_move_set(lesson)
+    move_uci = move.uci()
+    explicit_book = bool(payload.get("is_book") or payload.get("force_book"))
+    in_lesson = move_uci in lesson_moves
+    has_opening_name = bool(
+        current_opening.get("name")
+        or current_opening.get("eco")
+        or next_opening.get("name")
+        or next_opening.get("eco")
+    )
+    # Opening book is position-contextual, not just "first move". This keeps early
+    # known theory from being relabeled as Excellent/Good while still letting the
+    # engine classify middlegame choices once the opening database goes quiet.
+    is_book = explicit_book or in_lesson or (ply_before <= 16 and has_opening_name)
+    context = {
+        "is_book": is_book,
+        "explicit_book": explicit_book,
+        "in_lesson": in_lesson,
+        "ply_before": ply_before,
+        "current_opening": current_opening,
+        "next_opening": next_opening,
+    }
+    if not is_book:
+        return None, context
+    reason = "repertoire/database move" if in_lesson or explicit_book else "opening book move"
+    return book_classification_payload(0.5, reason=reason), context
 
 
 def _result_for_color(result: str, color: str) -> str:
@@ -1738,19 +1897,23 @@ def apply_move() -> tuple:
         return jsonify({"error": "Invalid move."}), 400
     if move not in board.legal_moves:
         return jsonify({"error": "That move is not legal in this position."}), 400
-    ply_before_move = max(0, (board.fullmove_number - 1) * 2 + (0 if board.turn == chess.WHITE else 1))
+    ply_before_move = board_ply(board)
     san = board.san(move)
-    next_board = board.copy(stack=False)
-    next_board.push(move)
-    opening_match = lookup_by_board(next_board)
-    is_named_or_initial_book = ply_before_move < 2 or bool(opening_match.get("name") or opening_match.get("eco"))
-    played_classification = book_classification_payload(0.5, reason="opening or repertoire book move") if is_named_or_initial_book else None
+    played_classification, book_context = move_book_context(board, move, payload)
     board.push(move)
     return jsonify(
         {
+            "ok": True,
             "fen": board.fen(),
+            "side_to_move": "white" if board.turn == chess.WHITE else "black",
+            "turn": "white" if board.turn == chess.WHITE else "black",
+            "move_uci": move_uci,
             "played_san": san,
             "played_classification": played_classification,
+            "book_context": book_context,
+            "opening": book_context.get("next_opening") or book_context.get("current_opening"),
+            "ply_before": ply_before_move,
+            "ply_after": board_ply(board),
             "last_move": {"from": move_uci[:2], "to": move_uci[2:4]},
             "legal_moves": serialize_legal_moves(board),
         }
@@ -1761,6 +1924,8 @@ def apply_move() -> tuple:
 def trainer_attempt() -> tuple:
     payload = request.get_json(force=True)
     fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
     move_uci = str(payload.get("move_uci", "")).strip()
     lesson = payload.get("lesson") or {}
     if not fen or not move_uci:
@@ -1775,49 +1940,57 @@ def trainer_attempt() -> tuple:
 
     attempted_san = board.san(move)
     best_uci = str(lesson.get("best_reply_uci", "")).strip()
-    if not best_uci:
-        return jsonify({"error": "Lesson is missing the best move."}), 400
-    try:
-        best_move = chess.Move.from_uci(best_uci)
-    except ValueError:
-        return jsonify({"error": "Lesson best move is invalid."}), 400
-    if best_move not in board.legal_moves:
-        return jsonify({"error": "Lesson best move is not legal in this position."}), 400
-    best_san = board.san(best_move)
-
-    if move.uci() != best_uci:
-        return jsonify(
-            {
-                "ok": False,
-                "played_san": attempted_san,
-                "best_san": best_san,
-                "explanation": str(lesson.get("explanation", "")),
-                "continuation": str(lesson.get("continuation_san", "")),
-                "fen": fen,
-            }
-        )
+    best_san = ""
+    best_move: chess.Move | None = None
+    if best_uci:
+        try:
+            candidate = chess.Move.from_uci(best_uci)
+            if candidate in board.legal_moves:
+                best_move = candidate
+                best_san = board.san(candidate)
+        except ValueError:
+            best_move = None
 
     line_sans = [attempted_san]
+    played_classification, book_context = move_book_context(board, move, payload)
+    matches_repertoire = bool(best_uci and move.uci() == best_uci) or bool(book_context.get("in_lesson"))
     board.push(move)
     last_move = {"from": move_uci[:2], "to": move_uci[2:4]}
     continuation_ucis = [str(item) for item in lesson.get("continuation_moves_uci", []) if str(item)]
-    for continuation in continuation_ucis[1:]:
-        try:
-            follow = chess.Move.from_uci(continuation)
-        except ValueError:
-            break
-        if follow not in board.legal_moves:
-            break
-        follow_san = board.san(follow)
-        line_sans.append(follow_san)
-        board.push(follow)
-        last_move = {"from": continuation[:2], "to": continuation[2:4]}
+    if best_uci and move.uci() == best_uci:
+        for continuation in continuation_ucis[1:]:
+            try:
+                follow = chess.Move.from_uci(continuation)
+            except ValueError:
+                break
+            if follow not in board.legal_moves:
+                break
+            follow_san = board.san(follow)
+            line_sans.append(follow_san)
+            board.push(follow)
+            last_move = {"from": continuation[:2], "to": continuation[2:4]}
+    line_completed = bool(board.is_game_over() or (best_uci and move.uci() == best_uci and len(line_sans) >= len(continuation_ucis or [best_uci])))
+    if matches_repertoire:
+        message = f"{attempted_san} matches a known branch." if best_uci and move.uci() != best_uci else f"{attempted_san} keeps this line on track."
+    elif best_san:
+        message = f"{attempted_san} is legal but leaves this repertoire branch. Recommended move: {best_san}."
+    else:
+        message = f"{attempted_san} is legal. Bookup will continue from the live position."
 
     return jsonify(
         {
             "ok": True,
             "played_san": attempted_san,
             "best_san": best_san,
+            "preferred_uci": best_uci,
+            "preferred_san": best_san,
+            "played_classification": played_classification,
+            "book_context": book_context,
+            "matched_repertoire_branch": matches_repertoire,
+            "branch_locked": matches_repertoire,
+            "trainer_phase": "completed" if line_completed else ("locked_line" if matches_repertoire else "decision_point"),
+            "line_completed": line_completed,
+            "message": message,
             "line": " ".join(line_sans),
             "fen": board.fen(),
             "last_move": last_move,

@@ -1186,6 +1186,12 @@ function stockfishStatsFromStatus(status) {
     positions_indexed: Number(status.positions_indexed ?? 0),
     positions_analyzed: Number(status.positions_done ?? status.positions_analyzed ?? 0),
     positions_total: Number(status.positions_total ?? 0),
+    positions_left: Number(status.positions_left ?? 0),
+    games_left: Number(status.games_left ?? 0),
+    moves_left: Number(status.moves_left ?? 0),
+    work_done: Number(status.work_done ?? 0),
+    work_total: Number(status.work_total ?? 0),
+    work_left: Number(status.work_left ?? 0),
     positions_per_second: Number(status.positions_per_second ?? 0),
     items_per_second: Number(status.items_per_second ?? 0),
     games_per_second: Number(status.games_per_second ?? status.items_per_second ?? 0),
@@ -1196,6 +1202,7 @@ function stockfishStatsFromStatus(status) {
     scan_active_slots: Array.isArray(status.scan_active_slots) ? status.scan_active_slots : [],
     brilliant_games_done: Number(status.brilliant_games_done ?? 0),
     brilliant_games_total: Number(status.brilliant_games_total ?? 0),
+    brilliant_games_left: Number(status.brilliant_games_left ?? 0),
     brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
     brilliant_moves_classified: Number(status.classified_moves ?? 0),
     brilliant_player_moves_total: Number(status.player_moves_total ?? status.moves_scanned ?? 0),
@@ -1276,11 +1283,17 @@ function analysisPrimaryCard(stats) {
 function analysisRemainingCard(stats) {
   const phase = stats.phase || "";
   if (["loading_games", "fetch_archives", "fetch_games", "indexing"].includes(phase)) {
+    const left = Number(stats.games_left ?? NaN);
+    if (Number.isFinite(left) && left >= 0) return ["Games left", left || 0];
     const done = Number(stats.games_done || 0);
     const total = Number(stats.games_total || 0);
     return ["Games left", total ? Math.max(0, total - done) : "--"];
   }
   if (phase === "brilliant_scan") {
+    const backendGamesLeft = Number(stats.brilliant_games_left ?? stats.games_left ?? NaN);
+    if (Number.isFinite(backendGamesLeft) && backendGamesLeft > 0) return ["Games left", backendGamesLeft];
+    const backendMovesLeft = Number(stats.moves_left ?? NaN);
+    if (Number.isFinite(backendMovesLeft) && backendMovesLeft > 0) return ["Moves left", backendMovesLeft];
     const scanDone = Number(stats.brilliant_games_done || 0);
     const scanTotal = Number(stats.brilliant_games_total || 0);
     if (scanTotal) return ["Games left", Math.max(0, scanTotal - scanDone)];
@@ -1289,6 +1302,8 @@ function analysisRemainingCard(stats) {
     const classified = Number(stats.brilliant_moves_classified || 0);
     return ["Moves left", playerMoves ? Math.max(0, playerMoves - classified) : "--"];
   }
+  const backendPositionsLeft = Number(stats.positions_left ?? NaN);
+  if (Number.isFinite(backendPositionsLeft) && backendPositionsLeft >= 0) return ["Positions left", backendPositionsLeft || 0];
   const done = Number(stats.positions_analyzed || stats.positions_done || 0);
   const total = Number(stats.positions_total || 0);
   return ["Positions left", total ? Math.max(0, total - done) : "--"];
@@ -1393,7 +1408,9 @@ function renderStockfishStats(stats, options = {}) {
 function renderAnalysisPreviewPanel(stats) {
   const node = el.analysisPreviewPanel;
   if (!node) return;
-  const workerSlots = Math.min(Math.max(Number(stats?.workers || 0), 0) || 8, 8);
+  const livePositionCount = Array.isArray(stats?.live_positions) ? stats.live_positions.length : 0;
+  const configuredWorkers = Number(stats?.workers || 0);
+  const workerSlots = Math.min(Math.max(configuredWorkers, livePositionCount, 1), 8);
   const previews = Array.isArray(stats?.live_positions) ? stats.live_positions.slice(0, workerSlots) : [];
   const activeSlots = new Set(Array.isArray(stats?.scan_active_slots) ? stats.scan_active_slots.map((slot) => Number(slot)) : []);
   const active = Boolean(stats?.active);
@@ -3014,26 +3031,10 @@ async function refreshCacheDashboard() {
 
 function renderTranspositionGroups(groups) {
   if (!el.transpositionList) return;
-  if (!groups.length) {
-    el.transpositionList.className = "stack empty";
-    el.transpositionList.textContent = "No repeated transposition groups found yet.";
-    return;
-  }
-  el.transpositionList.className = "stack";
-  el.transpositionList.innerHTML = groups.map((group, index) => `
-    <article class="line-card transposition-card">
-      <div class="line-card-header">
-        <div>
-          <div class="line-title">${index + 1}. ${escapeHtml((group.labels || [])[0] || "Shared position")}</div>
-          <div class="tree-meta">${Number(group.positions || 0)} paths · ${Number(group.frequency || 0)} games · ${Math.round(Number(group.confidence || 0))} confidence</div>
-        </div>
-        ${group.position_identifier ? `<a class="launch-btn" href="${escapeHtml(group.position_identifier)}" target="_blank" rel="noopener noreferrer">Lichess analysis</a>` : ""}
-      </div>
-      <div class="line-note">${(group.labels || []).map(escapeHtml).join(" | ")}</div>
-      <div class="chip-row">${(group.moves || []).map((move) => `<span class="lesson-chip">${escapeHtml(move)}</span>`).join("")}</div>
-      <div class="chip-row">${(group.lesson_ids || []).slice(0, 3).map((id) => `<button class="launch-btn" type="button" data-work-line="${escapeHtml(id)}">Work branch</button>`).join("")}</div>
-    </article>
-  `).join("");
+  const section = el.transpositionList.closest("section") || el.transpositionList.parentElement;
+  if (section) section.hidden = true;
+  el.transpositionList.className = "stack empty";
+  el.transpositionList.innerHTML = "";
 }
 
 function renderMistakeHeatmap(heatmap) {
@@ -3150,30 +3151,44 @@ function renderMistakeTimeline(timeline) {
 function renderReviewSchedule(schedule) {
   if (!el.reviewSchedule) return;
   const groups = [
-    ["Due today", schedule?.due_today || []],
-    ["New later", schedule?.new_later || []],
-    ["Known archive", schedule?.known_archive || []],
+    { key: "due", title: "Due", detail: "Ready now", items: schedule?.due_today || [] },
+    { key: "later", title: "Later", detail: "Cooling down", items: schedule?.new_later || [] },
+    { key: "known", title: "Known", detail: "Archive", items: schedule?.known_archive || [] },
   ];
-  if (!groups.some(([, items]) => items.length)) {
-    el.reviewSchedule.className = "stack empty";
-    el.reviewSchedule.textContent = "Review schedule will show up here once lines enter your queues.";
+  const total = groups.reduce((sum, group) => sum + group.items.length, 0);
+  if (!total) {
+    el.reviewSchedule.className = "review-schedule compact-review-schedule empty";
+    el.reviewSchedule.innerHTML = `<div class="compact-empty">Review schedule will show up here once lines enter your queues.</div>`;
     return;
   }
-  el.reviewSchedule.className = "stack review-schedule";
-  el.reviewSchedule.innerHTML = groups.map(([title, items]) => `
-    <article class="line-card">
-      <div class="line-card-header">
-        <div class="line-title">${escapeHtml(title)}</div>
-        <div class="line-badge">${items.length}</div>
-      </div>
-      ${items.length ? items.map((item) => `
-        <button class="schedule-row" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-          <strong>${escapeHtml(item.line_label)}</strong>
-          <span>${escapeHtml(item.interval)} · ${Math.round(Number(item.confidence || 0))} confidence</span>
-        </button>
-      `).join("") : `<div class="line-note">Nothing in this bucket.</div>`}
-    </article>
-  `).join("");
+  el.reviewSchedule.className = "review-schedule compact-review-schedule";
+  el.reviewSchedule.innerHTML = `
+    <div class="review-summary-strip">
+      ${groups.map((group) => `<span><strong>${group.items.length}</strong>${escapeHtml(group.title)}</span>`).join("")}
+    </div>
+    <div class="review-bucket-grid">
+      ${groups.map((group) => `
+        <article class="review-bucket ${escapeHtml(group.key)}">
+          <div class="review-bucket-head">
+            <div>
+              <strong>${escapeHtml(group.title)}</strong>
+              <span>${escapeHtml(group.detail)}</span>
+            </div>
+            <b>${group.items.length}</b>
+          </div>
+          <div class="review-row-list">
+            ${group.items.length ? group.items.slice(0, 6).map((item) => `
+              <button class="review-row" type="button" data-work-line="${escapeHtml(item.lesson_id || "")}">
+                <span>${escapeHtml(item.line_label || item.opening_name || "Review line")}</span>
+                <small>${escapeHtml(item.recommended_move || item.best_reply || item.move || item.interval || "")} · ${Math.round(Number(item.confidence || 0))}</small>
+              </button>
+            `).join("") : `<div class="review-row muted">Empty</div>`}
+            ${group.items.length > 6 ? `<div class="review-more">+${group.items.length - 6} more</div>` : ""}
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderStudyPlan(plan) {
@@ -3185,13 +3200,35 @@ function renderStudyPlan(plan) {
     return;
   }
   el.studyPlanPanel.className = "stack";
+  const counts = plan.counts || {};
+  const countCards = [
+    ["Due", counts.due],
+    ["Repair", counts.repair],
+    ["Replies", counts.database_replies],
+    ["New", counts.new],
+  ];
+  const quickActions = (plan.quick_actions || []).filter((action) => action.lesson_id);
   el.studyPlanPanel.innerHTML = `
     <div class="study-plan-summary">
-      <strong>${Number(plan.estimated_minutes || 0)} min</strong>
-      <span>${escapeHtml(plan.summary || "Today's training plan is ready.")}</span>
+      <div>
+        <strong>${Number(plan.estimated_minutes || 0)} min</strong>
+        <span>${escapeHtml(plan.summary || "Today's training plan is ready.")}</span>
+      </div>
+      <div class="study-plan-counts">
+        ${countCards.map(([label, value]) => `
+          <span><b>${Number(value || 0)}</b>${escapeHtml(label)}</span>
+        `).join("")}
+      </div>
+      ${quickActions.length ? `
+        <div class="chip-row">
+          ${quickActions.map((action) => `
+            <button class="launch-btn compact" type="button" data-work-line="${escapeHtml(action.lesson_id)}">${escapeHtml(action.label || "Start")}</button>
+          `).join("")}
+        </div>
+      ` : ""}
     </div>
     ${blocks.map((block) => `
-      <article class="plan-block">
+      <article class="plan-block ${escapeHtml(block.kind || "")}">
         <div class="line-card-header">
           <div>
             <div class="line-title">${escapeHtml(block.title || "Study block")}</div>
@@ -3199,12 +3236,32 @@ function renderStudyPlan(plan) {
           </div>
           <span class="line-badge">${Number(block.minutes || 0)} min</span>
         </div>
-        ${(block.items || []).slice(0, 4).map((item) => item.lesson_id ? `
-          <button class="schedule-row" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-            <strong>${escapeHtml(item.line_label || item.opponent_reply || "Study item")}</strong>
-            <span>${escapeHtml(item.recommended_move || item.response || "")}</span>
-          </button>
-        ` : `<div class="line-note">${escapeHtml(item.line_label || item.opponent_reply || "Study item")}</div>`).join("") || `<div class="line-note">Nothing needed in this block yet.</div>`}
+        <div class="study-plan-items">
+          ${(block.items || []).slice(0, 5).map((item) => {
+            const title = item.line_label || item.opponent_reply || "Study item";
+            const move = item.recommended_move || item.response || "";
+            const classification = item.classification_label || item.classification?.label || "";
+            const metric = item.popularity ? `${Number(item.popularity || 0)}% database` : `${Math.round(Number(item.confidence || 0))} confidence`;
+            const note = item.note || item.reason || "";
+            const body = `
+              <div class="plan-item-main">
+                <strong>${escapeHtml(title)}</strong>
+                <span>${escapeHtml(move ? `Play ${move}` : "Open this line")}</span>
+              </div>
+              <div class="plan-item-meta">
+                ${classification ? `<span class="classification-chip tiny">${escapeHtml(classification)}</span>` : ""}
+                <span>${escapeHtml(metric)}</span>
+                ${Number(item.repeat_mistake_count || 0) ? `<span>${Number(item.repeat_mistake_count || 0)} misses</span>` : ""}
+              </div>
+              ${note ? `<div class="plan-item-note">${escapeHtml(note)}</div>` : ""}
+            `;
+            return item.lesson_id ? `
+              <button class="plan-item" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
+                ${body}
+              </button>
+            ` : `<div class="plan-item muted">${body}</div>`;
+          }).join("") || `<div class="line-note">${escapeHtml(block.empty || "Nothing needed in this block yet.")}</div>`}
+        </div>
       </article>
     `).join("")}
   `;
@@ -3343,13 +3400,13 @@ function renderTheoryPresets(theory) {
   if (!el.theoryPresetPanel) return;
   const seeds = theory?.seeds || [];
   if (!seeds.length) {
-    el.theoryPresetPanel.className = "stack empty";
-    el.theoryPresetPanel.textContent = "Bookup will suggest theory seeds after import.";
+    el.theoryPresetPanel.className = "theory-seed-grid empty";
+    el.theoryPresetPanel.innerHTML = `<div class="compact-empty">Bookup will suggest theory seeds after import.</div>`;
     return;
   }
-  el.theoryPresetPanel.className = "stack";
+  el.theoryPresetPanel.className = "theory-seed-grid";
   el.theoryPresetPanel.innerHTML = seeds.slice(0, 10).map((seed) => `
-    <button class="mini-card theory-seed" type="button" data-theory-seed="${escapeHtml(seed.move || "")}">
+    <button class="mini-card theory-seed compact" type="button" data-theory-seed="${escapeHtml(seed.move || "")}">
       <strong>${escapeHtml(seed.label || "Generate theory")}</strong>
       <span>${escapeHtml(seed.line_label || "")} · ${escapeHtml(seed.move || "")}</span>
     </button>
@@ -3814,12 +3871,24 @@ function renderStudyMoveCard(title, san, classification, copy) {
 function renderReactionMarkup(reaction) {
   if (!reaction) return "";
   const reasons = Array.isArray(reaction?.reasons) ? reaction.reasons.filter(Boolean).slice(0, 3) : [];
-  const features = Array.isArray(reaction?.features) ? reaction.features.filter(Boolean).slice(0, 4) : [];
+  const fallbackFeatures = Array.isArray(reaction?.features) ? reaction.features.filter(Boolean).slice(0, 4) : [];
+  const motifs = Array.isArray(reaction?.motifs) ? reaction.motifs.filter(Boolean).slice(0, 6) : fallbackFeatures;
+  const rawTone = String(reaction?.tone || reaction?.classification_key || "neutral").toLowerCase();
+  const tone = rawTone.replace(/[^a-z0-9_-]/g, "") || "neutral";
+  const summary = reaction?.summary || "";
+  const nextStep = reaction?.next_step || "";
+  const side = reaction?.side ? `${reaction.side} move` : "";
   return `
-    <div class="coach-reaction-card">
+    <div class="coach-reaction-card tone-${escapeHtml(tone)}">
+      <div class="coach-reaction-topline">
+        <span class="coach-reaction-tone">${escapeHtml(reaction?.tone_label || reaction?.label || "Move note")}</span>
+        ${side ? `<span class="coach-reaction-side">${escapeHtml(side)}</span>` : ""}
+      </div>
       <div class="coach-reaction-head">${escapeHtml(reaction?.headline || "Coach reaction")}</div>
+      ${summary ? `<div class="coach-reaction-summary">${escapeHtml(summary)}</div>` : ""}
       ${reasons.length ? `<div class="coach-reaction-reasons">${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}</div>` : ""}
-      ${features.length ? `<div class="coach-reaction-features">${features.map((feature) => `<span>${escapeHtml(feature)}</span>`).join("")}</div>` : ""}
+      ${motifs.length ? `<div class="coach-reaction-features coach-reaction-motifs">${motifs.map((feature) => `<span>${escapeHtml(feature)}</span>`).join("")}</div>` : ""}
+      ${nextStep ? `<div class="coach-reaction-next">${escapeHtml(nextStep)}</div>` : ""}
     </div>
   `;
 }
@@ -4539,15 +4608,16 @@ function renderImproveList(node, items, emptyText) {
     node.textContent = emptyText;
     return;
   }
-  node.className = "stack";
+  node.className = "stack compact-work-list";
   node.innerHTML = items
     .map((item) => {
       const candidatePreview = (item.candidate_lines || [])
         .slice(0, 5)
         .map((line) => renderCandidateLineSummary(line))
         .join("");
+      const repeated = Number(item.repeat_mistake_count || 0);
       return `
-      <article class="line-card">
+      <article class="line-card compact-work-card">
         <div class="line-card-header">
           <div>
             <div class="line-title">${escapeHtml(item.line_label || item.opening_name)}</div>
@@ -4555,22 +4625,20 @@ function renderImproveList(node, items, emptyText) {
           </div>
           <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
         </div>
-        <div class="line-note">
-          Best continuation: <strong>${escapeHtml(item.best_reply)}</strong>${classificationBadge(item.recommended_classification, "inline")}
+        <div class="compact-line-summary">
+          <span>Train <strong>${escapeHtml(item.best_reply)}</strong>${classificationBadge(item.recommended_classification, "inline")}</span>
+          <span>${Number(item.frequency || 0)}x</span>
+          <span>${Math.round(Number(item.priority || 0))} priority</span>
+          <span>${describeEdge(item.value_lost_cp)}</span>
+          ${repeated ? `<span>${repeated} misses</span>` : ""}
         </div>
-        <div class="line-note">Top engine lines: <span class="candidate-line-list">${candidatePreview || "No candidate lines available."}</span></div>
-        <div class="line-note">Repeated mistake count: ${item.repeat_mistake_count || 0}</div>
-        <div class="chip-row">
-          <span class="lesson-chip">Frequency ${item.frequency}</span>
-          <span class="lesson-chip">Priority ${Math.round(item.priority)}</span>
-          <span class="lesson-chip">${describeEdge(item.value_lost_cp)}</span>
-        </div>
-        ${renderQueueExplainer(item)}
-        <div class="line-preview">${escapeHtml(item.continuation_san)}</div>
-        <div class="line-note">${escapeHtml(item.explanation)}</div>
+        <div class="compact-candidate-row">${candidatePreview || "No candidate lines available."}</div>
+        ${renderQueueExplainer(item, "compact")}
+        <div class="line-preview compact">${escapeHtml(item.continuation_san || "")}</div>
+        <div class="line-note compact">${escapeHtml(item.explanation || "")}</div>
         <div class="chip-row">
           <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>
-          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
+          ${item.position_identifier ? `<a class="launch-btn" href="${escapeHtml(item.position_identifier)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
     `;
@@ -4639,7 +4707,7 @@ async function generateTheoryLine() {
   const moveUci = String(el.theoryMove?.value || "").trim();
   const plies = Math.max(1, Math.min(30, Number(el.theoryPly?.value || 10)));
   el.generateTheory.disabled = true;
-  el.theoryOutput.className = "theory-output";
+  el.theoryOutput.className = "theory-output theory-output-compact loading";
   el.theoryOutput.innerHTML = `<div class="line-note">Generating ${plies} best moves from the current board position...</div>`;
   try {
     const response = await fetch("/api/generate-theory", {
@@ -4657,7 +4725,7 @@ async function generateTheoryLine() {
     state.theoryResult = payload;
     renderTheoryResult(payload);
   } catch (error) {
-    el.theoryOutput.className = "theory-output empty";
+    el.theoryOutput.className = "theory-output theory-output-compact empty";
     el.theoryOutput.textContent = error.message || "Could not generate theory.";
   } finally {
     el.generateTheory.disabled = false;
@@ -4668,19 +4736,19 @@ function renderTheoryResult(result) {
   if (!el.theoryOutput) return;
   const steps = Array.isArray(result?.steps) ? result.steps : [];
   if (!steps.length) {
-    el.theoryOutput.className = "theory-output empty";
+    el.theoryOutput.className = "theory-output theory-output-compact empty";
     el.theoryOutput.textContent = "No engine theory line was generated from this position.";
     return;
   }
-  el.theoryOutput.className = "theory-output";
+  el.theoryOutput.className = "theory-output theory-output-compact";
   const seed = result.seed_move
-    ? `<div class="theory-seed">After ${escapeHtml(result.seed_move.san)} (${escapeHtml(result.seed_move.uci)})</div>`
-    : `<div class="theory-seed">From the current board position</div>`;
+    ? `<div class="theory-seed compact">After ${escapeHtml(result.seed_move.san)} (${escapeHtml(result.seed_move.uci)})</div>`
+    : `<div class="theory-seed compact">From the current board position</div>`;
   const line = steps.map((step) => step.san).join(" ");
   el.theoryOutput.innerHTML = `
     ${seed}
-    <div class="theory-line">${escapeHtml(line)}</div>
-    <div class="theory-step-list">
+    <div class="theory-line theory-line-compact">${escapeHtml(line)}</div>
+    <div class="theory-step-list compact">
       ${steps.map((step) => renderTheoryStep(step)).join("")}
     </div>
     <div class="chip-row">
@@ -4693,8 +4761,9 @@ function renderTheoryResult(result) {
 function renderTheoryStep(step) {
   const candidates = Array.isArray(step?.candidate_lines) ? step.candidate_lines.slice(0, 3) : [];
   const db = Array.isArray(step?.database_moves) ? step.database_moves.slice(0, 3) : [];
+  const dbMarkup = db.map((move) => `<span>${escapeHtml(move.san || move.uci || "")} ${Number(move.popularity || 0).toFixed(1)}%</span>`).join("");
   return `
-    <article class="theory-step">
+    <article class="theory-step compact">
       <div class="theory-step-head">
         <div>
           <div class="theory-step-title">${Number(step?.ply || 0)}. ${escapeHtml(step?.san || "")} ${classificationBadge(step?.classification, "compact")}</div>
@@ -4702,8 +4771,16 @@ function renderTheoryStep(step) {
         </div>
         <span class="line-badge">${escapeHtml(step?.uci || "")}</span>
       </div>
-      <div class="line-note">Top engine alternatives: ${candidates.map((line) => renderCandidateLineSummary(line)).join("") || "No alternatives."}</div>
-      <div class="line-note">Database replies: ${db.map((move) => `${escapeHtml(move.san || move.uci || "")} ${Number(move.popularity || 0).toFixed(1)}%`).join(" | ") || "No database data."}</div>
+      <div class="theory-mini-grid">
+        <div>
+          <span>Engine</span>
+          <div class="theory-chip-line">${candidates.map((line) => renderCandidateLineSummary(line)).join("") || `<small class="theory-empty-chip">No alternatives</small>`}</div>
+        </div>
+        <div>
+          <span>Database</span>
+          <div class="theory-chip-line">${dbMarkup || `<small class="theory-empty-chip">No database data</small>`}</div>
+        </div>
+      </div>
     </article>
   `;
 }
