@@ -2271,6 +2271,8 @@ function renderBrilliantProgress(progress) {
     dense: graphPoints.length > 130,
     baselineValue: 0,
     valueLabel: "Brilliants",
+    minSpread: Math.max(8, Number(range.best_day?.brilliants || 0) + 2),
+    robustDomain: false,
   });
   return `
     <section class="brilliant-progress-panel">
@@ -2558,6 +2560,7 @@ function renderRatingProgress(progress) {
   const chart = buildRatingProgressChart(graphPoints, selected?.index, {
     dense: graphPoints.length > 130,
     baselineValue: range.rating_start,
+    minSpread: 300,
   });
   const ratingEnd = range.rating_end ?? activeProgress.latest_rating ?? progress.latest_rating ?? null;
   const ratingChange = range.rating_change;
@@ -2686,33 +2689,101 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}
       dense: false,
     };
   }
-  const values = graphPoints.map((point) => point.graphValue);
-  let minValue = Math.min(...values);
-  let maxValue = Math.max(...values);
-  if (minValue === maxValue) {
-    minValue -= 10;
-    maxValue += 10;
+
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const isValueChart = Boolean(options.valueLabel);
+  const values = graphPoints
+    .map((point) => Number(point.graphValue))
+    .filter((value) => Number.isFinite(value));
+  const sortedValues = [...values].sort((a, b) => a - b);
+  const percentile = (pct) => {
+    if (!sortedValues.length) return 0;
+    const position = clamp(pct, 0, 1) * (sortedValues.length - 1);
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    if (lower === upper) return sortedValues[lower];
+    return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * (position - lower);
+  };
+  let domainValues = sortedValues;
+  if (!isValueChart && options.robustDomain !== false && sortedValues.length >= 12) {
+    const p10 = percentile(0.1);
+    const p90 = percentile(0.9);
+    const spread = Math.max(1, p90 - p10);
+    const fence = Math.max(90, spread * 0.85);
+    const trimmed = sortedValues.filter((value) => value >= p10 - fence && value <= p90 + fence);
+    if (trimmed.length >= Math.max(8, Math.floor(sortedValues.length * 0.7))) {
+      domainValues = trimmed;
+    }
   }
-  const padding = Math.max(12, Math.min(90, (maxValue - minValue) * 0.08));
-  minValue -= padding;
-  maxValue += padding;
+
+  let minValue = domainValues.length ? Math.min(...domainValues) : 0;
+  let maxValue = domainValues.length ? Math.max(...domainValues) : 1;
+  const requestedMinSpread = Number(options.minSpread);
+  const minSpread = Number.isFinite(requestedMinSpread)
+    ? requestedMinSpread
+    : (isValueChart ? Math.max(6, maxValue - minValue) : 240);
+  if (maxValue - minValue < minSpread) {
+    const center = (maxValue + minValue) / 2;
+    minValue = center - minSpread / 2;
+    maxValue = center + minSpread / 2;
+  }
+  const padding = isValueChart
+    ? Math.max(1, Math.ceil((maxValue - minValue) * 0.08))
+    : Math.max(25, Math.ceil((maxValue - minValue) * 0.1));
+  minValue = Math.floor(minValue - padding);
+  maxValue = Math.ceil(maxValue + padding);
+  if (isValueChart && Number(options.baselineValue) === 0) {
+    minValue = Math.min(0, minValue);
+  }
   const span = maxValue - minValue || 1;
   const toX = (index) => graphPoints.length === 1 ? 50 : (index / (graphPoints.length - 1)) * 100;
-  const toY = (value) => 86 - ((value - minValue) / span) * 68;
+  const toY = (value) => clamp(88 - ((Number(value) - minValue) / span) * 72, 6, 96);
+  const pointTitle = (point) => {
+    const pieces = [point.label || point.date || "Day"];
+    if (isValueChart) {
+      pieces.push(`${Number(point.graphValue || 0)} ${options.valueLabel}`);
+    } else {
+      pieces.push(`${point.rating_graph ?? point.rating ?? "--"} rating`);
+    }
+    if (point.result) pieces.push(point.result);
+    if (point.opponent) pieces.push(`vs ${point.opponent}`);
+    if (point.opening) pieces.push(point.opening);
+    if (point.summary) pieces.push(point.summary);
+    return pieces.filter(Boolean).join(" · ");
+  };
   const coords = graphPoints.map((point, index) => ({
     x: Number(toX(index).toFixed(3)),
     y: Number(toY(point.graphValue).toFixed(3)),
     sourceIndex: point.index,
     tone: point.result_tone || "idle",
     graphValue: point.graphValue,
-    title: options.valueLabel
-      ? `${point.label}: ${point.graphValue} ${options.valueLabel}, ${point.summary || ""}`
-      : `${point.label}: ${point.rating_graph ?? point.rating ?? "--"} rating, ${point.summary || ""}`,
+    title: pointTitle(point),
   }));
-  const lineStep = Math.max(1, Math.ceil(coords.length / 320));
+
+  const smoothPath = (points) => {
+    if (!points.length) return "";
+    if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+    let path = `M ${points[0].x} ${points[0].y}`;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const p0 = points[Math.max(0, index - 1)];
+      const p1 = points[index];
+      const p2 = points[index + 1];
+      const p3 = points[Math.min(points.length - 1, index + 2)];
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      path += ` C ${Number(cp1x.toFixed(3))} ${Number(cp1y.toFixed(3))}, ${Number(cp2x.toFixed(3))} ${Number(cp2y.toFixed(3))}, ${p2.x} ${p2.y}`;
+    }
+    return path;
+  };
+
+  const lineStep = Math.max(1, Math.ceil(coords.length / 420));
   const pathCoords = coords.filter((_point, index) => index % lineStep === 0 || index === coords.length - 1);
-  const linePath = pathCoords.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
-  const areaPath = `${linePath} L ${pathCoords[pathCoords.length - 1].x} 96 L ${pathCoords[0].x} 96 Z`;
+  const linePath = smoothPath(pathCoords);
+  const areaPath = pathCoords.length
+    ? `${linePath} L ${pathCoords[pathCoords.length - 1].x} 98 L ${pathCoords[0].x} 98 Z`
+    : "";
   const selected = coords.find((point) => Number(point.sourceIndex) === Number(selectedSourceIndex));
   const selectedLine = selected ? `<line class="rating-selected-line" x1="${selected.x}" x2="${selected.x}" y1="8" y2="96"></line>` : "";
   const baselineValue = Number.isFinite(Number(options.baselineValue))
@@ -2723,11 +2794,13 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}
     ? ""
     : `<line class="rating-baseline-line" x1="0" x2="100" y1="${baselineY}" y2="${baselineY}"></line>`;
   const dense = Boolean(options.dense);
-  const markerLimit = dense ? 72 : 140;
+  const markerLimit = dense ? 80 : 160;
   const markerStep = Math.max(1, Math.ceil(coords.length / markerLimit));
   const markerPoints = coords.filter((point, index) => (
     index % markerStep === 0 ||
+    index === 0 ||
     index === coords.length - 1 ||
+    point.tone !== "idle" ||
     Number(point.sourceIndex) === Number(selectedSourceIndex)
   ));
   const playedCoords = coords
@@ -2745,6 +2818,7 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}
       <svg viewBox="0 0 100 104" preserveAspectRatio="none" aria-hidden="true">
         ${baselineLine}
         <path class="rating-area" d="${areaPath}"></path>
+        <path class="rating-line-halo" d="${linePath}"></path>
         <path class="rating-line" d="${linePath}"></path>
         ${selectedLine}
       </svg>

@@ -1016,12 +1016,16 @@ select:focus {
 }
 
 .brilliant-chart .rating-area {
-  fill: rgba(45, 190, 171, 0.13);
+  fill: rgba(45, 190, 171, 0.18);
+}
+
+.brilliant-chart .rating-line-halo {
+  stroke: rgba(45, 190, 171, 0.25);
 }
 
 .brilliant-chart .rating-line {
   stroke: #62f0d7;
-  filter: drop-shadow(0 0 8px rgba(45, 190, 171, 0.3));
+  filter: drop-shadow(0 0 12px rgba(45, 190, 171, 0.38));
 }
 
 .rating-point.brilliant-point.hot {
@@ -1425,24 +1429,26 @@ select:focus {
 
 .rating-chart-wrap {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.55fr);
+  gap: 16px;
   align-items: stretch;
 }
 
 .rating-chart {
   position: relative;
-  min-height: 280px;
+  min-height: 330px;
   overflow: hidden;
-  border: 1px solid rgba(139, 171, 224, 0.14);
-  border-radius: 24px;
+  border: 1px solid rgba(139, 171, 224, 0.18);
+  border-radius: 28px;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px),
-    radial-gradient(circle at 82% 16%, rgba(116, 211, 155, 0.12), transparent 26%),
-    rgba(6, 10, 15, 0.78);
+    linear-gradient(rgba(139, 171, 224, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139, 171, 224, 0.026) 1px, transparent 1px),
+    radial-gradient(circle at 72% 18%, rgba(116, 211, 155, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(11, 20, 33, 0.88), rgba(5, 9, 14, 0.94));
   background-size: 100% 33.33%, 16.66% 100%, auto, auto;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    0 24px 70px rgba(0, 0, 0, 0.24);
 }
 
 .rating-chart.mixed {
@@ -1462,7 +1468,16 @@ select:focus {
 }
 
 .rating-area {
-  fill: rgba(125, 162, 255, 0.11);
+  fill: rgba(125, 162, 255, 0.15);
+}
+
+.rating-line-halo {
+  fill: none;
+  stroke: rgba(125, 162, 255, 0.22);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 9;
+  opacity: 0.9;
 }
 
 .rating-line {
@@ -1470,8 +1485,8 @@ select:focus {
   stroke: #8badff;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.25;
-  filter: drop-shadow(0 0 6px rgba(125, 162, 255, 0.28));
+  stroke-width: 3.1;
+  filter: drop-shadow(0 0 12px rgba(125, 162, 255, 0.36));
 }
 
 .rating-selected-line {
@@ -1493,21 +1508,22 @@ select:focus {
 
 .rating-point {
   position: absolute;
-  width: 10px;
-  height: 10px;
-  border: 2px solid rgba(255, 255, 255, 0.78);
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.86);
   border-radius: 999px;
   background: var(--accent);
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 0 4px rgba(125, 162, 255, 0.08);
+  box-shadow: 0 0 0 5px rgba(125, 162, 255, 0.12), 0 5px 14px rgba(0, 0, 0, 0.32);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
 }
 
 .rating-chart.dense .rating-point {
-  width: 7px;
-  height: 7px;
-  border-width: 1px;
-  opacity: 0.68;
-  box-shadow: none;
+  width: 8px;
+  height: 8px;
+  border-width: 1.4px;
+  opacity: 0.78;
+  box-shadow: 0 0 0 2px rgba(125, 162, 255, 0.06);
 }
 
 .rating-point.win { background: var(--success); }
@@ -3617,7 +3633,7 @@ select:focus {
   }
 
   .rating-chart {
-    min-height: 230px;
+    min-height: 260px;
   }
 
   .study-board-shell {
