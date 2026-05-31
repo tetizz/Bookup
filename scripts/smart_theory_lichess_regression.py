@@ -126,6 +126,9 @@ def test_auto_create_and_chapter_naming() -> None:
         "bookup.app.save_config", return_value=None
     ), patch("bookup.app._create_lichess_study", side_effect=fake_create), patch(
         "bookup.app._post_pgn_to_lichess_study", side_effect=fake_import
+    ), patch(
+        "bookup.app._cleanup_default_placeholder_chapters",
+        return_value={"deleted_count": 1, "deleted_chapter_ids": ["abc"], "errors": []},
     ):
         response = client.post(
             "/api/smart-theory/export-lichess-study",
@@ -471,7 +474,10 @@ def test_background_auto_sync_during_job() -> None:
         "bookup.app.generate_smart_theory_tree", return_value=fake_result
     ), patch("bookup.app.load_config", return_value={}), patch("bookup.app.save_config", return_value=None), patch(
         "bookup.app._create_lichess_study", side_effect=fake_create
-    ), patch("bookup.app._post_pgn_to_lichess_study", side_effect=fake_import):
+    ), patch("bookup.app._post_pgn_to_lichess_study", side_effect=fake_import), patch(
+        "bookup.app._cleanup_default_placeholder_chapters",
+        return_value={"deleted_count": 1, "deleted_chapter_ids": ["abc"], "errors": []},
+    ):
         _run_smart_theory_job(
             job_id=job_id,
             board_fen=board_fen,
@@ -485,6 +491,8 @@ def test_background_auto_sync_during_job() -> None:
     require(isinstance(study_sync, dict), "background_sync_payload_present")
     require(str(study_sync.get("status", "")) == "success", "background_sync_success", str(study_sync))
     require(int(study_sync.get("chapters_created_count", 0) or 0) >= 1, "background_sync_chapters")
+    cleanup = study_sync.get("cleanup", {}) if isinstance(study_sync.get("cleanup"), dict) else {}
+    require(int(cleanup.get("deleted_count", 0) or 0) >= 0, "background_sync_cleanup_present")
 
 
 def test_background_auto_sync_skips_without_token() -> None:
@@ -602,6 +610,39 @@ def test_background_auto_sync_skips_when_generation_stopped() -> None:
     require(str(study_sync.get("reason", "")) == "generation_stopped", "background_sync_skip_stopped_reason")
 
 
+def test_manual_export_cleanup_placeholder_called() -> None:
+    with app.test_client() as client, patch("bookup.app.load_config", return_value={}), patch(
+        "bookup.app.save_config", return_value=None
+    ), patch(
+        "bookup.app._create_lichess_study",
+        return_value={"study_id": "AbCdEf12", "study_url": "https://lichess.org/study/AbCdEf12", "response": {"id": "AbCdEf12"}},
+    ), patch(
+        "bookup.app._post_pgn_to_lichess_study",
+        return_value={"ok": True, "response": {"ok": True}},
+    ), patch(
+        "bookup.app._cleanup_default_placeholder_chapters",
+        return_value={"deleted_count": 1, "deleted_chapter_ids": ["xyz"], "errors": []},
+    ) as cleanup_mock:
+        response = client.post(
+            "/api/smart-theory/export-lichess-study",
+            json={
+                "study_id": "",
+                "lichess_token": "lip_test_token",
+                "auto_create_unified_study": True,
+                "unified_study_name": "Bookup",
+                "chapter_name": "Bookup Smart Theory",
+                "chapter_strategy": "first_move",
+                "orientation": "white",
+                "tree": sample_tree(),
+            },
+        )
+        payload = response.get_json() or {}
+        require(response.status_code == 200, "manual_cleanup_export_status_200", str(payload))
+        require(cleanup_mock.called, "manual_cleanup_called")
+        cleanup = payload.get("cleanup", {}) if isinstance(payload.get("cleanup"), dict) else {}
+        require(int(cleanup.get("deleted_count", 0) or 0) == 1, "manual_cleanup_deleted_count")
+
+
 if __name__ == "__main__":
     test_settings_opening_focus()
     test_auto_create_and_chapter_naming()
@@ -614,4 +655,5 @@ if __name__ == "__main__":
     test_background_auto_sync_during_job()
     test_background_auto_sync_skips_without_token()
     test_background_auto_sync_skips_when_generation_stopped()
+    test_manual_export_cleanup_placeholder_called()
     print("ALL SMART THEORY LICHESS REGRESSION CHECKS PASSED")

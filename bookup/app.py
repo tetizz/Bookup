@@ -1064,6 +1064,110 @@ def _post_pgn_to_lichess_study(*, study_id: str, token: str, chapter_name: str, 
         raise RuntimeError(f"Lichess study import failed: {reason or exc}") from exc
 
 
+def _list_lichess_study_chapters(*, study_id: str, token: str) -> list[dict[str, Any]]:
+    normalized_study_id = _extract_study_id(study_id)
+    if not normalized_study_id:
+        raise ValueError("Lichess study ID is required.")
+    bearer = str(token or "").strip()
+    if not bearer:
+        raise ValueError("Lichess token is required.")
+    request = Request(
+        url=f"https://lichess.org/api/study/{normalized_study_id}.pgn",
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {bearer}",
+            "Accept": "application/x-chess-pgn",
+            "User-Agent": "Bookup Smart Theory Export",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except URLError as exc:
+        reason = getattr(exc, "reason", None)
+        raise RuntimeError(f"Lichess chapter listing failed: {reason or exc}") from exc
+    chapters: list[dict[str, Any]] = []
+    handle = io.StringIO(raw)
+    while True:
+        game = chess.pgn.read_game(handle)
+        if game is None:
+            break
+        chapter_name = str(game.headers.get("ChapterName", "") or "").strip()
+        chapter_url = str(game.headers.get("ChapterURL", "") or "").strip()
+        chapter_id = chapter_url.rstrip("/").split("/")[-1] if chapter_url else ""
+        plies = sum(1 for _ in game.mainline_moves())
+        chapters.append(
+            {
+                "chapter_id": chapter_id,
+                "chapter_name": chapter_name,
+                "plies": int(plies),
+            }
+        )
+    return chapters
+
+
+def _delete_lichess_study_chapter(*, study_id: str, chapter_id: str, token: str) -> dict[str, Any]:
+    normalized_study_id = _extract_study_id(study_id)
+    normalized_chapter_id = str(chapter_id or "").strip()
+    bearer = str(token or "").strip()
+    if not normalized_study_id:
+        raise ValueError("Lichess study ID is required.")
+    if not normalized_chapter_id:
+        raise ValueError("Lichess chapter ID is required.")
+    if not bearer:
+        raise ValueError("Lichess token is required.")
+    request = Request(
+        url=f"https://lichess.org/api/study/{normalized_study_id}/{normalized_chapter_id}",
+        method="DELETE",
+        headers={
+            "Authorization": f"Bearer {bearer}",
+            "Accept": "application/json",
+            "User-Agent": "Bookup Smart Theory Export",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                data = {"raw": raw}
+            return {
+                "ok": True,
+                "status_code": int(getattr(response, "status", 200) or 200),
+                "study_id": normalized_study_id,
+                "chapter_id": normalized_chapter_id,
+                "response": data,
+            }
+    except URLError as exc:
+        reason = getattr(exc, "reason", None)
+        raise RuntimeError(f"Lichess chapter delete failed: {reason or exc}") from exc
+
+
+def _cleanup_default_placeholder_chapters(*, study_id: str, token: str) -> dict[str, Any]:
+    """Delete empty default chapters (for example 'Chapter 1') when possible."""
+    chapters = _list_lichess_study_chapters(study_id=study_id, token=token)
+    deleted: list[str] = []
+    errors: list[str] = []
+    for chapter in chapters:
+        chapter_id = str(chapter.get("chapter_id", "") or "").strip()
+        chapter_name = str(chapter.get("chapter_name", "") or "").strip().lower()
+        plies = int(chapter.get("plies", 0) or 0)
+        # Lichess creates an empty starter chapter for a new study. Remove it so
+        # Bookup sync produces a clean chapter list.
+        if chapter_name == "chapter 1" and plies == 0 and chapter_id:
+            try:
+                _delete_lichess_study_chapter(study_id=study_id, chapter_id=chapter_id, token=token)
+                deleted.append(chapter_id)
+            except Exception as exc:
+                errors.append(str(exc))
+    return {
+        "deleted_count": len(deleted),
+        "deleted_chapter_ids": deleted,
+        "errors": errors[:10],
+    }
+
+
 def _is_missing_study_error(exc: Exception) -> bool:
     text = str(exc or "").lower()
     return ("404" in text and "study" in text) or "not found" in text
@@ -1231,6 +1335,16 @@ def _run_smart_theory_job(
                     "lichess_response": response.get("response", {}),
                 }
             )
+        cleanup_result = {"deleted_count": 0, "deleted_chapter_ids": [], "errors": []}
+        if created_unified_study:
+            try:
+                cleanup_result = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
+            except Exception as cleanup_exc:
+                cleanup_result = {
+                    "deleted_count": 0,
+                    "deleted_chapter_ids": [],
+                    "errors": [str(cleanup_exc)],
+                }
         return {
             "status": "success",
             "study_id": study_id,
@@ -1243,6 +1357,7 @@ def _run_smart_theory_job(
                 int((chapter.get("meta", {}) or {}).get("moves_exported", 0) or 0)
                 for chapter in created_chapters
             ),
+            "cleanup": cleanup_result,
         }
 
     try:
@@ -2963,6 +3078,16 @@ def export_smart_theory_to_lichess_study() -> tuple:
                     "lichess_response": result.get("response", {}),
                 }
             )
+        cleanup_result = {"deleted_count": 0, "deleted_chapter_ids": [], "errors": []}
+        if created_unified_study:
+            try:
+                cleanup_result = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
+            except Exception as cleanup_exc:
+                cleanup_result = {
+                    "deleted_count": 0,
+                    "deleted_chapter_ids": [],
+                    "errors": [str(cleanup_exc)],
+                }
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except RuntimeError as exc:
@@ -2980,6 +3105,7 @@ def export_smart_theory_to_lichess_study() -> tuple:
             "chapter_strategy": chapter_strategy,
             "chapters_created": created_chapters,
             "chapters_created_count": len(created_chapters),
+            "cleanup": cleanup_result,
             "orientation": orientation,
             "export_meta": {
                 "chapter_strategy": chapter_strategy,
