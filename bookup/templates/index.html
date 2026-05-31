@@ -629,8 +629,17 @@
         <h2 class="section-title">Smart Theory Generator</h2>
         <div class="smart-theory-layout">
           <article class="card">
+            <div class="smart-theory-guidance">
+              <p>Choose a quick profile, verify the start source, then generate a practical tree you can save back into your repertoire.</p>
+              <div class="smart-theory-presets">
+                <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="balanced">Balanced</button>
+                <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="fast">Fast drill</button>
+                <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="deep">Deep prep</button>
+                <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="realistic">Most realistic</button>
+              </div>
+            </div>
             <div class="smart-theory-controls">
-              <label class="field compact"><span>Starting source</span><select id="smartTheoryStartingSource"><option value="starting_position">Starting position</option><option value="current_board">Current board position</option><option value="saved_line">Saved line</option><option value="selected_move">Selected move in saved line</option><option value="imported_pgn">Imported PGN context</option><option value="custom_fen">Custom FEN</option></select></label>
+              <label class="field compact"><span>Starting source</span><select id="smartTheoryStartingSource"><option value="starting_position">Starting position</option><option value="current_board">Current board position</option><option value="saved_line">Saved line</option><option value="selected_move">Selected generated move</option><option value="imported_pgn">Imported PGN context</option><option value="custom_fen">Custom FEN</option></select></label>
               <label class="field compact"><span>My color</span><select id="smartTheoryMyColor"><option value="white">White</option><option value="black">Black</option></select></label>
               <label class="field compact"><span>Opponent accuracy</span><select id="smartTheoryOpponentAccuracy"><option value="mixed">Mixed realistic</option><option value="grandmaster">Grandmaster</option><option value="strong_club">Strong club player</option><option value="club">Club player</option><option value="beginner_intermediate">Beginner/intermediate</option></select></label>
               <label class="field compact"><span>Engine depth</span><input id="smartTheoryDepth" type="number" min="10" max="28" value="18"></label>
@@ -656,6 +665,7 @@
             </div>
             <div id="smartTheoryStatus" class="line-note">Idle</div>
             <div id="smartTheoryProgress" class="line-note">No generation in progress.</div>
+            <div id="smartTheoryRunSummary" class="stack empty">Run summary will show here.</div>
             <div class="mini-board-wrap">
               <div id="smartTheoryMiniBoard" class="mini-board-grid empty">Generate or select a node to view the board.</div>
             </div>

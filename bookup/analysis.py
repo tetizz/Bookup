@@ -2104,10 +2104,11 @@ def generate_smart_theory_tree(
     *,
     payload: dict[str, Any] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
-    status_callback: Callable[[str, str, int, int], None] | None = None,
+    status_callback: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     # Smart Theory keeps all eval math in White's perspective so a positive score
     # always means White is better, regardless of side to move.
+    generation_started_at = time.time()
     request = payload or {}
     my_color = "black" if str(request.get("my_color", "white")).strip().lower() == "black" else "white"
     opponent_accuracy = str(request.get("opponent_accuracy", "mixed")).strip().lower() or "mixed"
@@ -2505,14 +2506,22 @@ def generate_smart_theory_tree(
                     },
                 )
 
+    if not cancelled() and len(node_list) <= 1:
+        warnings.append(
+            "No candidate moves were generated beyond the root position. "
+            "Try a lower depth/time, disable ECO-only mode, or broaden sidelines."
+        )
     phase = "complete" if not cancelled() else "stopped"
+    generation_seconds = round(max(0.0, time.time() - generation_started_at), 3)
     cb(phase, "Smart theory generation complete." if phase == "complete" else "Smart theory generation stopped.")
     return {
         "status": phase,
         "generation_state": phase,
+        "generation_seconds": generation_seconds,
         "positions_done": positions_done,
         "positions_total": positions_total_hint,
         "root_id": root_id,
+        "nodes_total": len(node_list),
         "nodes": node_list,
         "tree": nodes,
         "warnings": warnings[:120],
