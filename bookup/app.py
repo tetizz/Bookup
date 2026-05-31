@@ -851,6 +851,12 @@ def _smart_tree_chapter_exports(
         tail = sans[-6:]
         return " ".join(tail)
 
+    def _chapter_title(core_title: str) -> str:
+        title = str(core_title or "").strip()
+        if not title:
+            title = "Smart Theory Line"
+        return title[:100]
+
     def _unknown_focus_anchors() -> list[dict[str, Any]]:
         weak_class_order = {"blunder": 0, "mistake": 1, "inaccuracy": 2}
 
@@ -910,29 +916,29 @@ def _smart_tree_chapter_exports(
                 focus_bits.append(f"after {path_caption}")
             focus_label = " | ".join(focus_bits)
             if opening_name:
-                return f"{chapter_name_base} | {opening_name} | {focus_label}"
-            return f"{chapter_name_base} | {focus_label}"
+                return _chapter_title(f"{opening_name} | {focus_label}")
+            return _chapter_title(focus_label)
 
         # Generate human chapter titles for common practical setups before
         # falling back to generic move/path labels.
         if "king" in opening_lower and "indian" in opening_lower and "attack" in opening_lower:
             if re.search(r"\bc5\b", path_lower):
-                return f"{chapter_name_base} | KIA vs Sicilian Setup"
+                return _chapter_title("KIA vs Sicilian Setup")
             if re.search(r"\bd5\b", path_lower):
-                return f"{chapter_name_base} | King's Indian Attack vs ...d5"
+                return _chapter_title("King's Indian Attack vs ...d5")
             if re.search(r"\be5\b", path_lower):
-                return f"{chapter_name_base} | King's Indian Attack vs ...e5"
-            return f"{chapter_name_base} | King's Indian Attack Main Setup"
+                return _chapter_title("King's Indian Attack vs ...e5")
+            return _chapter_title("King's Indian Attack Main Setup")
         if "king" in opening_lower and "indian" in opening_lower and "defense" in opening_lower:
             if re.search(r"\bbf4\b", path_lower):
-                return f"{chapter_name_base} | KID vs London Setup"
-            return f"{chapter_name_base} | King's Indian Defense Main Setup"
+                return _chapter_title("KID vs London Setup")
+            return _chapter_title("King's Indian Defense Main Setup")
         if "pirc" in opening_lower:
             if re.search(r"\be5\b", path_lower):
-                return f"{chapter_name_base} | Pirc when Black plays ...e5"
+                return _chapter_title("Pirc when Black plays ...e5")
             if re.search(r"\be4\b", path_lower):
-                return f"{chapter_name_base} | Pirc vs e4"
-            return f"{chapter_name_base} | Pirc Main Setup"
+                return _chapter_title("Pirc vs e4")
+            return _chapter_title("Pirc Main Setup")
 
         style_tokens: list[str] = [move_name]
         if path_caption:
@@ -941,8 +947,8 @@ def _smart_tree_chapter_exports(
             style_tokens.append(classification)
         style_name = " | ".join(style_tokens)
         if opening_name:
-            return f"{chapter_name_base} | {opening_name} | {style_name}"
-        return f"{chapter_name_base} | {style_name}"
+            return _chapter_title(f"{opening_name} | {style_name}")
+        return _chapter_title(style_name)
 
     anchor_nodes = first_moves[:16]
     if normalized_strategy == "unknown_focus":
@@ -961,7 +967,7 @@ def _smart_tree_chapter_exports(
         chapter_meta = dict(meta or {})
         chapter_meta["anchor_node_id"] = str(node.get("id", "") or "")
         chapter_meta["anchor_classification"] = str(node.get("classification", "") or "")
-        chapters.append({"name": label[:100], "pgn": pgn_text, "meta": chapter_meta})
+        chapters.append({"name": _chapter_title(label), "pgn": pgn_text, "meta": chapter_meta})
     return chapters
 
 
