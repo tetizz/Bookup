@@ -306,6 +306,12 @@ h1 {
   border-color: rgba(125, 162, 255, 0.5);
 }
 
+.smart-tree-row.selected {
+  border-color: rgba(125, 162, 255, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(125, 162, 255, 0.4), 0 10px 24px rgba(15, 30, 58, 0.28);
+  background: rgba(22, 32, 49, 0.86);
+}
+
 .summary-action-row .launch-btn,
 .summary-action-row .ghost-btn {
   margin-top: 0;

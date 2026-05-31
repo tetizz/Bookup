@@ -332,6 +332,7 @@ async function init() {
   if (el.smartTheoryAvoidAbsurd) el.smartTheoryAvoidAbsurd.checked = true;
   if (el.smartTheoryEcoOnly) el.smartTheoryEcoOnly.checked = false;
   if (el.smartTheoryCacheEvals) el.smartTheoryCacheEvals.checked = true;
+  setSmartTheoryControlsRunning(false);
   syncStudySettingsFromSetup();
 
   el.analyze.addEventListener("click", runAnalysis);
@@ -6909,16 +6910,23 @@ function renderSmartTheoryTree() {
     .slice(0, 500);
   el.smartTheoryTree.className = "stack";
   el.smartTheoryTree.innerHTML = rows.map((node) => `
-    <div class="smart-tree-row" data-smart-node="${escapeHtml(node.id)}">
+    <div class="smart-tree-row ${String(node.id) === String(state.smartTheorySelectedNodeId) ? "selected" : ""}" data-smart-node="${escapeHtml(node.id)}" role="button" tabindex="0">
       <strong>${escapeHtml(`${node.ply}. ${node.san || ""}`)}</strong>
       <div class="tree-meta">${escapeHtml(node.classification || "")} · ${escapeHtml(formatEval(node.evalAfter || 0))} · ${escapeHtml(node.openingName || "")}</div>
       <div class="line-note">${escapeHtml(node.theoryExplanation || "")}</div>
     </div>
   `).join("");
   el.smartTheoryTree.querySelectorAll("[data-smart-node]").forEach((item) => {
-    item.addEventListener("click", () => {
+    const onSelect = () => {
       const nodeId = item.getAttribute("data-smart-node") || "";
       selectSmartTheoryNode(nodeId);
+    };
+    item.addEventListener("click", onSelect);
+    item.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onSelect();
+      }
     });
   });
 }
@@ -6984,7 +6992,51 @@ function selectSmartTheoryNode(nodeId) {
       <div><strong>Best response</strong>: ${escapeHtml(node.bestMoveSan || node.bestMoveUci || "")}</div>
     `;
   }
+  el.smartTheoryTree?.querySelectorAll?.("[data-smart-node]")?.forEach?.((row) => {
+    const rowId = row.getAttribute("data-smart-node");
+    row.classList.toggle("selected", String(rowId) === String(node.id));
+  });
   renderSmartTheoryMiniBoard(node.fen || START_FEN);
+}
+
+function setSmartTheoryControlsRunning(running) {
+  const disabled = Boolean(running);
+  [
+    el.smartTheoryStartingSource,
+    el.smartTheoryMyColor,
+    el.smartTheoryOpponentAccuracy,
+    el.smartTheoryDepth,
+    el.smartTheoryMoveTime,
+    el.smartTheoryReplies,
+    el.smartTheoryMaxPly,
+    el.smartTheoryMaxPositions,
+    el.smartTheoryCustomFen,
+    el.smartTheoryIncludeRare,
+    el.smartTheoryIncludeMistakes,
+    el.smartTheoryIncludeBlunders,
+    el.smartTheoryAvoidAbsurd,
+    el.smartTheoryEcoOnly,
+    el.smartTheoryCacheEvals,
+    el.smartTheoryImport,
+    el.smartTheoryClear,
+    el.smartTheoryGenerate,
+  ].forEach((input) => {
+    if (input) input.disabled = disabled;
+  });
+  if (el.smartTheoryStop) el.smartTheoryStop.disabled = !disabled;
+  if (el.smartTheoryExport) el.smartTheoryExport.disabled = disabled || !state.smartTheoryTree;
+}
+
+function ensureSmartTheorySelection() {
+  const nodes = state.smartTheoryTree?.nodes;
+  if (!Array.isArray(nodes) || !nodes.length) return;
+  const hasSelection = nodes.some((node) => String(node.id) === String(state.smartTheorySelectedNodeId));
+  if (hasSelection) {
+    selectSmartTheoryNode(state.smartTheorySelectedNodeId);
+    return;
+  }
+  const preferred = nodes.find((node) => String(node.id) !== "root") || nodes.find((node) => String(node.id) === "root");
+  if (preferred?.id) selectSmartTheoryNode(preferred.id);
 }
 
 function clearSmartTheoryState() {
@@ -6995,6 +7047,7 @@ function clearSmartTheoryState() {
   state.smartTheoryJobId = "";
   state.smartTheoryTree = null;
   state.smartTheorySelectedNodeId = "";
+  setSmartTheoryControlsRunning(false);
   if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Idle";
   if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "No generation in progress.";
   if (el.smartTheoryCurrentMeta) { el.smartTheoryCurrentMeta.className = "stack empty"; el.smartTheoryCurrentMeta.textContent = "No node selected."; }
@@ -7018,26 +7071,33 @@ function smartTheoryStateLabel(status) {
   return "Idle";
 }
 
-function setSmartTheoryStatus(status, message = "", done = 0, total = 0) {
+function setSmartTheoryStatus(status, message = "", done = 0, total = 0, partialTotalNodes = 0) {
+  const normalized = String(status || "").toLowerCase();
   if (el.smartTheoryStatus) {
-    el.smartTheoryStatus.textContent = smartTheoryStateLabel(status);
+    el.smartTheoryStatus.textContent = smartTheoryStateLabel(normalized);
+  }
+  if (["generating", "analyzing", "stopping"].includes(normalized)) {
+    setSmartTheoryControlsRunning(true);
+  } else if (["complete", "stopped", "error", "idle"].includes(normalized)) {
+    setSmartTheoryControlsRunning(false);
   }
   if (el.smartTheoryProgress) {
-    if (String(status).toLowerCase() === "analyzing") {
+    if (normalized === "analyzing") {
       const safeTotal = Number(total || 0);
       const safeDone = Number(done || 0);
-      el.smartTheoryProgress.textContent = `Analyzing position ${safeDone}${safeTotal ? ` of ${safeTotal}` : ""}. Live nodes will appear as they are generated.`;
+      const safeNodes = Number(partialTotalNodes || state.smartTheoryTree?.nodes?.length || 0);
+      el.smartTheoryProgress.textContent = `Analyzing position ${safeDone}${safeTotal ? ` of ${safeTotal}` : ""}. Generated nodes: ${safeNodes}.`;
       return;
     }
     if (message) {
       el.smartTheoryProgress.textContent = String(message);
       return;
     }
-    if (String(status).toLowerCase() === "idle") {
+    if (normalized === "idle") {
       el.smartTheoryProgress.textContent = "No generation in progress.";
       return;
     }
-    el.smartTheoryProgress.textContent = `${smartTheoryStateLabel(status)}.`;
+    el.smartTheoryProgress.textContent = `${smartTheoryStateLabel(normalized)}.`;
   }
 }
 
@@ -7071,14 +7131,17 @@ async function pollSmartTheoryJob() {
     const statusPayload = await statusResponse.json();
     if (!statusResponse.ok) throw new Error(statusPayload.error || "Could not read smart theory status.");
     const status = String(statusPayload.status || "").toLowerCase();
-    setSmartTheoryStatus(status, statusPayload.message || "", statusPayload.positions_done || 0, statusPayload.positions_total || 0);
+    setSmartTheoryStatus(
+      status,
+      statusPayload.message || "",
+      statusPayload.positions_done || 0,
+      statusPayload.positions_total || 0,
+      statusPayload.partial_total_nodes || 0,
+    );
     if (Array.isArray(statusPayload.partial_nodes) && statusPayload.partial_nodes.length) {
       mergeSmartTheoryPartialNodes(statusPayload.partial_nodes);
       renderSmartTheoryTree();
-      if (!state.smartTheorySelectedNodeId || state.smartTheorySelectedNodeId === "root") {
-        const firstNodeId = state.smartTheoryTree?.nodes?.find?.((node) => node.id !== "root")?.id || "";
-        if (firstNodeId) selectSmartTheoryNode(firstNodeId);
-      }
+      ensureSmartTheorySelection();
     }
     if (status === "complete" || status === "stopped") {
       const resultResponse = await fetch(`/api/smart-theory-result/${encodeURIComponent(state.smartTheoryJobId)}`);
@@ -7090,8 +7153,7 @@ async function pollSmartTheoryJob() {
       if (!resultResponse.ok) throw new Error(resultPayload.error || "Could not fetch smart theory result.");
       state.smartTheoryTree = resultPayload;
       renderSmartTheoryTree();
-      const firstNodeId = resultPayload?.nodes?.find?.((node) => node.id !== "root")?.id || "root";
-      selectSmartTheoryNode(firstNodeId);
+      ensureSmartTheorySelection();
       const warnCount = Array.isArray(resultPayload?.warnings) ? resultPayload.warnings.length : 0;
       if (el.smartTheoryProgress) {
         el.smartTheoryProgress.textContent = `Analyzed ${Number(resultPayload.positions_done || 0)} of ${Number(resultPayload.positions_total || 0)} positions.${warnCount ? ` Warnings: ${warnCount}.` : ""}`;
@@ -7127,6 +7189,8 @@ async function runSmartTheoryGeneration() {
   setSmartTheoryStatus("generating", "Starting Smart Theory generation...");
   const jobId = `smart-${Date.now()}`;
   state.smartTheoryJobId = jobId;
+  state.smartTheoryTree = null;
+  state.smartTheorySelectedNodeId = "";
   const fenInput = String(el.smartTheoryCustomFen?.value || "").trim();
   const startSource = String(el.smartTheoryStartingSource?.value || "current_board");
   let startFen = normalizeFen(state.boardFen || START_FEN);
@@ -7171,6 +7235,19 @@ async function runSmartTheoryGeneration() {
     cache_evaluations: Boolean(el.smartTheoryCacheEvals?.checked),
   };
   try {
+    renderSmartTheoryMiniBoard(startFen);
+    if (el.smartTheoryCurrentMeta) {
+      el.smartTheoryCurrentMeta.className = "stack";
+      el.smartTheoryCurrentMeta.textContent = "Preparing root position and waiting for first generated move...";
+    }
+    if (el.smartTheoryMoveList) {
+      el.smartTheoryMoveList.className = "stack empty";
+      el.smartTheoryMoveList.textContent = "Move list will appear after the first generated node.";
+    }
+    if (el.smartTheoryOpeningMeta) {
+      el.smartTheoryOpeningMeta.className = "stack";
+      el.smartTheoryOpeningMeta.innerHTML = `<div><strong>Start FEN</strong>: <span class="mono-inline">${escapeHtml(startFen)}</span></div>`;
+    }
     const response = await fetch("/api/generate-smart-theory", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -7221,9 +7298,10 @@ async function importSmartTheoryJson(event) {
     if (!Array.isArray(parsed?.nodes)) throw new Error("Invalid smart theory JSON.");
     state.smartTheoryTree = parsed;
     renderSmartTheoryTree();
-    selectSmartTheoryNode("root");
+    ensureSmartTheorySelection();
     if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Imported";
     if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = `Loaded ${parsed.nodes.length} nodes from JSON.`;
+    setSmartTheoryControlsRunning(false);
   } catch (error) {
     if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Import error";
     if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error.message || "Could not import JSON.");

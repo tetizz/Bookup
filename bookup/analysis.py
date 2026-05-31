@@ -2801,7 +2801,27 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
 
     frequency = node.occurrences
     importance = round(min(100.0, (frequency * 8) + max((database_moves[0]["popularity"] if database_moves else 0.0), 0.0) * 1.5), 1)
-    confidence = round(min(100.0, 35 + (frequency * 4)), 1)
+    repeat_mistake_count = top_played_count if top_played_uci != best_move_uci else 0
+    best_repeat_ratio = (best_repeat_count / frequency) if frequency else 0.0
+    repeat_mistake_ratio = (repeat_mistake_count / frequency) if frequency else 0.0
+    confidence_frequency_component = min(35.0, float(frequency) * 2.2)
+    confidence_execution_component = max(0.0, min(45.0, best_repeat_ratio * 45.0))
+    confidence_mistake_penalty = max(0.0, min(25.0, repeat_mistake_ratio * 25.0))
+    confidence_eval_penalty = max(0.0, min(20.0, float(value_lost_cp) / 10.0))
+    confidence = round(
+        max(
+            0.0,
+            min(
+                100.0,
+                18.0
+                + confidence_frequency_component
+                + confidence_execution_component
+                - confidence_mistake_penalty
+                - confidence_eval_penalty,
+            ),
+        ),
+        1,
+    )
     priority = round((frequency * 10) + min(value_lost_cp / 10, 60) + (25 if line_status == "needs_work" else 0) - (40 if is_known else 0), 1)
     intro_line_uci = list(node.play_uci)
     intro_line_san = _uci_line_sans_from_start(intro_line_uci)
@@ -2926,8 +2946,6 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
                 "has_branch_line": True,
             },
         )
-    repeat_mistake_count = top_played_count if top_played_uci != best_move_uci else 0
-
     explanation = insight["coach_explanation"]
     line_label = _line_label(node.trigger_move, node.play_uci)
     queue_explainer = _build_queue_explainer(
@@ -2988,6 +3006,15 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
         "frequency": frequency,
         "importance": importance,
         "confidence": confidence,
+        "confidence_breakdown": {
+            "base": 18.0,
+            "frequency_component": round(confidence_frequency_component, 1),
+            "execution_component": round(confidence_execution_component, 1),
+            "mistake_penalty": round(confidence_mistake_penalty, 1),
+            "eval_penalty": round(confidence_eval_penalty, 1),
+            "best_repeat_ratio": round(best_repeat_ratio, 3),
+            "repeat_mistake_ratio": round(repeat_mistake_ratio, 3),
+        },
         "priority": priority,
         "queue_explainer": queue_explainer,
         "your_top_move": top_played,
@@ -3199,25 +3226,28 @@ def _build_health_dashboard(
             {
                 "label": "Repertoire health",
                 "value": f"{average_confidence:.0f}",
-                "detail": "average confidence across analyzed repeated positions",
+                "detail": (
+                    f"Average confidence {average_confidence:.1f} across {total} repeated positions "
+                    "(confidence blends frequency, correct-repeat ratio, mistakes, and eval loss)"
+                ),
                 "tone": status,
             },
             {
                 "label": "Due today",
                 "value": len(queue_due),
-                "detail": f"{due_share}% of analyzed positions need repeated-mistake review",
+                "detail": f"{len(queue_due)} of {total} positions ({due_share}%) need repeated-mistake review now",
                 "tone": "urgent" if queue_due else "quiet",
             },
             {
                 "label": "Known coverage",
                 "value": f"{known_share:.0f}%",
-                "detail": f"{len(known_lines)} known lines out of {total}",
+                "detail": f"{len(known_lines)} known lines out of {total} tracked repeated positions",
                 "tone": "strong" if known_share >= 35 else "quiet",
             },
             {
                 "label": "Review load",
                 "value": review_load,
-                "detail": "suggested focused lines for today's session",
+                "detail": f"Suggested session size = due ({len(queue_due)}) + min(new, 8) ({min(len(queue_new), 8)})",
                 "tone": "heavy" if review_load >= 16 else "stable",
             },
         ],
