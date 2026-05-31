@@ -2106,6 +2106,8 @@ def generate_smart_theory_tree(
     is_cancelled: Callable[[], bool] | None = None,
     status_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> dict[str, Any]:
+    # Smart Theory keeps all eval math in White's perspective so a positive score
+    # always means White is better, regardless of side to move.
     request = payload or {}
     my_color = "black" if str(request.get("my_color", "white")).strip().lower() == "black" else "white"
     opponent_accuracy = str(request.get("opponent_accuracy", "mixed")).strip().lower() or "mixed"
@@ -2119,6 +2121,7 @@ def generate_smart_theory_tree(
     eco_only_mode = bool(request.get("eco_only_mode", False))
     cache_evals = bool(request.get("cache_evaluations", True))
     start_play_uci = [str(item) for item in (request.get("start_play_uci") or []) if str(item)]
+    reference_user_move_uci = str(request.get("reference_user_move_uci", "") or "").strip()
     starting_source = str(request.get("starting_source", "current_board") or "current_board")
     time_sec = request.get("engine_movetime_sec")
     try:
@@ -2280,6 +2283,8 @@ def generate_smart_theory_tree(
     visited.add(root_node["normalizedFen"])
 
     cb("generating", "Building smart theory tree...")
+    # Use the Stockfish worker pool + batched queue expansion so large trees stay
+    # responsive instead of serially blocking one long engine loop.
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="bookup-smart-theory") as executor:
       while queue and len(node_list) < max_positions:
         if cancelled():
@@ -2351,6 +2356,8 @@ def generate_smart_theory_tree(
                     candidate_moves.append((mv, san, cp, line, popularity, games, category, db_moves))
 
                 def _opp_weight(item: tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]) -> float:
+                    # Blend engine quality with practical popularity so opponent
+                    # lines feel human and mode-dependent instead of perfect-only.
                     _, _, cp, _, pop, games, category, _ = item
                     eval_penalty = abs(cp - eval_before) / 100.0
                     pop_factor = pop / 100.0
@@ -2413,6 +2420,21 @@ def generate_smart_theory_tree(
                 line_pv = line_meta.get("pv") or []
                 pv_san, pv_uci = _pv_sans(current_board, line_pv)
                 move_class = user_category(eval_swing) if user_to_move else category
+                original_user_move = ""
+                corrected_move = ""
+                correction_note = ""
+                if user_to_move and reference_user_move_uci and ply == 0:
+                    original_user_move = reference_user_move_uci
+                    if reference_user_move_uci != move.uci():
+                        corrected_move = move.uci()
+                        candidate = next((line for line in lines if (line.get("pv") or [None])[0] and (line.get("pv") or [None])[0].uci() == reference_user_move_uci), None)
+                        ref_cp = score_white_cp(candidate, current_board.turn) if candidate else eval_before
+                        ref_delta = abs(eval_before - ref_cp)
+                        ref_class = user_category(ref_delta)
+                        correction_note = (
+                            f" Correction: your saved move {reference_user_move_uci} is classified as {ref_class}. "
+                            f"Use {move.uci()} instead."
+                        )
                 theory, plan, opp_idea = _smart_rule_explanation(
                     current_board,
                     move,
@@ -2422,6 +2444,8 @@ def generate_smart_theory_tree(
                     classification=move_class,
                     eval_swing=eval_swing,
                 )
+                if correction_note:
+                    theory = f"{theory}{correction_note}"
                 node_counter += 1
                 node_id = f"n{node_counter}"
                 node = {
@@ -2449,9 +2473,9 @@ def generate_smart_theory_tree(
                     "opponentAccuracy": opponent_accuracy,
                     "isUserSide": bool(user_to_move),
                     "isOpponentSide": bool(not user_to_move),
-                    "isCorrectedMove": bool(user_to_move and move_class in {"Inaccuracy", "Mistake", "Blunder"}),
-                    "originalUserMove": "",
-                    "correctedMove": top_best_uci if user_to_move and top_best_uci and top_best_uci != move.uci() else "",
+                    "isCorrectedMove": bool(corrected_move),
+                    "originalUserMove": original_user_move,
+                    "correctedMove": corrected_move,
                     "theoryExplanation": theory,
                     "planForUser": plan,
                     "opponentIdea": opp_idea if not user_to_move else "",

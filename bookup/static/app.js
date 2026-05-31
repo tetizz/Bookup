@@ -155,6 +155,7 @@ const el = {
   smartTheoryProgress: document.getElementById("smartTheoryProgress"),
   smartTheoryMiniBoard: document.getElementById("smartTheoryMiniBoard"),
   smartTheoryCurrentMeta: document.getElementById("smartTheoryCurrentMeta"),
+  smartTheoryMoveList: document.getElementById("smartTheoryMoveList"),
   smartTheoryOpeningMeta: document.getElementById("smartTheoryOpeningMeta"),
   smartTheoryRecommendation: document.getElementById("smartTheoryRecommendation"),
   smartTheorySaveCorrection: document.getElementById("smartTheorySaveCorrectionBtn"),
@@ -296,6 +297,7 @@ const state = {
   smartTheoryJobId: "",
   smartTheoryTree: null,
   smartTheorySelectedNodeId: "",
+  smartTheoryPollTimer: 0,
 };
 
 async function init() {
@@ -6829,6 +6831,21 @@ function smartTheoryNodeMeta(node) {
   return `${node.ply || 0}. ${node.san || "(root)"} · ${node.classification || ""} · Eval ${formatEval(node.evalAfter || 0)}${open ? ` · ${open}` : ""}`;
 }
 
+function smartTheoryMovePath(tree, node) {
+  if (!tree || !Array.isArray(tree.nodes) || !node) return [];
+  const byId = new Map(tree.nodes.map((item) => [String(item.id), item]));
+  const path = [];
+  let cursor = node;
+  let guard = 0;
+  while (cursor && String(cursor.id) !== "root" && guard < 300) {
+    path.push(cursor);
+    cursor = byId.get(String(cursor.parentId || ""));
+    guard += 1;
+  }
+  path.reverse();
+  return path;
+}
+
 function renderSmartTheoryTree() {
   if (!el.smartTheoryTree) return;
   const tree = state.smartTheoryTree;
@@ -6866,6 +6883,18 @@ function selectSmartTheoryNode(nodeId) {
   if (el.smartTheoryCurrentMeta) {
     el.smartTheoryCurrentMeta.className = "stack";
     el.smartTheoryCurrentMeta.textContent = smartTheoryNodeMeta(node);
+  }
+  if (el.smartTheoryMoveList) {
+    const path = smartTheoryMovePath(tree, node);
+    if (!path.length) {
+      el.smartTheoryMoveList.className = "stack empty";
+      el.smartTheoryMoveList.textContent = "Move list will show here.";
+    } else {
+      el.smartTheoryMoveList.className = "stack";
+      el.smartTheoryMoveList.innerHTML = path
+        .map((item, idx) => `${idx + 1}. ${escapeHtml(item.san || item.uci || "")} (${escapeHtml(item.classification || "")})`)
+        .join("<br>");
+    }
   }
   if (el.smartTheoryOpeningMeta) {
     el.smartTheoryOpeningMeta.className = "stack";
@@ -6910,12 +6939,17 @@ function selectSmartTheoryNode(nodeId) {
 }
 
 function clearSmartTheoryState() {
+  if (state.smartTheoryPollTimer) {
+    window.clearTimeout(state.smartTheoryPollTimer);
+    state.smartTheoryPollTimer = 0;
+  }
   state.smartTheoryJobId = "";
   state.smartTheoryTree = null;
   state.smartTheorySelectedNodeId = "";
   if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Idle";
   if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "No generation in progress.";
   if (el.smartTheoryCurrentMeta) { el.smartTheoryCurrentMeta.className = "stack empty"; el.smartTheoryCurrentMeta.textContent = "No node selected."; }
+  if (el.smartTheoryMoveList) { el.smartTheoryMoveList.className = "stack empty"; el.smartTheoryMoveList.textContent = "Move list will show here."; }
   if (el.smartTheoryOpeningMeta) { el.smartTheoryOpeningMeta.className = "stack empty"; el.smartTheoryOpeningMeta.textContent = "Opening name, ECO, and current FEN will show here."; }
   if (el.smartTheoryRecommendation) { el.smartTheoryRecommendation.className = "stack empty"; el.smartTheoryRecommendation.textContent = "Best response and continuation will show here."; }
   if (el.smartTheoryOpponentReplies) { el.smartTheoryOpponentReplies.className = "stack empty"; el.smartTheoryOpponentReplies.textContent = "Opponent candidate replies will show here."; }
@@ -6924,9 +6958,103 @@ function clearSmartTheoryState() {
   renderSmartTheoryMiniBoard(START_FEN);
 }
 
+function smartTheoryStateLabel(status) {
+  const value = String(status || "").toLowerCase();
+  if (value === "analyzing") return "Analyzing position";
+  if (value === "generating") return "Generating";
+  if (value === "stopping") return "Stopping";
+  if (value === "complete") return "Complete";
+  if (value === "error") return "Error";
+  if (value === "stopped") return "Stopped";
+  return "Idle";
+}
+
+function setSmartTheoryStatus(status, message = "", done = 0, total = 0) {
+  if (el.smartTheoryStatus) {
+    el.smartTheoryStatus.textContent = smartTheoryStateLabel(status);
+  }
+  if (el.smartTheoryProgress) {
+    if (String(status).toLowerCase() === "analyzing") {
+      const safeTotal = Number(total || 0);
+      const safeDone = Number(done || 0);
+      el.smartTheoryProgress.textContent = `Analyzing position ${safeDone}${safeTotal ? ` of ${safeTotal}` : ""}.`;
+      return;
+    }
+    if (message) {
+      el.smartTheoryProgress.textContent = String(message);
+      return;
+    }
+    if (String(status).toLowerCase() === "idle") {
+      el.smartTheoryProgress.textContent = "No generation in progress.";
+      return;
+    }
+    el.smartTheoryProgress.textContent = `${smartTheoryStateLabel(status)}.`;
+  }
+}
+
+function scheduleSmartTheoryPoll(delayMs = 600) {
+  if (!state.smartTheoryJobId) return;
+  if (state.smartTheoryPollTimer) window.clearTimeout(state.smartTheoryPollTimer);
+  state.smartTheoryPollTimer = window.setTimeout(() => {
+    void pollSmartTheoryJob();
+  }, delayMs);
+}
+
+async function pollSmartTheoryJob() {
+  // Poll status frequently for lightweight progress updates; fetch the full
+  // tree payload only once the backend marks the job complete/stopped.
+  if (!state.smartTheoryJobId) return;
+  try {
+    const statusResponse = await fetch(`/api/smart-theory-status/${encodeURIComponent(state.smartTheoryJobId)}`);
+    const statusPayload = await statusResponse.json();
+    if (!statusResponse.ok) throw new Error(statusPayload.error || "Could not read smart theory status.");
+    const status = String(statusPayload.status || "").toLowerCase();
+    setSmartTheoryStatus(status, statusPayload.message || "", statusPayload.positions_done || 0, statusPayload.positions_total || 0);
+    if (status === "complete" || status === "stopped") {
+      const resultResponse = await fetch(`/api/smart-theory-result/${encodeURIComponent(state.smartTheoryJobId)}`);
+      const resultPayload = await resultResponse.json();
+      if (resultResponse.status === 202) {
+        scheduleSmartTheoryPoll(350);
+        return;
+      }
+      if (!resultResponse.ok) throw new Error(resultPayload.error || "Could not fetch smart theory result.");
+      state.smartTheoryTree = resultPayload;
+      renderSmartTheoryTree();
+      const firstNodeId = resultPayload?.nodes?.find?.((node) => node.id !== "root")?.id || "root";
+      selectSmartTheoryNode(firstNodeId);
+      const warnCount = Array.isArray(resultPayload?.warnings) ? resultPayload.warnings.length : 0;
+      if (el.smartTheoryProgress) {
+        el.smartTheoryProgress.textContent = `Analyzed ${Number(resultPayload.positions_done || 0)} of ${Number(resultPayload.positions_total || 0)} positions.${warnCount ? ` Warnings: ${warnCount}.` : ""}`;
+      }
+      if (state.smartTheoryPollTimer) {
+        window.clearTimeout(state.smartTheoryPollTimer);
+        state.smartTheoryPollTimer = 0;
+      }
+      return;
+    }
+    if (status === "error") {
+      if (state.smartTheoryPollTimer) {
+        window.clearTimeout(state.smartTheoryPollTimer);
+        state.smartTheoryPollTimer = 0;
+      }
+      return;
+    }
+    scheduleSmartTheoryPoll(500);
+  } catch (error) {
+    setSmartTheoryStatus("error", String(error?.message || "Smart theory polling failed."));
+    if (state.smartTheoryPollTimer) {
+      window.clearTimeout(state.smartTheoryPollTimer);
+      state.smartTheoryPollTimer = 0;
+    }
+  }
+}
+
 async function runSmartTheoryGeneration() {
-  if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Generating";
-  if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Analyzing positions...";
+  if (state.smartTheoryPollTimer) {
+    window.clearTimeout(state.smartTheoryPollTimer);
+    state.smartTheoryPollTimer = 0;
+  }
+  setSmartTheoryStatus("generating", "Starting Smart Theory generation...");
   const jobId = `smart-${Date.now()}`;
   state.smartTheoryJobId = jobId;
   const fenInput = String(el.smartTheoryCustomFen?.value || "").trim();
@@ -6942,11 +7070,22 @@ async function runSmartTheoryGeneration() {
       startPlayUci = lesson.continuation_moves_uci.slice(0, 24);
     }
   }
+  const referenceUserMoveUci = (() => {
+    const lesson = currentLesson();
+    if (!lesson) return "";
+    return String(
+      lesson.your_top_move_uci
+      || lesson.preferred_branch_uci
+      || lesson.best_reply_uci
+      || ""
+    ).trim();
+  })();
   const payload = {
     job_id: jobId,
     fen: startFen,
     starting_source: startSource,
     start_play_uci: startPlayUci,
+    reference_user_move_uci: referenceUserMoveUci,
     my_color: String(el.smartTheoryMyColor?.value || "white"),
     opponent_accuracy: String(el.smartTheoryOpponentAccuracy?.value || "mixed"),
     depth: Number(el.smartTheoryDepth?.value || defaults.depth || 18),
@@ -6969,33 +7108,26 @@ async function runSmartTheoryGeneration() {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Could not generate smart theory.");
-    state.smartTheoryTree = data;
-    renderSmartTheoryTree();
-    const firstNodeId = data?.nodes?.find?.((node) => node.id !== "root")?.id || "root";
-    selectSmartTheoryNode(firstNodeId);
-    if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = String(data.status || "Complete");
-    if (el.smartTheoryProgress) {
-      const warnCount = Array.isArray(data?.warnings) ? data.warnings.length : 0;
-      el.smartTheoryProgress.textContent = `Analyzed ${Number(data.positions_done || 0)} of ${Number(data.positions_total || 0)} positions.${warnCount ? ` Warnings: ${warnCount}.` : ""}`;
-    }
+    state.smartTheoryJobId = String(data.job_id || jobId);
+    setSmartTheoryStatus(data.status || "generating", data.message || "Generating...");
+    scheduleSmartTheoryPoll(250);
   } catch (error) {
-    if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Error";
-    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error.message || "Smart theory generation failed.");
+    setSmartTheoryStatus("error", String(error.message || "Smart theory generation failed."));
   }
 }
 
 async function stopSmartTheoryGeneration() {
   if (!state.smartTheoryJobId) return;
-  if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Stopping";
+  setSmartTheoryStatus("stopping", "Stopping generation...");
   try {
     await fetch("/api/stop-smart-theory", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ job_id: state.smartTheoryJobId }),
     });
-    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Stop requested.";
+    scheduleSmartTheoryPoll(250);
   } catch (_error) {
-    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Stop request failed.";
+    setSmartTheoryStatus("error", "Stop request failed.");
   }
 }
 

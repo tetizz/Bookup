@@ -473,6 +473,8 @@ def _smart_theory_state_name(raw_status: str) -> str:
         return "Stopping"
     if status == "complete":
         return "Complete"
+    if status == "stopped":
+        return "Complete"
     if status in {"failed", "error"}:
         return "Error"
     return "Idle"
@@ -503,6 +505,8 @@ def _run_smart_theory_job(
     settings: EngineSettings,
     lichess_token: str,
 ) -> None:
+    # Background worker for one Smart Theory job. We keep job state in-memory so
+    # the UI can poll lightweight status updates without blocking the request thread.
     def _status_update(phase: str, message: str, done: int, total: int) -> None:
         with SMART_THEORY_JOBS_LOCK:
             job = SMART_THEORY_JOBS.get(job_id)
@@ -2010,6 +2014,8 @@ def generate_smart_theory() -> tuple:
         }
         _trim_smart_theory_jobs_locked()
 
+    # Start generation asynchronously so the tab can show real-time progress
+    # ("Generating" -> "Analyzing" -> "Complete/Error") and respond to Stop.
     worker = threading.Thread(
         target=_run_smart_theory_job,
         kwargs={
@@ -2056,6 +2062,8 @@ def smart_theory_result(job_id: str) -> tuple:
         error_text = str(job.get("error", "") or "")
     if status == "error":
         return jsonify({**payload, "error": error_text or payload.get("message")}), 500
+    # Result polling stays separate from status polling so the UI can update
+    # progress frequently without repeatedly transferring the full tree payload.
     if result is None:
         return jsonify(payload), 202
     return jsonify({"job_id": key, **result}), 200
