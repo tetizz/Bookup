@@ -1957,6 +1957,21 @@ def generate_theory() -> tuple:
 
     config = load_config()
     settings = request_engine_settings(payload, config)
+    # Keep the legacy linear theory generator responsive regardless of heavy
+    # global import settings. This path extends one line, so one worker is enough.
+    try:
+        override_time = float(payload.get("engine_movetime_sec", payload.get("think_time_sec", settings.think_time_sec)) or settings.think_time_sec)
+    except (TypeError, ValueError):
+        override_time = settings.think_time_sec
+    settings = EngineSettings(
+        path=settings.path,
+        depth=max(10, min(24, int(settings.depth))),
+        threads=max(1, min(8, int(settings.threads))),
+        hash_mb=max(256, min(4096, int(settings.hash_mb))),
+        multipv=max(1, min(5, int(settings.multipv))),
+        think_time_sec=max(0.05, min(5.0, float(override_time))),
+        parallel_workers=1,
+    )
     try:
         engine = shared_engine_for(settings)
         theory = generate_theory_line(
@@ -1991,6 +2006,17 @@ def generate_smart_theory() -> tuple:
 
     config = load_config()
     settings = request_engine_settings(payload, config)
+    # Smart Theory is tree-based, so we allow multiple workers, but clamp to
+    # safe interactive limits so status polling and UI controls stay responsive.
+    settings = EngineSettings(
+        path=settings.path,
+        depth=max(10, min(26, int(settings.depth))),
+        threads=max(2, min(16, int(settings.threads))),
+        hash_mb=max(512, min(6144, int(settings.hash_mb))),
+        multipv=max(2, min(8, int(settings.multipv))),
+        think_time_sec=max(0.05, min(8.0, float(settings.think_time_sec))),
+        parallel_workers=max(1, min(4, int(settings.parallel_workers))),
+    )
     job_id = str(payload.get("job_id") or f"smart-{int(time.time() * 1000)}")
     if not job_id:
         return jsonify({"error": "job_id is required."}), 400

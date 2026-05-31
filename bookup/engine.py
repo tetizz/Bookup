@@ -89,10 +89,35 @@ class EngineSession:
     def close(self) -> None:
         if self._engine is None:
             return
+        engine = self._engine
+        self._engine = None
+
+        # Engine quit can occasionally stall during process teardown. Run quit
+        # with a short guard and then force-close transport if needed so app
+        # shutdown and test scripts do not hang indefinitely.
+        done = threading.Event()
+
+        def _quit_engine() -> None:
+            try:
+                engine.quit()
+            except Exception:
+                pass
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_quit_engine, daemon=True, name="bookup-engine-quit")
+        thread.start()
         try:
-            self._engine.quit()
-        finally:
-            self._engine = None
+            thread.join(timeout=2.0)
+        except Exception:
+            pass
+        if not done.is_set():
+            transport = getattr(engine, "transport", None)
+            if transport is not None:
+                try:
+                    transport.close()
+                except Exception:
+                    pass
 
     def pid(self) -> int | None:
         """Best-effort process id for live runtime stats."""
