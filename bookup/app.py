@@ -494,6 +494,8 @@ def _smart_job_payload(job_id: str, job: dict[str, object]) -> dict[str, object]
         "updated_at": float(job.get("updated_at", 0.0) or 0.0),
         "has_result": bool(job.get("result")),
         "warnings_count": len(job.get("warnings", []) if isinstance(job.get("warnings"), list) else []),
+        "partial_nodes": job.get("partial_nodes", []) if isinstance(job.get("partial_nodes"), list) else [],
+        "partial_total_nodes": int(job.get("partial_total_nodes", 0) or 0),
     }
 
 
@@ -507,7 +509,7 @@ def _run_smart_theory_job(
 ) -> None:
     # Background worker for one Smart Theory job. We keep job state in-memory so
     # the UI can poll lightweight status updates without blocking the request thread.
-    def _status_update(phase: str, message: str, done: int, total: int) -> None:
+    def _status_update(phase: str, message: str, done: int, total: int, **extra: object) -> None:
         with SMART_THEORY_JOBS_LOCK:
             job = SMART_THEORY_JOBS.get(job_id)
             if not isinstance(job, dict):
@@ -518,6 +520,15 @@ def _run_smart_theory_job(
             job["message"] = message
             job["positions_done"] = int(done)
             job["positions_total"] = int(total)
+            partial_nodes = extra.get("partial_nodes")
+            partial_total_nodes = extra.get("partial_total_nodes")
+            if isinstance(partial_nodes, list):
+                job["partial_nodes"] = partial_nodes
+            if partial_total_nodes is not None:
+                try:
+                    job["partial_total_nodes"] = int(partial_total_nodes)
+                except (TypeError, ValueError):
+                    pass
             job["updated_at"] = time.time()
 
     def _cancelled() -> bool:
@@ -540,6 +551,8 @@ def _run_smart_theory_job(
             if not isinstance(job, dict):
                 return
             job["result"] = result
+            job["partial_nodes"] = result.get("nodes", [])[-200:] if isinstance(result.get("nodes"), list) else []
+            job["partial_total_nodes"] = len(result.get("nodes", []) if isinstance(result.get("nodes"), list) else [])
             job["warnings"] = result.get("warnings", [])
             status = str(result.get("status", "complete") or "complete")
             job["status"] = "stopped" if status == "stopped" else "complete"

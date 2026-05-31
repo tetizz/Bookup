@@ -2154,9 +2154,10 @@ def generate_smart_theory_tree(
     positions_total_hint = max_positions
     warnings: list[str] = list(start_warnings)
 
-    def cb(phase: str, message: str) -> None:
+    def cb(phase: str, message: str, extra: dict[str, Any] | None = None) -> None:
         if status_callback:
-            status_callback(phase, message, positions_done, positions_total_hint)
+            payload = extra or {}
+            status_callback(phase, message, positions_done, positions_total_hint, **payload)
 
     def cancelled() -> bool:
         return bool(is_cancelled and is_cancelled())
@@ -2282,7 +2283,7 @@ def generate_smart_theory_tree(
     queue.append((root_id, root_board, 0, []))
     visited.add(root_node["normalizedFen"])
 
-    cb("generating", "Building smart theory tree...")
+    cb("generating", "Building smart theory tree...", {"partial_nodes": node_list[:], "partial_total_nodes": len(node_list)})
     # Use the Stockfish worker pool + batched queue expansion so large trees stay
     # responsive instead of serially blocking one long engine loop.
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="bookup-smart-theory") as executor:
@@ -2494,6 +2495,15 @@ def generate_smart_theory_tree(
                     if nfen not in visited:
                         visited.add(nfen)
                         queue.append((node_id, next_board, ply + 1, [*path, move.uci()]))
+            if len(node_list) % 12 == 0 or positions_done <= 3:
+                cb(
+                    "analyzing",
+                    f"Analyzing position {positions_done} of {positions_total_hint}",
+                    {
+                        "partial_nodes": node_list[-160:],
+                        "partial_total_nodes": len(node_list),
+                    },
+                )
 
     phase = "complete" if not cancelled() else "stopped"
     cb(phase, "Smart theory generation complete." if phase == "complete" else "Smart theory generation stopped.")

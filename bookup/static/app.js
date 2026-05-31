@@ -321,8 +321,8 @@ async function init() {
   el.threads.value = defaults.threads || 8;
   if (el.parallelWorkers) el.parallelWorkers.value = defaults.parallel_workers || 1;
   el.hash.value = defaults.hash_mb || 2048;
-  if (el.smartTheoryDepth) el.smartTheoryDepth.value = String(Math.max(10, Math.min(28, Number(defaults.depth || 18))));
-  if (el.smartTheoryMoveTime) el.smartTheoryMoveTime.value = String(Number(defaults.think_time_sec || 1.2));
+  if (el.smartTheoryDepth) el.smartTheoryDepth.value = "18";
+  if (el.smartTheoryMoveTime) el.smartTheoryMoveTime.value = "1";
   if (el.smartTheoryReplies) el.smartTheoryReplies.value = "3";
   if (el.smartTheoryMaxPly) el.smartTheoryMaxPly.value = "20";
   if (el.smartTheoryMaxPositions) el.smartTheoryMaxPositions.value = "300";
@@ -7026,7 +7026,7 @@ function setSmartTheoryStatus(status, message = "", done = 0, total = 0) {
     if (String(status).toLowerCase() === "analyzing") {
       const safeTotal = Number(total || 0);
       const safeDone = Number(done || 0);
-      el.smartTheoryProgress.textContent = `Analyzing position ${safeDone}${safeTotal ? ` of ${safeTotal}` : ""}.`;
+      el.smartTheoryProgress.textContent = `Analyzing position ${safeDone}${safeTotal ? ` of ${safeTotal}` : ""}. Live nodes will appear as they are generated.`;
       return;
     }
     if (message) {
@@ -7039,6 +7039,19 @@ function setSmartTheoryStatus(status, message = "", done = 0, total = 0) {
     }
     el.smartTheoryProgress.textContent = `${smartTheoryStateLabel(status)}.`;
   }
+}
+
+function mergeSmartTheoryPartialNodes(partialNodes = []) {
+  if (!Array.isArray(partialNodes) || !partialNodes.length) return;
+  if (!state.smartTheoryTree || !Array.isArray(state.smartTheoryTree.nodes)) {
+    state.smartTheoryTree = { nodes: [] };
+  }
+  const byId = new Map(state.smartTheoryTree.nodes.map((node) => [String(node.id), node]));
+  partialNodes.forEach((node) => {
+    if (!node || typeof node !== "object") return;
+    byId.set(String(node.id), node);
+  });
+  state.smartTheoryTree.nodes = Array.from(byId.values());
 }
 
 function scheduleSmartTheoryPoll(delayMs = 600) {
@@ -7059,6 +7072,14 @@ async function pollSmartTheoryJob() {
     if (!statusResponse.ok) throw new Error(statusPayload.error || "Could not read smart theory status.");
     const status = String(statusPayload.status || "").toLowerCase();
     setSmartTheoryStatus(status, statusPayload.message || "", statusPayload.positions_done || 0, statusPayload.positions_total || 0);
+    if (Array.isArray(statusPayload.partial_nodes) && statusPayload.partial_nodes.length) {
+      mergeSmartTheoryPartialNodes(statusPayload.partial_nodes);
+      renderSmartTheoryTree();
+      if (!state.smartTheorySelectedNodeId || state.smartTheorySelectedNodeId === "root") {
+        const firstNodeId = state.smartTheoryTree?.nodes?.find?.((node) => node.id !== "root")?.id || "";
+        if (firstNodeId) selectSmartTheoryNode(firstNodeId);
+      }
+    }
     if (status === "complete" || status === "stopped") {
       const resultResponse = await fetch(`/api/smart-theory-result/${encodeURIComponent(state.smartTheoryJobId)}`);
       const resultPayload = await resultResponse.json();
