@@ -2026,6 +2026,484 @@ def generate_theory_line(
     }
 
 
+def _smart_eval_classification(delta_cp: int) -> str:
+    loss = abs(int(delta_cp))
+    if loss <= 25:
+        return "Best"
+    if loss <= 75:
+        return "Inaccuracy"
+    if loss <= 150:
+        return "Mistake"
+    return "Blunder"
+
+
+def _smart_eval_label_for_user(delta_cp: int) -> str:
+    loss = abs(int(delta_cp))
+    if loss <= 10:
+        return "Best"
+    if loss <= 25:
+        return "Excellent"
+    if loss <= 75:
+        return "Good"
+    if loss <= 150:
+        return "Mistake"
+    return "Blunder"
+
+
+def _smart_rule_explanation(
+    board: chess.Board,
+    move: chess.Move,
+    san: str,
+    *,
+    opening_name: str,
+    is_user_side: bool,
+    classification: str,
+    eval_swing: int,
+) -> tuple[str, str, str]:
+    piece_name = {
+        chess.PAWN: "pawn",
+        chess.KNIGHT: "knight",
+        chess.BISHOP: "bishop",
+        chess.ROOK: "rook",
+        chess.QUEEN: "queen",
+        chess.KING: "king",
+    }.get(board.piece_type_at(move.from_square), "piece")
+    center_targets = {"d4", "d5", "e4", "e5", "c4", "c5", "f4", "f5"}
+    to_sq = chess.square_name(move.to_square)
+    controls_center = to_sq in center_targets
+    check_note = " It gives check." if board.gives_check(move) else ""
+    capture_note = " It captures material." if board.is_capture(move) else ""
+    opening_part = f"In {opening_name}, " if opening_name else ""
+    if is_user_side:
+        theory = (
+            f"{opening_part}{san} is recommended because it improves {piece_name} activity and keeps your position practical."
+            f"{check_note}{capture_note}"
+        )
+        if controls_center:
+            theory += " It also fights for central control."
+        plan = "Develop smoothly, protect king safety, and prepare the next central break."
+        idea = "Punish loose development and keep pressure on key central squares."
+        return theory, plan, idea
+    quality = classification.lower()
+    theory = (
+        f"Opponent plays {san}. Classification: {classification}. "
+        f"Eval swing is {eval_swing / 100:.2f} pawns from White's perspective."
+    )
+    if quality in {"mistake", "blunder", "inaccuracy"}:
+        theory += " This creates targets you can challenge immediately."
+    else:
+        theory += " This is a practical reply that keeps the position sound."
+    plan = "Respond with principled development and concrete tactics if available."
+    idea = "Opponent is aiming for active piece play and central influence."
+    return theory, plan, idea
+
+
+def generate_smart_theory_tree(
+    board: chess.Board,
+    engine: EngineSession,
+    *,
+    payload: dict[str, Any] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+    status_callback: Callable[[str, str, int, int], None] | None = None,
+) -> dict[str, Any]:
+    request = payload or {}
+    my_color = "black" if str(request.get("my_color", "white")).strip().lower() == "black" else "white"
+    opponent_accuracy = str(request.get("opponent_accuracy", "mixed")).strip().lower() or "mixed"
+    max_ply = max(2, min(40, int(request.get("max_ply", 20) or 20)))
+    max_positions = max(10, min(1500, int(request.get("max_positions", 300) or 300)))
+    opponent_replies = max(1, min(8, int(request.get("opponent_replies", 3) or 3)))
+    include_rare_sidelines = bool(request.get("include_rare_sidelines", True))
+    include_mistakes = bool(request.get("include_opponent_mistakes", True))
+    include_blunders = bool(request.get("include_opponent_blunders", False))
+    avoid_absurd_moves = bool(request.get("avoid_absurd_moves", True))
+    eco_only_mode = bool(request.get("eco_only_mode", False))
+    cache_evals = bool(request.get("cache_evaluations", True))
+    start_play_uci = [str(item) for item in (request.get("start_play_uci") or []) if str(item)]
+    starting_source = str(request.get("starting_source", "current_board") or "current_board")
+    time_sec = request.get("engine_movetime_sec")
+    try:
+        time_sec = float(time_sec) if time_sec is not None else None
+    except (TypeError, ValueError):
+        time_sec = None
+
+    worker_count = max(1, int(getattr(engine, "worker_count", 1) or 1))
+    node_counter = 0
+    root_board = board.copy(stack=False)
+    start_warnings: list[str] = []
+    for move_uci in start_play_uci:
+        try:
+            move = chess.Move.from_uci(move_uci)
+        except ValueError:
+            start_warnings.append(f"Ignored invalid start move: {move_uci}")
+            continue
+        if move not in root_board.legal_moves:
+            start_warnings.append(f"Ignored illegal start move in position: {move_uci}")
+            continue
+        root_board.push(move)
+
+    eval_cache: dict[str, dict[str, Any]] = {}
+    eval_cache_lock = threading.Lock()
+    visited: set[str] = set()
+    nodes: dict[str, dict[str, Any]] = {}
+    node_list: list[dict[str, Any]] = []
+    queue: deque[tuple[str, chess.Board, int, list[str]]] = deque()
+    positions_done = 0
+    positions_total_hint = max_positions
+    warnings: list[str] = list(start_warnings)
+
+    def cb(phase: str, message: str) -> None:
+        if status_callback:
+            status_callback(phase, message, positions_done, positions_total_hint)
+
+    def cancelled() -> bool:
+        return bool(is_cancelled and is_cancelled())
+
+    def normalized_fen(b: chess.Board) -> str:
+        return _normalize_position_key(b)
+
+    def board_opening(b: chess.Board) -> tuple[str, str]:
+        hit = lookup_by_board(b)
+        return str(hit.get("name", "")), str(hit.get("eco", ""))
+
+    def eval_lines(b: chess.Board, multipv: int = 4) -> list[dict[str, Any]]:
+        key = f"{normalized_fen(b)}|d{engine.settings.depth}|m{multipv}|t{time_sec or engine.settings.think_time_sec}"
+        if cache_evals:
+            with eval_cache_lock:
+                if key in eval_cache:
+                    cached = eval_cache[key]
+                    return list(cached.get("lines", []))
+        try:
+            lines = engine.analyse(
+                b,
+                depth=max(10, int(engine.settings.depth or 16)),
+                multipv=max(1, multipv),
+                time_sec=time_sec,
+            )
+        except Exception as exc:
+            warnings.append(f"Engine analysis failed for {normalized_fen(b)}: {exc}")
+            return []
+        if cache_evals:
+            with eval_cache_lock:
+                eval_cache[key] = {"lines": list(lines)}
+        return list(lines)
+
+    def score_white_cp(line: dict[str, Any], turn: bool) -> int:
+        score = line.get("score")
+        if score is None:
+            return 0
+        return int(_score_cp(score, turn))
+
+    def opponent_category(*, delta: int, popularity: float) -> str:
+        if delta <= 25 and popularity >= 12:
+            return "Mainline"
+        if popularity >= 5 and delta <= 75:
+            return "Popular"
+        if delta <= 75:
+            return "Sideline"
+        if delta <= 150:
+            return "Inaccuracy"
+        if delta <= 300:
+            return "Mistake"
+        return "Blunder"
+
+    def user_category(delta: int) -> str:
+        loss = abs(int(delta))
+        if loss <= 10:
+            return "Best"
+        if loss <= 25:
+            return "Excellent"
+        if loss <= 75:
+            return "Good"
+        if loss <= 150:
+            return "Inaccuracy"
+        if loss <= 300:
+            return "Mistake"
+        return "Blunder"
+
+    def motifs_for_move(b: chess.Board, mv: chess.Move) -> list[str]:
+        motifs: list[str] = []
+        if b.is_capture(mv):
+            motifs.append("capture")
+        if b.gives_check(mv):
+            motifs.append("check")
+        try:
+            promo = mv.promotion
+            if promo:
+                motifs.append("promotion")
+        except Exception:
+            pass
+        return motifs
+
+    root_id = "root"
+    root_opening, root_eco = board_opening(root_board)
+    root_node = {
+        "id": root_id,
+        "parentId": "",
+        "fen": root_board.fen(),
+        "normalizedFen": normalized_fen(root_board),
+        "ply": 0,
+        "san": "",
+        "uci": "",
+        "sideToMove": "white" if root_board.turn == chess.WHITE else "black",
+        "openingName": root_opening,
+        "ecoCode": root_eco,
+        "evalBefore": 0,
+        "evalAfter": 0,
+        "evalSwing": 0,
+        "bestMoveUci": "",
+        "bestMoveSan": "",
+        "principalVariation": [],
+        "engineDepth": int(engine.settings.depth),
+        "databaseMoves": [],
+        "popularity": 0,
+        "gameCount": 0,
+        "classification": "Root",
+        "opponentAccuracy": opponent_accuracy,
+        "isUserSide": False,
+        "isOpponentSide": False,
+        "isCorrectedMove": False,
+        "originalUserMove": "",
+        "correctedMove": "",
+        "theoryExplanation": "Start position for smart theory generation.",
+        "planForUser": "Build a stable opening structure and stay consistent with your repertoire themes.",
+        "opponentIdea": "",
+        "tacticalMotifs": [],
+        "importantSquares": ["d4", "d5", "e4", "e5"],
+        "pawnBreaks": [],
+        "children": [],
+        "createdAt": int(time.time()),
+        "updatedAt": int(time.time()),
+    }
+    nodes[root_id] = root_node
+    node_list.append(root_node)
+    queue.append((root_id, root_board, 0, []))
+    visited.add(root_node["normalizedFen"])
+
+    cb("generating", "Building smart theory tree...")
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="bookup-smart-theory") as executor:
+      while queue and len(node_list) < max_positions:
+        if cancelled():
+            cb("stopping", "Generation stopped by user.")
+            break
+        batch: list[tuple[str, chess.Board, int, list[str]]] = []
+        while queue and len(batch) < worker_count:
+            batch.append(queue.popleft())
+        ready_batch = [item for item in batch if item[2] < max_ply and not item[1].is_game_over(claim_draw=True)]
+        if not ready_batch:
+            continue
+        positions_done += len(ready_batch)
+        cb("analyzing", f"Analyzing position {positions_done} of {positions_total_hint}")
+
+        future_map = {
+            executor.submit(eval_lines, current_board, max(4, opponent_replies + 2)): (parent_id, current_board, ply, path)
+            for parent_id, current_board, ply, path in ready_batch
+        }
+        for future in as_completed(future_map):
+            if cancelled() or len(node_list) >= max_positions:
+                break
+            parent_id, current_board, ply, path = future_map[future]
+            parent = nodes[parent_id]
+            try:
+                lines = future.result()
+            except Exception as exc:
+                warnings.append(f"Worker failed on position {normalized_fen(current_board)}: {exc}")
+                continue
+            if not lines:
+                continue
+
+            mover = "white" if current_board.turn == chess.WHITE else "black"
+            user_to_move = mover == my_color
+            eval_before = score_white_cp(lines[0], current_board.turn)
+            top_line = lines[0]
+            top_pv = top_line.get("pv") or []
+            top_best_uci = top_pv[0].uci() if top_pv else ""
+
+            candidate_moves: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
+            db = database_context_for_board(current_board, play_uci=path, limit=max(10, opponent_replies + 4))
+            db_moves = list(db.get("database_moves", []))
+            db_map = {str(item.get("uci", "")): item for item in db_moves if item.get("uci")}
+
+            if user_to_move:
+                if not top_pv:
+                    continue
+                mv = top_pv[0]
+                if mv not in current_board.legal_moves:
+                    continue
+                san = current_board.san(mv)
+                cp = score_white_cp(top_line, current_board.turn)
+                candidate_moves.append((mv, san, cp, top_line, 100.0, 0, "Best", db_moves))
+            else:
+                for line in lines:
+                    pv = line.get("pv") or []
+                    if not pv:
+                        continue
+                    mv = pv[0]
+                    if mv not in current_board.legal_moves:
+                        continue
+                    san = current_board.san(mv)
+                    uci = mv.uci()
+                    cp = score_white_cp(line, current_board.turn)
+                    db_entry = db_map.get(uci, {})
+                    popularity = float(db_entry.get("popularity", db_entry.get("percent", 0.0)) or 0.0)
+                    games = int(db_entry.get("games", db_entry.get("game_count", db_entry.get("play_count", 0))) or 0)
+                    delta = abs(cp - eval_before)
+                    category = opponent_category(delta=delta, popularity=popularity)
+                    candidate_moves.append((mv, san, cp, line, popularity, games, category, db_moves))
+
+                def _opp_weight(item: tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]) -> float:
+                    _, _, cp, _, pop, games, category, _ = item
+                    eval_penalty = abs(cp - eval_before) / 100.0
+                    pop_factor = pop / 100.0
+                    games_factor = min(1.0, games / 10000.0)
+                    category_bonus = {
+                        "Mainline": 0.8,
+                        "Popular": 0.55,
+                        "Sideline": 0.3,
+                        "Inaccuracy": 0.12,
+                        "Mistake": 0.05,
+                        "Blunder": 0.0,
+                    }.get(category, 0.1)
+                    if opponent_accuracy == "grandmaster":
+                        return (2.1 - eval_penalty) + (pop_factor * 0.9) + (games_factor * 0.35) + category_bonus
+                    if opponent_accuracy == "strong_club":
+                        return (1.85 - eval_penalty) + (pop_factor * 0.75) + category_bonus
+                    if opponent_accuracy == "club":
+                        return (1.6 - (eval_penalty * 0.82)) + (pop_factor * 0.62) + category_bonus
+                    if opponent_accuracy in {"beginner", "intermediate", "beginner_intermediate"}:
+                        return (1.15 - (eval_penalty * 0.5)) + (pop_factor * 0.42) + (0.1 if category in {"Mistake", "Blunder"} else 0.0)
+                    return (1.5 - (eval_penalty * 0.74)) + (pop_factor * 0.7) + (games_factor * 0.2) + category_bonus
+
+                ranked = sorted(candidate_moves, key=_opp_weight, reverse=True)[: max(2, opponent_replies * 3)]
+                selected: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
+                for item in ranked:
+                    if len(selected) >= opponent_replies:
+                        break
+                    _, _, cp, _, _, _, category, _ = item
+                    delta = abs(cp - eval_before)
+                    if eco_only_mode:
+                        if category not in {"Mainline", "Popular"}:
+                            continue
+                    if category == "Sideline" and not include_rare_sidelines:
+                        continue
+                    if category == "Blunder" and not include_blunders:
+                        continue
+                    if category in {"Inaccuracy", "Mistake"} and not include_mistakes:
+                        continue
+                    if avoid_absurd_moves and delta >= 450:
+                        continue
+                    selected.append(item)
+                candidate_moves = selected or ranked[:opponent_replies]
+
+            for move, san, eval_after, line_meta, popularity, game_count, category, db_moves in candidate_moves:
+                if cancelled() or len(node_list) >= max_positions:
+                    break
+                if move not in current_board.legal_moves:
+                    warnings.append(f"Illegal move skipped during generation: {move.uci()}")
+                    continue
+                eval_swing = eval_after - eval_before
+                next_board = current_board.copy(stack=False)
+                try:
+                    next_board.push(move)
+                except Exception as exc:
+                    warnings.append(f"Move push failed and was skipped ({move.uci()}): {exc}")
+                    continue
+                opening_name, eco_code = board_opening(next_board)
+                if eco_only_mode and not (opening_name or eco_code):
+                    continue
+                line_pv = line_meta.get("pv") or []
+                pv_san, pv_uci = _pv_sans(current_board, line_pv)
+                move_class = user_category(eval_swing) if user_to_move else category
+                theory, plan, opp_idea = _smart_rule_explanation(
+                    current_board,
+                    move,
+                    san,
+                    opening_name=opening_name,
+                    is_user_side=user_to_move,
+                    classification=move_class,
+                    eval_swing=eval_swing,
+                )
+                node_counter += 1
+                node_id = f"n{node_counter}"
+                node = {
+                    "id": node_id,
+                    "parentId": parent_id,
+                    "fen": next_board.fen(),
+                    "normalizedFen": normalized_fen(next_board),
+                    "ply": ply + 1,
+                    "san": san,
+                    "uci": move.uci(),
+                    "sideToMove": "white" if next_board.turn == chess.WHITE else "black",
+                    "openingName": opening_name,
+                    "ecoCode": eco_code,
+                    "evalBefore": eval_before,
+                    "evalAfter": eval_after,
+                    "evalSwing": eval_swing,
+                    "bestMoveUci": top_best_uci or (pv_uci[0] if pv_uci else ""),
+                    "bestMoveSan": pv_san[0] if pv_san else "",
+                    "principalVariation": pv_san[:8],
+                    "engineDepth": int(engine.settings.depth),
+                    "databaseMoves": db_moves[:8],
+                    "popularity": round(float(popularity), 2),
+                    "gameCount": int(game_count),
+                    "classification": move_class,
+                    "opponentAccuracy": opponent_accuracy,
+                    "isUserSide": bool(user_to_move),
+                    "isOpponentSide": bool(not user_to_move),
+                    "isCorrectedMove": bool(user_to_move and move_class in {"Inaccuracy", "Mistake", "Blunder"}),
+                    "originalUserMove": "",
+                    "correctedMove": top_best_uci if user_to_move and top_best_uci and top_best_uci != move.uci() else "",
+                    "theoryExplanation": theory,
+                    "planForUser": plan,
+                    "opponentIdea": opp_idea if not user_to_move else "",
+                    "tacticalMotifs": motifs_for_move(current_board, move),
+                    "importantSquares": ["d4", "d5", "e4", "e5"],
+                    "pawnBreaks": ["c4", "d4", "e4"] if my_color == "white" else ["c5", "d5", "e5"],
+                    "children": [],
+                    "createdAt": int(time.time()),
+                    "updatedAt": int(time.time()),
+                }
+                nodes[node_id] = node
+                node_list.append(node)
+                parent["children"].append(node_id)
+                if ply + 1 < max_ply and len(node_list) < max_positions:
+                    nfen = node["normalizedFen"]
+                    if nfen not in visited:
+                        visited.add(nfen)
+                        queue.append((node_id, next_board, ply + 1, [*path, move.uci()]))
+
+    phase = "complete" if not cancelled() else "stopped"
+    cb(phase, "Smart theory generation complete." if phase == "complete" else "Smart theory generation stopped.")
+    return {
+        "status": phase,
+        "generation_state": phase,
+        "positions_done": positions_done,
+        "positions_total": positions_total_hint,
+        "root_id": root_id,
+        "nodes": node_list,
+        "tree": nodes,
+        "warnings": warnings[:120],
+        "starting_source": starting_source,
+        "start_fen": board.fen(),
+        "effective_start_fen": root_board.fen(),
+        "openingName": root_opening,
+        "ecoCode": root_eco,
+        "settings_used": {
+            "my_color": my_color,
+            "opponent_accuracy": opponent_accuracy,
+            "max_ply": max_ply,
+            "max_positions": max_positions,
+            "opponent_replies": opponent_replies,
+            "include_rare_sidelines": include_rare_sidelines,
+            "include_opponent_mistakes": include_mistakes,
+            "include_opponent_blunders": include_blunders,
+            "avoid_absurd_moves": avoid_absurd_moves,
+            "eco_only_mode": eco_only_mode,
+            "cache_evaluations": cache_evals,
+            "worker_count": worker_count,
+        },
+    }
+
+
 def _build_branch_line(
     board: chess.Board,
     move_uci: str,

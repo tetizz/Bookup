@@ -258,6 +258,54 @@ h1 {
   align-items: center;
 }
 
+.smart-theory-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.smart-theory-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mini-board-wrap {
+  margin-top: 12px;
+}
+
+.mini-board-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.mini-board-square {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.mini-board-square.light { background: #e6d2b0; color: #1d1d1d; }
+.mini-board-square.dark { background: #b48767; color: #1d1d1d; }
+
+.smart-tree-row {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: rgba(16, 21, 29, 0.72);
+}
+
+.smart-tree-row:hover {
+  border-color: rgba(125, 162, 255, 0.5);
+}
+
 .summary-action-row .launch-btn,
 .summary-action-row .ghost-btn {
   margin-top: 0;
@@ -4279,6 +4327,281 @@ button.retry-card {
   .review-summary-strip,
   .review-bucket-grid,
   .theory-mini-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Compact redesign pass: scoped so the change is obvious and easy to iterate. */
+:root[data-bookup-ui="compact-redesign-v8"] body {
+  background:
+    radial-gradient(circle at 18% 8%, rgba(95, 148, 255, 0.18), transparent 28rem),
+    radial-gradient(circle at 78% 18%, rgba(79, 233, 178, 0.12), transparent 32rem),
+    linear-gradient(180deg, #08101a 0%, #0e1825 42%, #071019 100%);
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .app-main,
+:root[data-bookup-ui="compact-redesign-v8"] .main-shell,
+:root[data-bookup-ui="compact-redesign-v8"] .workspace {
+  min-width: 0;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .workspace-panel.active {
+  gap: 18px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-panel {
+  width: min(100%, 1360px);
+  margin: 24px auto 12px;
+  padding: clamp(20px, 2vw, 32px);
+  border-radius: 34px;
+  background:
+    linear-gradient(135deg, rgba(34, 64, 93, 0.86), rgba(6, 12, 19, 0.94) 54%, rgba(14, 30, 46, 0.9)),
+    rgba(9, 16, 24, 0.92);
+  border: 1px solid rgba(134, 171, 230, 0.22);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255,255,255,.05);
+  overflow: hidden;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-panel.empty {
+  min-height: 148px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-head {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  text-align: center;
+  gap: 8px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-head small {
+  max-width: 82ch;
+  text-align: center;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-landscape-metrics {
+  grid-template-columns: repeat(6, minmax(118px, 1fr));
+  gap: 12px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-landscape-metrics article {
+  min-height: 74px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(52, 77, 102, 0.78), rgba(21, 33, 48, 0.86));
+  overflow: hidden;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-landscape-metrics strong {
+  font-size: clamp(1.05rem, 1.05vw, 1.38rem);
+  line-height: 1.05;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-live-board-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-card {
+  min-height: 322px;
+  padding: 14px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(6, 13, 20, 0.98), rgba(8, 16, 25, 0.94));
+  border: 1px solid rgba(119, 161, 220, 0.16);
+  box-shadow: inset 0 1px rgba(255,255,255,.04), 0 14px 36px rgba(0,0,0,.24);
+  overflow: hidden;
+  content-visibility: auto;
+  contain-intrinsic-size: 322px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-card.empty {
+  border-style: dashed;
+  opacity: .78;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-card-head {
+  min-height: 72px;
+  display: grid;
+  align-content: start;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-card-head strong {
+  font-size: clamp(1rem, 1.05vw, 1.24rem);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .analysis-preview-card-head small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .mini-board {
+  width: min(100%, 238px);
+  max-width: 238px;
+  margin: 8px auto 0;
+  border-radius: 18px;
+  box-shadow: 0 14px 34px rgba(0,0,0,.32);
+  overflow: hidden;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .mini-board-placeholder {
+  min-height: 238px;
+  margin-top: 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  border: 1px dashed rgba(145, 177, 225, 0.24);
+  background:
+    radial-gradient(circle at 50% 38%, rgba(98, 148, 255, 0.12), transparent 42%),
+    rgba(5, 12, 19, 0.86);
+  color: var(--muted);
+  text-align: center;
+  padding: 18px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-list {
+  display: grid;
+  gap: 14px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.85fr) minmax(420px, 1.55fr) minmax(170px, 0.45fr);
+  grid-template-areas:
+    "head summary actions"
+    "candidates candidates candidates"
+    "queue queue queue"
+    "line note note";
+  gap: 10px 16px;
+  padding: 14px 16px;
+  border-radius: 24px;
+  min-height: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 220px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .line-card-header {
+  grid-area: head;
+  align-self: start;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-line-summary {
+  grid-area: summary;
+  margin: 0;
+  align-content: start;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .chip-row {
+  grid-area: actions;
+  justify-content: flex-end;
+  align-self: start;
+  margin: 0;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-candidate-row {
+  grid-area: candidates;
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 3px 0 5px;
+  scrollbar-width: thin;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .queue-explainer {
+  grid-area: queue;
+  margin: 0;
+  padding: 10px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .queue-factor-grid {
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .line-preview.compact {
+  grid-area: line;
+  display: block;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .line-note.compact {
+  grid-area: note;
+  display: block;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .rating-chart,
+:root[data-bookup-ui="compact-redesign-v8"] .brilliant-chart,
+:root[data-bookup-ui="compact-redesign-v8"] .timeline-card,
+:root[data-bookup-ui="compact-redesign-v8"] .mistake-card,
+:root[data-bookup-ui="compact-redesign-v8"] .suggestion-card,
+:root[data-bookup-ui="compact-redesign-v8"] .queue-card,
+:root[data-bookup-ui="compact-redesign-v8"] .theory-step,
+:root[data-bookup-ui="compact-redesign-v8"] .opening-family-card,
+:root[data-bookup-ui="compact-redesign-v8"] .review-card,
+:root[data-bookup-ui="compact-redesign-v8"] .review-schedule-card,
+:root[data-bookup-ui="compact-redesign-v8"] .move-tree-card {
+  border-radius: 24px;
+  box-shadow: inset 0 1px rgba(255,255,255,.04), 0 18px 44px rgba(0,0,0,.22);
+  content-visibility: auto;
+  contain-intrinsic-size: 260px;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .review-list,
+:root[data-bookup-ui="compact-redesign-v8"] .theory-grid,
+:root[data-bookup-ui="compact-redesign-v8"] .theory-output,
+:root[data-bookup-ui="compact-redesign-v8"] .stack {
+  gap: 14px;
+}
+
+@media (max-width: 1380px) {
+  :root[data-bookup-ui="compact-redesign-v8"] .analysis-landscape-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  :root[data-bookup-ui="compact-redesign-v8"] .analysis-live-board-grid {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  :root[data-bookup-ui="compact-redesign-v8"] .compact-work-card {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "head"
+      "summary"
+      "actions"
+      "candidates"
+      "queue"
+      "line"
+      "note";
+  }
+}
+
+@media (max-width: 760px) {
+  :root[data-bookup-ui="compact-redesign-v8"] .analysis-landscape-metrics,
+  :root[data-bookup-ui="compact-redesign-v8"] .analysis-live-board-grid,
+  :root[data-bookup-ui="compact-redesign-v8"] .compact-line-summary,
+  :root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .queue-factor-grid {
     grid-template-columns: 1fr;
   }
 }

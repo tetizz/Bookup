@@ -49,6 +49,7 @@
       <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
       <button class="workspace-tab" data-tab-target="trainer">Study Lines</button>
       <button class="workspace-tab" data-tab-target="theory">Theory</button>
+      <button class="workspace-tab" data-tab-target="smart-theory">Smart Theory Generator</button>
       <button class="workspace-tab" data-tab-target="review">Review</button>
     </nav>
 
@@ -620,6 +621,62 @@
           </section>
         </aside>
       </div>
+    </section>
+
+    <section class="workspace-panel" data-tab-panel="smart-theory">
+      <section class="section-block">
+        <div class="section-label">Grandmaster Theory</div>
+        <h2 class="section-title">Smart Theory Generator</h2>
+        <div class="smart-theory-layout">
+          <article class="card">
+            <div class="smart-theory-controls">
+              <label class="field compact"><span>Starting source</span><select id="smartTheoryStartingSource"><option value="starting_position">Starting position</option><option value="current_board">Current board position</option><option value="saved_line">Saved line</option><option value="selected_move">Selected move in saved line</option><option value="imported_pgn">Imported PGN context</option><option value="custom_fen">Custom FEN</option></select></label>
+              <label class="field compact"><span>My color</span><select id="smartTheoryMyColor"><option value="white">White</option><option value="black">Black</option></select></label>
+              <label class="field compact"><span>Opponent accuracy</span><select id="smartTheoryOpponentAccuracy"><option value="mixed">Mixed realistic</option><option value="grandmaster">Grandmaster</option><option value="strong_club">Strong club player</option><option value="club">Club player</option><option value="beginner_intermediate">Beginner/intermediate</option></select></label>
+              <label class="field compact"><span>Engine depth</span><input id="smartTheoryDepth" type="number" min="10" max="28" value="18"></label>
+              <label class="field compact"><span>Engine movetime (sec)</span><input id="smartTheoryMoveTime" type="number" min="0.2" step="0.1" value="1.2"></label>
+              <label class="field compact"><span>Opponent replies</span><input id="smartTheoryReplies" type="number" min="1" max="8" value="3"></label>
+              <label class="field compact"><span>Max ply</span><input id="smartTheoryMaxPly" type="number" min="2" max="40" value="20"></label>
+              <label class="field compact"><span>Max positions</span><input id="smartTheoryMaxPositions" type="number" min="10" max="1500" value="300"></label>
+              <label class="field compact"><span>Custom FEN (optional)</span><input id="smartTheoryCustomFen" type="text" placeholder="startpos or FEN"></label>
+              <label class="field field-check compact"><span>Include rare sidelines</span><label class="checkbox-row"><input id="smartTheoryIncludeRare" type="checkbox" checked><span>Enabled</span></label></label>
+              <label class="field field-check compact"><span>Include mistakes</span><label class="checkbox-row"><input id="smartTheoryIncludeMistakes" type="checkbox" checked><span>Enabled</span></label></label>
+              <label class="field field-check compact"><span>Include blunders</span><label class="checkbox-row"><input id="smartTheoryIncludeBlunders" type="checkbox"><span>Enabled</span></label></label>
+              <label class="field field-check compact"><span>Avoid absurd moves</span><label class="checkbox-row"><input id="smartTheoryAvoidAbsurd" type="checkbox" checked><span>Enabled</span></label></label>
+              <label class="field field-check compact"><span>ECO-only mode</span><label class="checkbox-row"><input id="smartTheoryEcoOnly" type="checkbox"><span>Enabled</span></label></label>
+              <label class="field field-check compact"><span>Cache evaluations</span><label class="checkbox-row"><input id="smartTheoryCacheEvals" type="checkbox" checked><span>Enabled</span></label></label>
+            </div>
+            <div class="chip-row">
+              <button id="smartTheoryGenerateBtn" class="launch-btn" type="button">Generate</button>
+              <button id="smartTheoryStopBtn" class="ghost-btn" type="button">Stop</button>
+              <button id="smartTheoryClearBtn" class="ghost-btn" type="button">Clear</button>
+              <button id="smartTheoryExportBtn" class="ghost-btn" type="button">Export JSON</button>
+              <label class="ghost-btn" for="smartTheoryImportInput">Import JSON</label>
+              <input id="smartTheoryImportInput" type="file" accept=".json" style="display:none;">
+            </div>
+            <div id="smartTheoryStatus" class="line-note">Idle</div>
+            <div id="smartTheoryProgress" class="line-note">No generation in progress.</div>
+            <div class="mini-board-wrap">
+              <div id="smartTheoryMiniBoard" class="mini-board-grid empty">Generate or select a node to view the board.</div>
+            </div>
+          </article>
+          <article class="card">
+            <h3>Current Node</h3>
+            <div id="smartTheoryCurrentMeta" class="stack empty">No node selected.</div>
+            <h3>Opening / FEN</h3>
+            <div id="smartTheoryOpeningMeta" class="stack empty">Opening name, ECO, and current FEN will show here.</div>
+            <h3>Recommended Move</h3>
+            <div id="smartTheoryRecommendation" class="stack empty">Best response and continuation will show here.</div>
+            <div class="chip-row"><button id="smartTheorySaveCorrectionBtn" class="launch-btn" type="button">Save corrected move as repertoire line</button></div>
+            <h3>Opponent Replies</h3>
+            <div id="smartTheoryOpponentReplies" class="stack empty">Opponent candidate replies will show here.</div>
+            <h3>Theory Explanation</h3>
+            <div id="smartTheoryExplanation" class="stack empty">Click a generated move to see the explanation.</div>
+            <h3>Generated Tree</h3>
+            <div id="smartTheoryTree" class="stack empty">Generated moves will appear here.</div>
+          </article>
+        </div>
+      </section>
     </section>
   </main>
 

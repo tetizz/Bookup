@@ -30,6 +30,7 @@ from .analysis import (
     configure_engine_cache,
     configure_lichess,
     database_context_for_board,
+    generate_smart_theory_tree,
     generate_theory_line,
 )
 from .chessnut_bridge import default_chessnut_db_path, extract_chessnut_games_as_pgn
@@ -68,6 +69,9 @@ ANALYSIS_STATUS: dict[str, object] = {
 ANALYSIS_STATUS_SETTINGS: EngineSettings | None = None
 ANALYSIS_STATUS_ENGINE: EnginePool | None = None
 CPU_SAMPLES: dict[int, tuple[float, float]] = {}
+SMART_THEORY_JOBS_LOCK = threading.Lock()
+SMART_THEORY_JOBS: dict[str, dict[str, object]] = {}
+SMART_THEORY_MAX_JOBS = 40
 
 app = Flask(
     __name__,
@@ -446,6 +450,108 @@ def analysis_status_payload() -> dict[str, object]:
         payload["resources"] = engine_resource_snapshot(settings, engine)
     payload = _augment_analysis_status(payload)
     return payload
+
+
+def _trim_smart_theory_jobs_locked() -> None:
+    if len(SMART_THEORY_JOBS) <= SMART_THEORY_MAX_JOBS:
+        return
+    ordered = sorted(
+        SMART_THEORY_JOBS.items(),
+        key=lambda item: float(item[1].get("updated_at", item[1].get("created_at", 0.0)) or 0.0),
+    )
+    for key, _job in ordered[: max(0, len(ordered) - SMART_THEORY_MAX_JOBS)]:
+        SMART_THEORY_JOBS.pop(key, None)
+
+
+def _smart_theory_state_name(raw_status: str) -> str:
+    status = str(raw_status or "").strip().lower()
+    if status in {"generating", "queued", "starting"}:
+        return "Generating"
+    if status == "analyzing":
+        return "Analyzing"
+    if status == "stopping":
+        return "Stopping"
+    if status == "complete":
+        return "Complete"
+    if status in {"failed", "error"}:
+        return "Error"
+    return "Idle"
+
+
+def _smart_job_payload(job_id: str, job: dict[str, object]) -> dict[str, object]:
+    status = str(job.get("status", "idle") or "idle")
+    return {
+        "job_id": job_id,
+        "status": status,
+        "generation_state": _smart_theory_state_name(status),
+        "message": str(job.get("message", "") or ""),
+        "positions_done": int(job.get("positions_done", 0) or 0),
+        "positions_total": int(job.get("positions_total", 0) or 0),
+        "cancelled": bool(job.get("cancelled")),
+        "created_at": float(job.get("created_at", 0.0) or 0.0),
+        "updated_at": float(job.get("updated_at", 0.0) or 0.0),
+        "has_result": bool(job.get("result")),
+        "warnings_count": len(job.get("warnings", []) if isinstance(job.get("warnings"), list) else []),
+    }
+
+
+def _run_smart_theory_job(
+    *,
+    job_id: str,
+    board_fen: str,
+    payload: dict[str, object],
+    settings: EngineSettings,
+    lichess_token: str,
+) -> None:
+    def _status_update(phase: str, message: str, done: int, total: int) -> None:
+        with SMART_THEORY_JOBS_LOCK:
+            job = SMART_THEORY_JOBS.get(job_id)
+            if not isinstance(job, dict):
+                return
+            if not job.get("cancelled") and phase == "stopping":
+                phase = "analyzing"
+            job["status"] = phase
+            job["message"] = message
+            job["positions_done"] = int(done)
+            job["positions_total"] = int(total)
+            job["updated_at"] = time.time()
+
+    def _cancelled() -> bool:
+        with SMART_THEORY_JOBS_LOCK:
+            return bool(SMART_THEORY_JOBS.get(job_id, {}).get("cancelled"))
+
+    try:
+        board = chess.Board(board_fen)
+        configure_lichess(lichess_token)
+        engine = shared_engine_for(settings)
+        result = generate_smart_theory_tree(
+            board,
+            engine,
+            payload=payload,
+            is_cancelled=_cancelled,
+            status_callback=_status_update,
+        )
+        with SMART_THEORY_JOBS_LOCK:
+            job = SMART_THEORY_JOBS.get(job_id)
+            if not isinstance(job, dict):
+                return
+            job["result"] = result
+            job["warnings"] = result.get("warnings", [])
+            status = str(result.get("status", "complete") or "complete")
+            job["status"] = "stopped" if status == "stopped" else "complete"
+            job["message"] = "Smart theory generation stopped." if status == "stopped" else "Smart theory generation complete."
+            job["positions_done"] = int(result.get("positions_done", 0) or 0)
+            job["positions_total"] = int(result.get("positions_total", 0) or 0)
+            job["updated_at"] = time.time()
+    except Exception as exc:
+        with SMART_THEORY_JOBS_LOCK:
+            job = SMART_THEORY_JOBS.get(job_id)
+            if not isinstance(job, dict):
+                return
+            job["status"] = "error"
+            job["message"] = f"Smart theory generation failed: {exc}"
+            job["error"] = str(exc)
+            job["updated_at"] = time.time()
 
 
 def _numeric_status_value(payload: dict[str, object], key: str) -> float:
@@ -1864,6 +1970,111 @@ def generate_theory() -> tuple:
         return jsonify({"error": f"Theory generation failed: {exc}"}), 500
 
     return jsonify(theory)
+
+
+@app.post("/api/generate-smart-theory")
+def generate_smart_theory() -> tuple:
+    payload = request.get_json(force=True) or {}
+    fen = str(payload.get("fen", "")).strip()
+    if fen == "startpos":
+        fen = chess.STARTING_FEN
+    if not fen:
+        fen = chess.STARTING_FEN
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return jsonify({"error": "Invalid FEN."}), 400
+
+    config = load_config()
+    settings = request_engine_settings(payload, config)
+    job_id = str(payload.get("job_id") or f"smart-{int(time.time() * 1000)}")
+    if not job_id:
+        return jsonify({"error": "job_id is required."}), 400
+
+    request_token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
+    with SMART_THEORY_JOBS_LOCK:
+        existing = SMART_THEORY_JOBS.get(job_id, {})
+        if isinstance(existing, dict) and str(existing.get("status", "")).lower() in {"generating", "analyzing", "stopping"}:
+            return jsonify({"error": f"Job {job_id} is already running."}), 409
+        now = time.time()
+        SMART_THEORY_JOBS[job_id] = {
+            "cancelled": False,
+            "status": "generating",
+            "message": "Queued Smart Theory generation.",
+            "positions_done": 0,
+            "positions_total": 0,
+            "result": None,
+            "error": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        _trim_smart_theory_jobs_locked()
+
+    worker = threading.Thread(
+        target=_run_smart_theory_job,
+        kwargs={
+            "job_id": job_id,
+            "board_fen": board.fen(),
+            "payload": dict(payload),
+            "settings": settings,
+            "lichess_token": request_token,
+        },
+        daemon=True,
+        name=f"bookup-smart-theory-{job_id}",
+    )
+    worker.start()
+    with SMART_THEORY_JOBS_LOCK:
+        snapshot = _smart_job_payload(job_id, SMART_THEORY_JOBS[job_id])
+    return jsonify(snapshot), 202
+
+
+@app.get("/api/smart-theory-status/<job_id>")
+def smart_theory_status(job_id: str) -> tuple:
+    key = str(job_id or "").strip()
+    if not key:
+        return jsonify({"error": "job_id is required."}), 400
+    with SMART_THEORY_JOBS_LOCK:
+        job = SMART_THEORY_JOBS.get(key)
+        if not isinstance(job, dict):
+            return jsonify({"error": "Smart theory job not found."}), 404
+        payload = _smart_job_payload(key, job)
+    return jsonify(payload), 200
+
+
+@app.get("/api/smart-theory-result/<job_id>")
+def smart_theory_result(job_id: str) -> tuple:
+    key = str(job_id or "").strip()
+    if not key:
+        return jsonify({"error": "job_id is required."}), 400
+    with SMART_THEORY_JOBS_LOCK:
+        job = SMART_THEORY_JOBS.get(key)
+        if not isinstance(job, dict):
+            return jsonify({"error": "Smart theory job not found."}), 404
+        status = str(job.get("status", "idle") or "idle").lower()
+        result = job.get("result")
+        payload = _smart_job_payload(key, job)
+        error_text = str(job.get("error", "") or "")
+    if status == "error":
+        return jsonify({**payload, "error": error_text or payload.get("message")}), 500
+    if result is None:
+        return jsonify(payload), 202
+    return jsonify({"job_id": key, **result}), 200
+
+
+@app.post("/api/stop-smart-theory")
+def stop_smart_theory() -> tuple:
+    payload = request.get_json(force=True) or {}
+    job_id = str(payload.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"error": "job_id is required."}), 400
+    with SMART_THEORY_JOBS_LOCK:
+        if job_id not in SMART_THEORY_JOBS:
+            return jsonify({"ok": True, "job_id": job_id, "status": "missing"}), 200
+        SMART_THEORY_JOBS[job_id]["cancelled"] = True
+        SMART_THEORY_JOBS[job_id]["status"] = "stopping"
+        SMART_THEORY_JOBS[job_id]["message"] = "Stopping generation..."
+        SMART_THEORY_JOBS[job_id]["updated_at"] = time.time()
+    return jsonify({"ok": True, "job_id": job_id, "status": "stopping"}), 200
 
 
 @app.post("/api/legal-moves")
