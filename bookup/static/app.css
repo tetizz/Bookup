@@ -328,6 +328,16 @@ h1 {
   background: rgba(16, 21, 29, 0.72);
 }
 
+.smart-tree-row.priority-corrected {
+  border-color: rgba(116, 211, 155, 0.52);
+  background: linear-gradient(145deg, rgba(22, 45, 35, 0.74), rgba(16, 21, 29, 0.78));
+}
+
+.smart-tree-row.priority-weak {
+  border-color: rgba(255, 127, 135, 0.45);
+  background: linear-gradient(145deg, rgba(55, 28, 34, 0.66), rgba(16, 21, 29, 0.78));
+}
+
 .smart-tree-row:hover {
   border-color: rgba(125, 162, 255, 0.5);
 }
@@ -345,6 +355,38 @@ h1 {
   background: rgba(12, 18, 28, 0.78);
   margin-top: 8px;
   line-height: 1.45;
+}
+
+.smart-study-sync-meta {
+  border: 1px solid rgba(125, 162, 255, 0.28);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(16, 24, 36, 0.76);
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
+.smart-learning-row {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: rgba(14, 20, 29, 0.78);
+}
+
+.smart-learning-row:hover {
+  border-color: rgba(125, 162, 255, 0.56);
+}
+
+.smart-learning-row.priority-corrected {
+  border-color: rgba(116, 211, 155, 0.56);
+  background: linear-gradient(145deg, rgba(22, 45, 35, 0.76), rgba(14, 20, 29, 0.82));
+}
+
+.smart-learning-row.priority-weak {
+  border-color: rgba(255, 127, 135, 0.5);
+  background: linear-gradient(145deg, rgba(59, 30, 36, 0.72), rgba(14, 20, 29, 0.82));
 }
 
 @media (max-width: 1200px) {

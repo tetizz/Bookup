@@ -6,14 +6,16 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import threading
 import time
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import chess
 import chess.pgn
@@ -78,6 +80,34 @@ app = Flask(
     template_folder=str(RESOURCE_DIR / "bookup" / "templates"),
     static_folder=str(RESOURCE_DIR / "bookup" / "static"),
 )
+
+
+def _load_local_env_file() -> None:
+    """Load simple KEY=VALUE pairs from .env.local into process env.
+
+    Only fills missing environment variables and keeps parsing intentionally
+    small so Bookup does not need a new dependency for local token testing.
+    """
+    env_path = ROOT_DIR / ".env.local"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+            line = str(raw_line or "").strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key or key in os.environ:
+                continue
+            value = value.strip().strip('"').strip("'")
+            os.environ[key] = value
+    except Exception:
+        # Keep startup resilient even if .env.local is malformed.
+        return
+
+
+_load_local_env_file()
 
 
 def load_config() -> dict:
@@ -463,6 +493,602 @@ def _trim_smart_theory_jobs_locked() -> None:
         SMART_THEORY_JOBS.pop(key, None)
 
 
+def _extract_study_id(raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    marker = "/study/"
+    if marker in value:
+        tail = value.split(marker, 1)[1]
+        candidate = tail.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        return candidate.strip()
+    return value
+
+
+def _smart_tree_children(nodes: list[dict[str, Any]]) -> tuple[str, dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    children: dict[str, list[dict[str, Any]]] = {}
+    root_id = "root"
+    for item in nodes:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("id", "")).strip()
+        if not node_id:
+            continue
+        by_id[node_id] = item
+        if node_id == "root":
+            root_id = node_id
+    for item in by_id.values():
+        parent_id = str(item.get("parentId", "") or "")
+        node_id = str(item.get("id", "") or "")
+        if node_id == root_id:
+            continue
+        children.setdefault(parent_id, []).append(item)
+    for key in list(children.keys()):
+        children[key].sort(
+            key=lambda node: (
+                int(node.get("ply", 0) or 0),
+                -float(node.get("popularity", 0) or 0),
+                -int(node.get("gameCount", 0) or 0),
+                str(node.get("san", "") or str(node.get("uci", ""))),
+            )
+        )
+    return root_id, children, by_id
+
+
+def _smart_tree_to_pgn(tree_payload: dict[str, Any], *, chapter_name: str = "Bookup Smart Theory") -> tuple[str, dict[str, Any]]:
+    nodes = tree_payload.get("nodes", [])
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("Smart theory tree has no nodes to export.")
+    root_id, children, by_id = _smart_tree_children(nodes)
+    root_node = by_id.get(root_id)
+    if not isinstance(root_node, dict):
+        raise ValueError("Smart theory root node is missing.")
+
+    start_fen = (
+        str(tree_payload.get("effective_start_fen", "") or "").strip()
+        or str(tree_payload.get("start_fen", "") or "").strip()
+        or str(root_node.get("fen", "") or "").strip()
+        or chess.STARTING_FEN
+    )
+    try:
+        board = chess.Board(start_fen)
+    except ValueError as exc:
+        raise ValueError(f"Could not build PGN from Smart Theory root FEN: {exc}") from exc
+
+    game = chess.pgn.Game()
+    game.headers["Event"] = chapter_name
+    game.headers["Site"] = "Bookup Smart Theory"
+    game.headers["Date"] = time.strftime("%Y.%m.%d")
+    game.headers["Round"] = "-"
+    game.headers["White"] = "Bookup"
+    game.headers["Black"] = "Lichess Study"
+    game.headers["Result"] = "*"
+    opening_name = str(tree_payload.get("openingName", "") or root_node.get("openingName", "") or "").strip()
+    eco_code = str(tree_payload.get("ecoCode", "") or root_node.get("ecoCode", "") or "").strip()
+    if opening_name:
+        game.headers["Opening"] = opening_name
+    if eco_code:
+        game.headers["ECO"] = eco_code
+    if board.fen() != chess.STARTING_FEN:
+        game.headers["SetUp"] = "1"
+        game.headers["FEN"] = board.fen()
+
+    warnings: list[str] = []
+    move_count = 0
+    edge_seen: set[tuple[str, str]] = set()
+
+    def _comment_for(node: dict[str, Any]) -> str:
+        parts: list[str] = []
+        classification = str(node.get("classification", "") or "").strip()
+        if classification:
+            parts.append(f"Class: {classification}")
+        eval_after = node.get("evalAfter")
+        if isinstance(eval_after, (int, float)):
+            parts.append(f"Eval: {float(eval_after) / 100:.2f}")
+        best = str(node.get("bestMoveSan", "") or node.get("bestMoveUci", "") or "").strip()
+        if best:
+            parts.append(f"Best: {best}")
+        original = str(node.get("originalUserMove", "") or "").strip()
+        corrected = str(node.get("correctedMove", "") or "").strip()
+        if original and corrected:
+            parts.append(f"Correction: played {original}, best is {corrected}")
+        theory = str(node.get("theoryExplanation", "") or "").strip()
+        if theory:
+            parts.append(theory)
+        plan = str(node.get("planForUser", "") or "").strip()
+        if plan:
+            parts.append(f"Plan: {plan}")
+        return " | ".join(parts).strip()
+
+    def _walk(parent_id: str, parent_pgn_node: chess.pgn.GameNode, parent_board: chess.Board, depth: int) -> None:
+        nonlocal move_count
+        if depth > 60:
+            return
+        branch_children = children.get(parent_id, [])
+        for child in branch_children:
+            child_id = str(child.get("id", "") or "")
+            if not child_id:
+                continue
+            edge = (parent_id, child_id)
+            if edge in edge_seen:
+                continue
+            edge_seen.add(edge)
+            uci = str(child.get("uci", "") or "").strip()
+            if not uci:
+                warnings.append(f"Skipped node {child_id} with empty UCI.")
+                continue
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                warnings.append(f"Skipped node {child_id}; invalid UCI: {uci}.")
+                continue
+            if move not in parent_board.legal_moves:
+                warnings.append(f"Skipped node {child_id}; move {uci} is illegal in this branch.")
+                continue
+            child_board = parent_board.copy(stack=False)
+            child_board.push(move)
+            move_count += 1
+            child_pgn_node = parent_pgn_node.add_variation(move)
+            comment = _comment_for(child)
+            if comment:
+                child_pgn_node.comment = comment
+            _walk(child_id, child_pgn_node, child_board, depth + 1)
+
+    _walk(root_id, game, board, 0)
+    if move_count <= 0:
+        raise ValueError("Smart theory tree did not contain any legal moves to export.")
+
+    exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
+    pgn_text = game.accept(exporter).strip()
+    metadata = {
+        "root_id": root_id,
+        "moves_exported": move_count,
+        "warnings": warnings[:50],
+        "start_fen": board.fen(),
+    }
+    return pgn_text, metadata
+
+
+def _smart_subtree_to_pgn(
+    tree_payload: dict[str, Any],
+    *,
+    anchor_node_id: str,
+    chapter_name: str,
+    include_root_siblings: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    nodes = tree_payload.get("nodes", [])
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("Smart theory tree has no nodes to export.")
+    root_id, children, by_id = _smart_tree_children(nodes)
+    root_node = by_id.get(root_id)
+    anchor = by_id.get(str(anchor_node_id or "").strip())
+    if not isinstance(root_node, dict) or not isinstance(anchor, dict):
+        raise ValueError("Could not find a valid anchor node in the Smart Theory tree.")
+
+    start_fen = (
+        str(tree_payload.get("effective_start_fen", "") or "").strip()
+        or str(tree_payload.get("start_fen", "") or "").strip()
+        or str(root_node.get("fen", "") or "").strip()
+        or chess.STARTING_FEN
+    )
+    try:
+        board = chess.Board(start_fen)
+    except ValueError as exc:
+        raise ValueError(f"Could not build PGN from Smart Theory root FEN: {exc}") from exc
+
+    game = chess.pgn.Game()
+    game.headers["Event"] = chapter_name
+    game.headers["Site"] = "Bookup Smart Theory"
+    game.headers["Date"] = time.strftime("%Y.%m.%d")
+    game.headers["Round"] = "-"
+    game.headers["White"] = "Bookup"
+    game.headers["Black"] = "Lichess Study"
+    game.headers["Result"] = "*"
+    if board.fen() != chess.STARTING_FEN:
+        game.headers["SetUp"] = "1"
+        game.headers["FEN"] = board.fen()
+
+    warnings: list[str] = []
+    move_count = 0
+    edge_seen: set[tuple[str, str]] = set()
+
+    def _comment_for(node: dict[str, Any]) -> str:
+        parts: list[str] = []
+        classification = str(node.get("classification", "") or "").strip()
+        if classification:
+            parts.append(f"Class: {classification}")
+        eval_after = node.get("evalAfter")
+        if isinstance(eval_after, (int, float)):
+            parts.append(f"Eval: {float(eval_after) / 100:.2f}")
+        best = str(node.get("bestMoveSan", "") or node.get("bestMoveUci", "") or "").strip()
+        if best:
+            parts.append(f"Best: {best}")
+        original = str(node.get("originalUserMove", "") or "").strip()
+        corrected = str(node.get("correctedMove", "") or "").strip()
+        if original and corrected:
+            parts.append(f"Correction: played {original}, best is {corrected}")
+        theory = str(node.get("theoryExplanation", "") or "").strip()
+        if theory:
+            parts.append(theory)
+        plan = str(node.get("planForUser", "") or "").strip()
+        if plan:
+            parts.append(f"Plan: {plan}")
+        return " | ".join(parts).strip()
+
+    def _walk(parent_id: str, parent_pgn_node: chess.pgn.GameNode, parent_board: chess.Board, depth: int) -> None:
+        nonlocal move_count
+        if depth > 60:
+            return
+        branch_children = children.get(parent_id, [])
+        for child in branch_children:
+            child_id = str(child.get("id", "") or "")
+            if not child_id:
+                continue
+            edge = (parent_id, child_id)
+            if edge in edge_seen:
+                continue
+            edge_seen.add(edge)
+            uci = str(child.get("uci", "") or "").strip()
+            if not uci:
+                warnings.append(f"Skipped node {child_id} with empty UCI.")
+                continue
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                warnings.append(f"Skipped node {child_id}; invalid UCI: {uci}.")
+                continue
+            if move not in parent_board.legal_moves:
+                warnings.append(f"Skipped node {child_id}; move {uci} is illegal in this branch.")
+                continue
+            child_board = parent_board.copy(stack=False)
+            child_board.push(move)
+            move_count += 1
+            child_pgn_node = parent_pgn_node.add_variation(move)
+            comment = _comment_for(child)
+            if comment:
+                child_pgn_node.comment = comment
+            _walk(child_id, child_pgn_node, child_board, depth + 1)
+
+    anchor_parent = str(anchor.get("parentId", "") or "")
+    if include_root_siblings and anchor_parent == root_id:
+        _walk(root_id, game, board, 0)
+    else:
+        # Build the path from root to anchor so chapter starts with familiar line.
+        chain: list[dict[str, Any]] = []
+        cursor = anchor
+        safety = 0
+        while isinstance(cursor, dict) and str(cursor.get("id", "")) != root_id and safety < 256:
+            chain.append(cursor)
+            cursor = by_id.get(str(cursor.get("parentId", "") or ""))
+            safety += 1
+        chain.reverse()
+        parent_pgn_node: chess.pgn.GameNode = game
+        parent_board = board
+        for step in chain:
+            step_id = str(step.get("id", "") or "")
+            uci = str(step.get("uci", "") or "").strip()
+            if not uci:
+                continue
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                warnings.append(f"Skipped path move for node {step_id}; invalid UCI: {uci}.")
+                break
+            if move not in parent_board.legal_moves:
+                warnings.append(f"Skipped path move for node {step_id}; illegal UCI: {uci}.")
+                break
+            next_board = parent_board.copy(stack=False)
+            next_board.push(move)
+            move_count += 1
+            node = parent_pgn_node.add_variation(move)
+            comment = _comment_for(step)
+            if comment:
+                node.comment = comment
+            parent_pgn_node = node
+            parent_board = next_board
+        _walk(str(anchor.get("id", "") or ""), parent_pgn_node, parent_board, len(chain))
+
+    if move_count <= 0:
+        raise ValueError("Smart theory subtree did not contain any legal moves to export.")
+
+    exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
+    pgn_text = game.accept(exporter).strip()
+    return pgn_text, {"moves_exported": move_count, "warnings": warnings[:50]}
+
+
+def _smart_tree_chapter_exports(
+    tree_payload: dict[str, Any],
+    *,
+    strategy: str,
+    chapter_name_base: str,
+) -> list[dict[str, Any]]:
+    normalized_strategy = str(strategy or "").strip().lower()
+    if normalized_strategy not in {"single", "first_move", "unknown_focus"}:
+        normalized_strategy = "first_move"
+
+    if normalized_strategy == "single":
+        pgn_text, meta = _smart_tree_to_pgn(tree_payload, chapter_name=chapter_name_base)
+        return [{"name": chapter_name_base, "pgn": pgn_text, "meta": meta}]
+
+    nodes = tree_payload.get("nodes", [])
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("Smart theory tree has no nodes for chapter export.")
+    root_id, children, by_id = _smart_tree_children(nodes)
+    first_moves = children.get(root_id, [])
+    if not first_moves:
+        pgn_text, meta = _smart_tree_to_pgn(tree_payload, chapter_name=chapter_name_base)
+        return [{"name": chapter_name_base, "pgn": pgn_text, "meta": meta}]
+
+    chapters: list[dict[str, Any]] = []
+    parent_by_id: dict[str, str] = {
+        str(node.get("id", "") or ""): str(node.get("parentId", "") or "")
+        for node in nodes
+        if isinstance(node, dict)
+    }
+
+    def _node_chain_to_root(node: dict[str, Any]) -> list[dict[str, Any]]:
+        chain: list[dict[str, Any]] = []
+        cursor = node
+        safety = 0
+        while isinstance(cursor, dict) and safety < 256:
+            node_id = str(cursor.get("id", "") or "")
+            if not node_id or node_id == root_id:
+                break
+            chain.append(cursor)
+            parent_id = parent_by_id.get(node_id, "")
+            cursor = by_id.get(parent_id)
+            safety += 1
+        chain.reverse()
+        return chain
+
+    def _path_caption(node: dict[str, Any]) -> str:
+        chain = _node_chain_to_root(node)
+        sans = [str(step.get("san", "") or step.get("uci", "")).strip() for step in chain]
+        sans = [item for item in sans if item]
+        if not sans:
+            return ""
+        tail = sans[-6:]
+        return " ".join(tail)
+
+    def _unknown_focus_anchors() -> list[dict[str, Any]]:
+        weak_class_order = {"blunder": 0, "mistake": 1, "inaccuracy": 2}
+
+        def _weak_score(node: dict[str, Any]) -> tuple[int, int, int, int]:
+            classification = str(node.get("classification", "") or "").strip().lower()
+            is_user_side = bool(node.get("isUserSide"))
+            corrected = bool(node.get("isCorrectedMove"))
+            # Prefer "I don't know this move" positions first:
+            # corrected user-side misses, then user-side inaccuracies/mistakes/blunders.
+            class_rank = weak_class_order.get(classification, 9)
+            corrected_rank = 0 if corrected else 1
+            user_rank = 0 if is_user_side else 1
+            ply_rank = int(node.get("ply", 0) or 0)
+            return (corrected_rank, class_rank, user_rank, ply_rank)
+
+        candidates = [
+            node
+            for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("id", "") or "") != root_id
+            and (
+                bool(node.get("isCorrectedMove"))
+                or str(node.get("classification", "") or "").strip().lower() in {"inaccuracy", "mistake", "blunder"}
+            )
+        ]
+        if not candidates:
+            return []
+        ranked = sorted(candidates, key=_weak_score)
+        unique: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for node in ranked:
+            node_id = str(node.get("id", "") or "")
+            fen_key = str(node.get("normalizedFen", "") or node.get("fen", "") or node_id)
+            if fen_key in seen_keys:
+                continue
+            seen_keys.add(fen_key)
+            unique.append(node)
+            if len(unique) >= 16:
+                break
+        return unique
+
+    def _chapter_label_for(node: dict[str, Any], index: int) -> str:
+        move_name = str(node.get("san", "") or node.get("uci", "") or f"branch-{index}").strip() or f"branch-{index}"
+        opening_name = str(node.get("openingName", "") or tree_payload.get("openingName", "") or "").strip()
+        classification = str(node.get("classification", "") or "").strip()
+        if classification:
+            classification = classification.lower().replace("_", " ")
+        path_caption = _path_caption(node)
+        path_lower = path_caption.lower()
+        opening_lower = opening_name.lower()
+
+        if normalized_strategy == "unknown_focus":
+            focus_bits = [move_name]
+            if classification:
+                focus_bits.append(classification)
+            if path_caption:
+                focus_bits.append(f"after {path_caption}")
+            focus_label = " | ".join(focus_bits)
+            if opening_name:
+                return f"{chapter_name_base} | {opening_name} | {focus_label}"
+            return f"{chapter_name_base} | {focus_label}"
+
+        # Generate human chapter titles for common practical setups before
+        # falling back to generic move/path labels.
+        if "king" in opening_lower and "indian" in opening_lower and "attack" in opening_lower:
+            if re.search(r"\bc5\b", path_lower):
+                return f"{chapter_name_base} | KIA vs Sicilian Setup"
+            if re.search(r"\bd5\b", path_lower):
+                return f"{chapter_name_base} | King's Indian Attack vs ...d5"
+            if re.search(r"\be5\b", path_lower):
+                return f"{chapter_name_base} | King's Indian Attack vs ...e5"
+            return f"{chapter_name_base} | King's Indian Attack Main Setup"
+        if "king" in opening_lower and "indian" in opening_lower and "defense" in opening_lower:
+            if re.search(r"\bbf4\b", path_lower):
+                return f"{chapter_name_base} | KID vs London Setup"
+            return f"{chapter_name_base} | King's Indian Defense Main Setup"
+        if "pirc" in opening_lower:
+            if re.search(r"\be5\b", path_lower):
+                return f"{chapter_name_base} | Pirc when Black plays ...e5"
+            if re.search(r"\be4\b", path_lower):
+                return f"{chapter_name_base} | Pirc vs e4"
+            return f"{chapter_name_base} | Pirc Main Setup"
+
+        style_tokens: list[str] = [move_name]
+        if path_caption:
+            style_tokens.append(f"after {path_caption}")
+        if classification:
+            style_tokens.append(classification)
+        style_name = " | ".join(style_tokens)
+        if opening_name:
+            return f"{chapter_name_base} | {opening_name} | {style_name}"
+        return f"{chapter_name_base} | {style_name}"
+
+    anchor_nodes = first_moves[:16]
+    if normalized_strategy == "unknown_focus":
+        focus_nodes = _unknown_focus_anchors()
+        if focus_nodes:
+            anchor_nodes = focus_nodes
+
+    for index, node in enumerate(anchor_nodes, start=1):
+        label = _chapter_label_for(node, index)
+        pgn_text, meta = _smart_subtree_to_pgn(
+            tree_payload,
+            anchor_node_id=str(node.get("id", "") or ""),
+            chapter_name=label,
+            include_root_siblings=False,
+        )
+        chapter_meta = dict(meta or {})
+        chapter_meta["anchor_node_id"] = str(node.get("id", "") or "")
+        chapter_meta["anchor_classification"] = str(node.get("classification", "") or "")
+        chapters.append({"name": label[:100], "pgn": pgn_text, "meta": chapter_meta})
+    return chapters
+
+
+def _create_lichess_study(*, token: str, study_name: str = "Bookup", visibility: str = "unlisted") -> dict[str, Any]:
+    bearer = str(token or "").strip()
+    if not bearer:
+        raise ValueError("Lichess token is required.")
+    vis = str(visibility or "unlisted").strip().lower()
+    if vis not in {"public", "unlisted", "private"}:
+        vis = "unlisted"
+    body = urlencode(
+        {
+            "name": str(study_name or "Bookup").strip()[:100] or "Bookup",
+            "visibility": vis,
+            "computer": "everyone",
+            "explorer": "everyone",
+            "cloneable": "everyone",
+            "shareable": "everyone",
+            "chat": "member",
+            "sticky": "true",
+        }
+    ).encode("utf-8")
+    request = Request(
+        url="https://lichess.org/api/study",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {bearer}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": "Bookup Smart Theory Export",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            data = json.loads(raw) if raw else {}
+            study_id = _extract_study_id(str(data.get("id", "") or ""))
+            if not study_id:
+                raise RuntimeError("Lichess did not return a study ID after creation.")
+            return {
+                "ok": True,
+                "study_id": study_id,
+                "study_url": f"https://lichess.org/study/{study_id}",
+                "response": data,
+            }
+    except URLError as exc:
+        reason = getattr(exc, "reason", None)
+        raise RuntimeError(f"Lichess study creation failed: {reason or exc}") from exc
+
+
+def _post_pgn_to_lichess_study(*, study_id: str, token: str, chapter_name: str, pgn_text: str, orientation: str = "white") -> dict[str, Any]:
+    normalized_study_id = _extract_study_id(study_id)
+    if not normalized_study_id:
+        raise ValueError("Lichess study ID is required.")
+    bearer = str(token or "").strip()
+    if not bearer:
+        raise ValueError("Lichess token is required.")
+    normalized_orientation = "black" if str(orientation or "").strip().lower() == "black" else "white"
+    body = urlencode(
+        {
+            "name": str(chapter_name or "Bookup Smart Theory").strip() or "Bookup Smart Theory",
+            "pgn": str(pgn_text or "").strip(),
+            "orientation": normalized_orientation,
+        }
+    ).encode("utf-8")
+    request = Request(
+        url=f"https://lichess.org/api/study/{normalized_study_id}/import-pgn",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {bearer}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": "Bookup Smart Theory Export",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                data = {"raw": raw}
+            return {
+                "ok": True,
+                "status_code": int(getattr(response, "status", 200) or 200),
+                "study_id": normalized_study_id,
+                "study_url": f"https://lichess.org/study/{normalized_study_id}",
+                "response": data,
+            }
+    except URLError as exc:
+        reason = getattr(exc, "reason", None)
+        raise RuntimeError(f"Lichess study import failed: {reason or exc}") from exc
+
+
+def _is_missing_study_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return ("404" in text and "study" in text) or "not found" in text
+
+
+def _normalize_opening_focus(raw: object, fallback: str = "kings_indian_systems") -> str:
+    value = str(raw or "").strip().lower()
+    if value == "kings_indian":
+        # Backward compatibility with old single-mode setting.
+        value = "kings_indian_defense"
+    allowed = {"auto", "kings_indian_defense", "kings_indian_attack", "kings_indian_systems", "pirc_defense"}
+    if value not in allowed:
+        return fallback
+    return value
+
+
+def _normalize_bool(raw: object, fallback: bool = True) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw or "").strip().lower()
+    if not text:
+        return fallback
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return fallback
+
+
 def _smart_theory_state_name(raw_status: str) -> str:
     status = str(raw_status or "").strip().lower()
     if status in {"generating", "queued", "starting"}:
@@ -482,6 +1108,11 @@ def _smart_theory_state_name(raw_status: str) -> str:
 
 def _smart_job_payload(job_id: str, job: dict[str, object]) -> dict[str, object]:
     status = str(job.get("status", "idle") or "idle")
+    warnings_list = job.get("warnings", []) if isinstance(job.get("warnings"), list) else []
+    try:
+        warnings_count = int(job.get("warnings_count", len(warnings_list)) or 0)
+    except (TypeError, ValueError):
+        warnings_count = len(warnings_list)
     return {
         "job_id": job_id,
         "status": status,
@@ -493,9 +1124,11 @@ def _smart_job_payload(job_id: str, job: dict[str, object]) -> dict[str, object]
         "created_at": float(job.get("created_at", 0.0) or 0.0),
         "updated_at": float(job.get("updated_at", 0.0) or 0.0),
         "has_result": bool(job.get("result")),
-        "warnings_count": len(job.get("warnings", []) if isinstance(job.get("warnings"), list) else []),
+        "warnings_count": max(0, warnings_count),
+        "warning_latest": str(job.get("warning_latest", "") or ""),
         "partial_nodes": job.get("partial_nodes", []) if isinstance(job.get("partial_nodes"), list) else [],
         "partial_total_nodes": int(job.get("partial_total_nodes", 0) or 0),
+        "study_sync": job.get("study_sync") if isinstance(job.get("study_sync"), dict) else None,
     }
 
 
@@ -522,6 +1155,8 @@ def _run_smart_theory_job(
             job["positions_total"] = int(total)
             partial_nodes = extra.get("partial_nodes")
             partial_total_nodes = extra.get("partial_total_nodes")
+            warning_latest = extra.get("warning_latest")
+            warnings_count = extra.get("warnings_count")
             if isinstance(partial_nodes, list):
                 job["partial_nodes"] = partial_nodes
             if partial_total_nodes is not None:
@@ -529,11 +1164,80 @@ def _run_smart_theory_job(
                     job["partial_total_nodes"] = int(partial_total_nodes)
                 except (TypeError, ValueError):
                     pass
+            if warning_latest is not None:
+                job["warning_latest"] = str(warning_latest or "")
+            if warnings_count is not None:
+                try:
+                    job["warnings_count"] = int(warnings_count)
+                except (TypeError, ValueError):
+                    pass
             job["updated_at"] = time.time()
 
     def _cancelled() -> bool:
         with SMART_THEORY_JOBS_LOCK:
             return bool(SMART_THEORY_JOBS.get(job_id, {}).get("cancelled"))
+
+    def _background_study_sync(result_payload: dict[str, Any]) -> dict[str, Any]:
+        auto_sync = bool(payload.get("auto_sync_to_study", False))
+        if not auto_sync:
+            return {"status": "skipped", "reason": "auto_sync_disabled"}
+        if str(result_payload.get("status", "")).lower() == "stopped":
+            return {"status": "skipped", "reason": "generation_stopped"}
+        token = str(payload.get("lichess_token") or lichess_token or "").strip()
+        if not token:
+            return {"status": "skipped", "reason": "missing_lichess_token"}
+        config = migrate_engine_defaults(load_config())
+        study_id = _extract_study_id(str(payload.get("study_id", "") or "")) or _extract_study_id(str(config.get("bookup_study_id", "") or ""))
+        unified_name = str(payload.get("unified_study_name", "Bookup") or "Bookup").strip() or "Bookup"
+        created_unified_study = False
+        if not study_id:
+            created = _create_lichess_study(token=token, study_name=unified_name, visibility="unlisted")
+            study_id = str(created.get("study_id", "") or "")
+            if study_id:
+                created_unified_study = True
+                config["bookup_study_id"] = study_id
+                save_config(config)
+        if not study_id:
+            return {"status": "error", "error": "No study ID available for background sync."}
+        chapter_name = str(payload.get("chapter_name", "") or "").strip() or "Bookup Smart Theory"
+        orientation = "black" if str(payload.get("orientation", "white") or "white").strip().lower() == "black" else "white"
+        chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "first_move")) or "first_move").strip().lower()
+        if chapter_strategy not in {"single", "first_move", "unknown_focus"}:
+            chapter_strategy = "first_move"
+        chapters_payload = _smart_tree_chapter_exports(
+            result_payload,
+            strategy=chapter_strategy,
+            chapter_name_base=chapter_name,
+        )
+        created_chapters: list[dict[str, Any]] = []
+        for chapter in chapters_payload[:24]:
+            response = _post_pgn_to_lichess_study(
+                study_id=study_id,
+                token=token,
+                chapter_name=str(chapter.get("name", chapter_name) or chapter_name),
+                pgn_text=str(chapter.get("pgn", "") or ""),
+                orientation=orientation,
+            )
+            created_chapters.append(
+                {
+                    "name": str(chapter.get("name", "") or ""),
+                    "meta": chapter.get("meta", {}),
+                    "lichess_response": response.get("response", {}),
+                }
+            )
+        return {
+            "status": "success",
+            "study_id": study_id,
+            "study_url": f"https://lichess.org/study/{study_id}",
+            "created_unified_study": created_unified_study,
+            "chapter_strategy": chapter_strategy,
+            "chapters_created_count": len(created_chapters),
+            "chapters_created": created_chapters,
+            "moves_exported": sum(
+                int((chapter.get("meta", {}) or {}).get("moves_exported", 0) or 0)
+                for chapter in created_chapters
+            ),
+        }
 
     try:
         board = chess.Board(board_fen)
@@ -546,6 +1250,16 @@ def _run_smart_theory_job(
             is_cancelled=_cancelled,
             status_callback=_status_update,
         )
+        study_sync_result: dict[str, Any]
+        try:
+            study_sync_result = _background_study_sync(result)
+        except Exception as sync_exc:
+            study_sync_result = {"status": "error", "error": str(sync_exc)}
+            warnings = result.get("warnings", [])
+            if isinstance(warnings, list):
+                warnings.append(f"Background Lichess study sync failed: {sync_exc}")
+                result["warnings"] = warnings[:120]
+        result["study_sync"] = study_sync_result
         with SMART_THEORY_JOBS_LOCK:
             job = SMART_THEORY_JOBS.get(job_id)
             if not isinstance(job, dict):
@@ -554,9 +1268,18 @@ def _run_smart_theory_job(
             job["partial_nodes"] = result.get("nodes", [])[-200:] if isinstance(result.get("nodes"), list) else []
             job["partial_total_nodes"] = len(result.get("nodes", []) if isinstance(result.get("nodes"), list) else [])
             job["warnings"] = result.get("warnings", [])
+            job["warnings_count"] = len(job["warnings"]) if isinstance(job["warnings"], list) else 0
+            job["warning_latest"] = str((job["warnings"][-1] if isinstance(job["warnings"], list) and job["warnings"] else "") or "")
+            job["study_sync"] = study_sync_result
             status = str(result.get("status", "complete") or "complete")
             job["status"] = "stopped" if status == "stopped" else "complete"
-            job["message"] = "Smart theory generation stopped." if status == "stopped" else "Smart theory generation complete."
+            if status == "stopped":
+                job["message"] = "Smart theory generation stopped."
+            elif isinstance(study_sync_result, dict) and str(study_sync_result.get("status", "")).lower() == "success":
+                chapters = int(study_sync_result.get("chapters_created_count", 0) or 0)
+                job["message"] = f"Smart theory generation complete. Background study sync exported {chapters} chapter{'s' if chapters != 1 else ''}."
+            else:
+                job["message"] = "Smart theory generation complete."
             job["positions_done"] = int(result.get("positions_done", 0) or 0)
             job["positions_total"] = int(result.get("positions_total", 0) or 0)
             job["updated_at"] = time.time()
@@ -685,6 +1408,18 @@ def migrate_engine_defaults(config: dict) -> dict:
     migrated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
     if not str(migrated.get("engine_path", "")).strip():
         migrated["engine_path"] = default_engine_path()
+    if "bookup_auto_study_sync" not in migrated:
+        migrated["bookup_auto_study_sync"] = True
+    if not str(migrated.get("bookup_chapter_strategy", "")).strip():
+        migrated["bookup_chapter_strategy"] = "first_move"
+    migrated["bookup_opening_focus"] = _normalize_opening_focus(
+        migrated.get("bookup_opening_focus", ""),
+        fallback="kings_indian_systems",
+    )
+    migrated["bookup_include_best_engine_replies"] = _normalize_bool(
+        migrated.get("bookup_include_best_engine_replies", True),
+        fallback=True,
+    )
     return migrated
 
 
@@ -810,6 +1545,17 @@ def build_defaults_payload(config: dict) -> dict:
         "multipv": settings.multipv,
         "think_time_sec": settings.think_time_sec,
         "parallel_workers": settings.parallel_workers,
+        "bookup_study_id": str(migrated.get("bookup_study_id", "") or "").strip(),
+        "bookup_auto_study_sync": bool(migrated.get("bookup_auto_study_sync", True)),
+        "bookup_chapter_strategy": str(migrated.get("bookup_chapter_strategy", "first_move") or "first_move").strip().lower(),
+        "bookup_opening_focus": _normalize_opening_focus(
+            migrated.get("bookup_opening_focus", "kings_indian_systems"),
+            fallback="kings_indian_systems",
+        ),
+        "bookup_include_best_engine_replies": _normalize_bool(
+            migrated.get("bookup_include_best_engine_replies", True),
+            fallback=True,
+        ),
         "web_mode": WEB_MODE,
         "enable_brilliant_tracker": ENABLE_BRILLIANT_TRACKER,
     }
@@ -1264,6 +2010,25 @@ def save_settings() -> tuple:
             pass
     if "auto_import_on_startup" in payload:
         config["auto_import_on_startup"] = bool(payload.get("auto_import_on_startup"))
+    if "bookup_study_id" in payload:
+        config["bookup_study_id"] = _extract_study_id(str(payload.get("bookup_study_id", "") or ""))
+    if "bookup_auto_study_sync" in payload:
+        config["bookup_auto_study_sync"] = bool(payload.get("bookup_auto_study_sync"))
+    if "bookup_chapter_strategy" in payload:
+        strategy = str(payload.get("bookup_chapter_strategy", "first_move") or "first_move").strip().lower()
+        if strategy not in {"single", "first_move", "unknown_focus"}:
+            strategy = "first_move"
+        config["bookup_chapter_strategy"] = strategy
+    if "bookup_opening_focus" in payload:
+        config["bookup_opening_focus"] = _normalize_opening_focus(
+            payload.get("bookup_opening_focus", "kings_indian_systems"),
+            fallback="kings_indian_systems",
+        )
+    if "bookup_include_best_engine_replies" in payload:
+        config["bookup_include_best_engine_replies"] = _normalize_bool(
+            payload.get("bookup_include_best_engine_replies", True),
+            fallback=True,
+        )
 
     settings = request_engine_settings(payload, config)
     config = apply_engine_settings_to_config(config, settings)
@@ -2018,6 +2783,11 @@ def generate_smart_theory() -> tuple:
         return jsonify({"error": "Invalid FEN."}), 400
 
     config = load_config()
+    if "include_best_engine_replies" not in payload:
+        payload["include_best_engine_replies"] = _normalize_bool(
+            config.get("bookup_include_best_engine_replies", True),
+            fallback=True,
+        )
     settings = request_engine_settings(payload, config)
     # Smart Theory is tree-based, so we allow multiple workers, but clamp to
     # safe interactive limits so status polling and UI controls stay responsive.
@@ -2122,6 +2892,105 @@ def stop_smart_theory() -> tuple:
         SMART_THEORY_JOBS[job_id]["message"] = "Stopping generation..."
         SMART_THEORY_JOBS[job_id]["updated_at"] = time.time()
     return jsonify({"ok": True, "job_id": job_id, "status": "stopping"}), 200
+
+
+@app.post("/api/smart-theory/export-lichess-study")
+def export_smart_theory_to_lichess_study() -> tuple:
+    payload = request.get_json(force=True) or {}
+    config = load_config()
+    study_id = _extract_study_id(str(payload.get("study_id", "") or "")) or _extract_study_id(str(config.get("bookup_study_id", "") or ""))
+    token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
+    if not token:
+        return jsonify({"error": "A Lichess token with study:write scope is required."}), 400
+    auto_create_unified = bool(payload.get("auto_create_unified_study", True))
+    unified_study_name = str(payload.get("unified_study_name", "Bookup") or "Bookup").strip() or "Bookup"
+    created_unified_study = False
+    if not study_id and auto_create_unified:
+        try:
+            created = _create_lichess_study(token=token, study_name=unified_study_name, visibility="unlisted")
+            study_id = str(created.get("study_id", "") or "")
+            created_unified_study = bool(study_id)
+            config = migrate_engine_defaults(config)
+            config["bookup_study_id"] = study_id
+            save_config(config)
+        except Exception as exc:
+            return jsonify({"error": f"Could not auto-create unified Bookup study: {exc}"}), 502
+    if not study_id:
+        return jsonify({"error": "A Lichess study ID (or study URL) is required."}), 400
+    chapter_name = str(payload.get("chapter_name", "") or "").strip() or "Bookup Smart Theory"
+    orientation = str(payload.get("orientation", "white") or "white").strip().lower()
+    if orientation not in {"white", "black"}:
+        orientation = "white"
+    chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "first_move")) or "first_move").strip().lower()
+    if chapter_strategy not in {"single", "first_move", "unknown_focus"}:
+        chapter_strategy = "first_move"
+
+    provided_pgn = str(payload.get("pgn", "") or "").strip()
+    tree_payload = payload.get("tree")
+    try:
+        chapters_payload: list[dict[str, Any]] = []
+        if provided_pgn and chapter_strategy == "single":
+            chapters_payload = [{"name": chapter_name, "pgn": provided_pgn, "meta": {"moves_exported": None, "warnings": []}}]
+        else:
+            if not isinstance(tree_payload, dict):
+                return jsonify({"error": "Smart theory tree payload is required when PGN is not provided."}), 400
+            chapters_payload = _smart_tree_chapter_exports(
+                tree_payload,
+                strategy=chapter_strategy,
+                chapter_name_base=chapter_name,
+            )
+        if not chapters_payload:
+            return jsonify({"error": "No chapters were generated for Lichess study export."}), 400
+        created_chapters: list[dict[str, Any]] = []
+        for chapter in chapters_payload[:24]:
+            result = _post_pgn_to_lichess_study(
+                study_id=study_id,
+                token=token,
+                chapter_name=str(chapter.get("name", chapter_name) or chapter_name),
+                pgn_text=str(chapter.get("pgn", "") or ""),
+                orientation=orientation,
+            )
+            created_chapters.append(
+                {
+                    "name": str(chapter.get("name", "")),
+                    "meta": chapter.get("meta", {}),
+                    "lichess_response": result.get("response", {}),
+                }
+            )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({"error": f"Could not export Smart Theory to Lichess study: {exc}"}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "study_id": study_id,
+            "study_url": f"https://lichess.org/study/{study_id}",
+            "created_unified_study": created_unified_study,
+            "chapter_name": chapter_name,
+            "chapter_strategy": chapter_strategy,
+            "chapters_created": created_chapters,
+            "chapters_created_count": len(created_chapters),
+            "orientation": orientation,
+            "export_meta": {
+                "chapter_strategy": chapter_strategy,
+                "chapters_attempted": len(chapters_payload[:24]),
+                "chapters_created": len(created_chapters),
+                "warnings": [
+                    warning
+                    for chapter in created_chapters
+                    for warning in (chapter.get("meta", {}) or {}).get("warnings", [])
+                ][:100],
+                "moves_exported": sum(
+                    int((chapter.get("meta", {}) or {}).get("moves_exported", 0) or 0)
+                    for chapter in created_chapters
+                ),
+            },
+        }
+    ), 200
 
 
 @app.post("/api/legal-moves")

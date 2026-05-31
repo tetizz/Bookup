@@ -648,9 +648,16 @@
               <label class="field compact"><span>Max ply</span><input id="smartTheoryMaxPly" type="number" min="2" max="40" value="20"></label>
               <label class="field compact"><span>Max positions</span><input id="smartTheoryMaxPositions" type="number" min="10" max="1500" value="300"></label>
               <label class="field compact"><span>Custom FEN (optional)</span><input id="smartTheoryCustomFen" type="text" placeholder="startpos or FEN"></label>
+              <label class="field compact"><span>Lichess study ID / URL</span><input id="smartTheoryLichessStudyId" type="text" placeholder="Leave blank to auto-create unified Bookup study"></label>
+              <label class="field compact"><span>Lichess chapter name</span><input id="smartTheoryLichessChapterName" type="text" placeholder="Bookup Smart Theory"></label>
+              <label class="field compact"><span>Lichess orientation</span><select id="smartTheoryLichessOrientation"><option value="white">White</option><option value="black">Black</option></select></label>
+              <label class="field compact"><span>Chapter strategy</span><select id="smartTheoryChapterStrategy"><option value="first_move">One chapter per first move</option><option value="unknown_focus">Focus unknown branches first</option><option value="single">Single full-tree chapter</option></select></label>
+              <label class="field compact"><span>Opening focus</span><select id="smartTheoryOpeningFocus"><option value="auto">Auto</option><option value="kings_indian_systems">King's Indian systems + Pirc (auto by color)</option><option value="kings_indian_defense">King's Indian Defense (Black)</option><option value="kings_indian_attack">King's Indian Attack (White)</option><option value="pirc_defense">Pirc Defense (Black vs e4/e5)</option></select></label>
+              <label class="field compact"><span>Lichess personal token (optional)</span><input id="smartTheoryLichessToken" type="password" placeholder="Uses Setup token if blank"></label>
               <label class="field field-check compact"><span>Include rare sidelines</span><label class="checkbox-row"><input id="smartTheoryIncludeRare" type="checkbox" checked><span>Enabled</span></label></label>
               <label class="field field-check compact"><span>Include mistakes</span><label class="checkbox-row"><input id="smartTheoryIncludeMistakes" type="checkbox" checked><span>Enabled</span></label></label>
               <label class="field field-check compact"><span>Include blunders</span><label class="checkbox-row"><input id="smartTheoryIncludeBlunders" type="checkbox"><span>Enabled</span></label></label>
+              <label class="field field-check compact"><span>Include best engine replies</span><label class="checkbox-row"><input id="smartTheoryIncludeBestEngineReplies" type="checkbox" checked><span>Enabled</span></label></label>
               <label class="field field-check compact"><span>Avoid absurd moves</span><label class="checkbox-row"><input id="smartTheoryAvoidAbsurd" type="checkbox" checked><span>Enabled</span></label></label>
               <label class="field field-check compact"><span>ECO-only mode</span><label class="checkbox-row"><input id="smartTheoryEcoOnly" type="checkbox"><span>Enabled</span></label></label>
               <label class="field field-check compact"><span>Cache evaluations</span><label class="checkbox-row"><input id="smartTheoryCacheEvals" type="checkbox" checked><span>Enabled</span></label></label>
@@ -660,11 +667,17 @@
               <button id="smartTheoryStopBtn" class="ghost-btn" type="button">Stop</button>
               <button id="smartTheoryClearBtn" class="ghost-btn" type="button">Clear</button>
               <button id="smartTheoryExportBtn" class="ghost-btn" type="button">Export JSON</button>
+              <button id="smartTheoryExportLichessBtn" class="launch-btn" type="button">Export To Lichess Study</button>
               <label class="ghost-btn" for="smartTheoryImportInput">Import JSON</label>
               <input id="smartTheoryImportInput" type="file" accept=".json" style="display:none;">
             </div>
+            <label class="field field-check compact">
+              <span>Auto sync to unified Bookup study after generation</span>
+              <label class="checkbox-row"><input id="smartTheoryAutoSyncStudy" type="checkbox"><span>Enabled</span></label>
+            </label>
             <div id="smartTheoryStatus" class="line-note">Idle</div>
             <div id="smartTheoryProgress" class="line-note">No generation in progress.</div>
+            <div id="smartTheoryStudySyncMeta" class="stack empty">Study sync status will show here.</div>
             <div id="smartTheoryRunSummary" class="stack empty">Run summary will show here.</div>
             <div class="mini-board-wrap">
               <div id="smartTheoryMiniBoard" class="mini-board-grid empty">Generate or select a node to view the board.</div>
@@ -679,6 +692,8 @@
             <div id="smartTheoryOpeningMeta" class="stack empty">Opening name, ECO, and current FEN will show here.</div>
             <h3>Recommended Move</h3>
             <div id="smartTheoryRecommendation" class="stack empty">Best response and continuation will show here.</div>
+            <h3>Study First</h3>
+            <div id="smartTheoryLearningQueue" class="stack empty">Priority study queue will show here after generation.</div>
             <div class="chip-row"><button id="smartTheorySaveCorrectionBtn" class="launch-btn" type="button">Save corrected move as repertoire line</button></div>
             <h3>Opponent Replies</h3>
             <div id="smartTheoryOpponentReplies" class="stack empty">Opponent candidate replies will show here.</div>

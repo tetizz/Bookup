@@ -31,3 +31,5 @@ _refs/
 /Miss.png
 /Mistake.png
 /inaccuracy.png
+.env.local
+.env.*.local

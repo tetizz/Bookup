@@ -2115,13 +2115,30 @@ def generate_smart_theory_tree(
     max_ply = max(2, min(40, int(request.get("max_ply", 20) or 20)))
     max_positions = max(10, min(1500, int(request.get("max_positions", 300) or 300)))
     opponent_replies = max(1, min(8, int(request.get("opponent_replies", 3) or 3)))
+    include_best_engine_replies = bool(request.get("include_best_engine_replies", True))
     include_rare_sidelines = bool(request.get("include_rare_sidelines", True))
     include_mistakes = bool(request.get("include_opponent_mistakes", True))
     include_blunders = bool(request.get("include_opponent_blunders", False))
     avoid_absurd_moves = bool(request.get("avoid_absurd_moves", True))
     eco_only_mode = bool(request.get("eco_only_mode", False))
     cache_evals = bool(request.get("cache_evaluations", True))
+    opening_focus = str(request.get("opening_focus", "auto") or "auto").strip().lower()
+    if opening_focus == "kings_indian":
+        # Backward compatibility for saved settings from the old single-mode
+        # King's Indian focus.
+        opening_focus = "kings_indian_defense"
+    if opening_focus not in {"auto", "kings_indian_defense", "kings_indian_attack", "kings_indian_systems", "pirc_defense"}:
+        opening_focus = "auto"
+    if opening_focus in {"kings_indian_defense", "pirc_defense"} and my_color != "black":
+        # Black-only repertoire focus modes force Black perspective so the
+        # generated user-turn choices stay coherent.
+        my_color = "black"
+    if opening_focus == "kings_indian_attack" and my_color != "white":
+        # White-only King's Indian Attack mode.
+        my_color = "white"
+    follow_user_line_until_out_of_book = bool(request.get("follow_user_line_until_out_of_book", True))
     start_play_uci = [str(item) for item in (request.get("start_play_uci") or []) if str(item)]
+    user_book_line_uci = [str(item) for item in (request.get("user_book_line_uci") or []) if str(item)]
     reference_user_move_uci = str(request.get("reference_user_move_uci", "") or "").strip()
     starting_source = str(request.get("starting_source", "current_board") or "current_board")
     time_sec = request.get("engine_movetime_sec")
@@ -2134,7 +2151,24 @@ def generate_smart_theory_tree(
     node_counter = 0
     root_board = board.copy(stack=False)
     start_warnings: list[str] = []
-    for move_uci in start_play_uci:
+
+    def _in_book(board_for_book: chess.Board, move_uci: str) -> bool | None:
+        try:
+            context = database_context_for_board(board_for_book, play_uci=[], limit=16)
+            db_moves = context.get("database_moves", []) if isinstance(context, dict) else []
+            if not db_moves:
+                return None
+            for item in db_moves:
+                if str(item.get("uci", "") or "") == move_uci:
+                    popularity = float(item.get("popularity", item.get("percent", 0.0)) or 0.0)
+                    return popularity > 0.0
+        except Exception:
+            return None
+        return False
+
+    applied_start_moves: list[str] = []
+    opening_seed_line = start_play_uci[:] if start_play_uci else user_book_line_uci[:]
+    for move_uci in opening_seed_line:
         try:
             move = chess.Move.from_uci(move_uci)
         except ValueError:
@@ -2143,7 +2177,28 @@ def generate_smart_theory_tree(
         if move not in root_board.legal_moves:
             start_warnings.append(f"Ignored illegal start move in position: {move_uci}")
             continue
+        if follow_user_line_until_out_of_book:
+            in_book = _in_book(root_board, move_uci)
+            if in_book is False:
+                start_warnings.append(f"Stopped opening seed at {move_uci} because it appears outside book coverage.")
+                break
+            if in_book is None:
+                start_warnings.append(
+                    f"Book coverage was unavailable while checking {move_uci}; continued with your played line."
+                )
         root_board.push(move)
+        applied_start_moves.append(move_uci)
+
+    # Keep a per-ply reference of the user's known line after the applied seed.
+    # This lets Smart Theory highlight "your move vs best move" not just at root.
+    user_line_reference = user_book_line_uci[:] if user_book_line_uci else start_play_uci[:]
+    remaining_user_line_uci: list[str] = []
+    if user_line_reference:
+        consumed = 0
+        max_match = min(len(user_line_reference), len(applied_start_moves))
+        while consumed < max_match and user_line_reference[consumed] == applied_start_moves[consumed]:
+            consumed += 1
+        remaining_user_line_uci = user_line_reference[consumed:]
 
     eval_cache: dict[str, dict[str, Any]] = {}
     eval_cache_lock = threading.Lock()
@@ -2157,7 +2212,10 @@ def generate_smart_theory_tree(
 
     def cb(phase: str, message: str, extra: dict[str, Any] | None = None) -> None:
         if status_callback:
-            payload = extra or {}
+            payload = dict(extra or {})
+            payload["warnings_count"] = len(warnings)
+            if warnings:
+                payload["warning_latest"] = str(warnings[-1])
             status_callback(phase, message, positions_done, positions_total_hint, **payload)
 
     def cancelled() -> bool:
@@ -2225,6 +2283,28 @@ def generate_smart_theory_tree(
             return "Mistake"
         return "Blunder"
 
+    def learning_priority_for_node(
+        *,
+        is_user_side: bool,
+        is_corrected_move: bool,
+        move_class: str,
+        ply_index: int,
+    ) -> tuple[int, str]:
+        label = str(move_class or "").strip().lower()
+        if is_corrected_move:
+            return 1000 - max(0, ply_index), "Corrected your repeated move"
+        if is_user_side and label == "blunder":
+            return 920 - max(0, ply_index), "You blunder this position often"
+        if is_user_side and label == "mistake":
+            return 880 - max(0, ply_index), "You often play a mistake here"
+        if is_user_side and label == "inaccuracy":
+            return 840 - max(0, ply_index), "You often choose an inaccurate move here"
+        if is_user_side and label in {"good", "excellent", "best"}:
+            return 520 - max(0, ply_index), "Known but worth reviewing for consistency"
+        if not is_user_side and label in {"blunder", "mistake", "inaccuracy"}:
+            return 460 - max(0, ply_index), "Useful opponent error branch to convert"
+        return 320 - max(0, ply_index), "General repertoire context"
+
     def motifs_for_move(b: chess.Board, mv: chess.Move) -> list[str]:
         motifs: list[str] = []
         if b.is_capture(mv):
@@ -2239,8 +2319,75 @@ def generate_smart_theory_tree(
             pass
         return motifs
 
+    def _kings_indian_defense_preferred_move_uci(b: chess.Board) -> str:
+        if b.turn != chess.BLACK:
+            return ""
+        # KID setup preference for Black: ...Nf6, ...g6, ...Bg7, ...d6, then ...e5.
+        for uci in ("g8f6", "g7g6", "f8g7", "d7d6", "e7e5"):
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                continue
+            if move in b.legal_moves:
+                return uci
+        return ""
+
+    def _kings_indian_attack_preferred_move_uci(b: chess.Board) -> str:
+        if b.turn != chess.WHITE:
+            return ""
+        # KIA setup preference for White: Nf3, g3, Bg2, d3, O-O, then e4.
+        for uci in ("g1f3", "g2g3", "f1g2", "d2d3", "e1g1", "e2e4"):
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                continue
+            if move in b.legal_moves:
+                return uci
+        return ""
+
+    def _pirc_defense_preferred_move_uci(b: chess.Board) -> str:
+        if b.turn != chess.BLACK:
+            return ""
+        # Pirc setup preference for Black in 1.e4 structures:
+        # ...d6, ...Nf6, ...g6, ...Bg7, then ...e5.
+        for uci in ("d7d6", "g8f6", "g7g6", "f8g7", "e7e5"):
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                continue
+            if move in b.legal_moves:
+                return uci
+        return ""
+
+    def _is_e4_e5_structure_for_pirc(b: chess.Board) -> bool:
+        white_e4 = b.piece_at(chess.E4)
+        black_e5 = b.piece_at(chess.E5)
+        if white_e4 and white_e4.piece_type == chess.PAWN and white_e4.color == chess.WHITE:
+            return True
+        if black_e5 and black_e5.piece_type == chess.PAWN and black_e5.color == chess.BLACK:
+            return True
+        return False
+
+    def _kings_indian_systems_preferred_move_uci(b: chess.Board) -> str:
+        if my_color == "white":
+            return _kings_indian_attack_preferred_move_uci(b)
+        if my_color == "black":
+            if _is_e4_e5_structure_for_pirc(b):
+                return _pirc_defense_preferred_move_uci(b)
+            return _kings_indian_defense_preferred_move_uci(b)
+        return ""
+
     root_id = "root"
     root_opening, root_eco = board_opening(root_board)
+    effective_opening_focus = opening_focus
+    if effective_opening_focus == "auto":
+        opening_lower = str(root_opening or "").strip().lower()
+        if my_color == "black" and ("pirc" in opening_lower):
+            effective_opening_focus = "pirc_defense"
+        elif my_color == "black" and ("king's indian" in opening_lower or "kings indian" in opening_lower):
+            effective_opening_focus = "kings_indian_defense"
+        elif my_color == "white" and ("king's indian attack" in opening_lower or "kings indian attack" in opening_lower):
+            effective_opening_focus = "kings_indian_attack"
     root_node = {
         "id": root_id,
         "parentId": "",
@@ -2333,12 +2480,116 @@ def generate_smart_theory_tree(
             if user_to_move:
                 if not top_pv:
                     continue
-                mv = top_pv[0]
-                if mv not in current_board.legal_moves:
-                    continue
-                san = current_board.san(mv)
-                cp = score_white_cp(top_line, current_board.turn)
-                candidate_moves.append((mv, san, cp, top_line, 100.0, 0, "Best", db_moves))
+                expected_user_move_from_line = ""
+                if remaining_user_line_uci and len(path) < len(remaining_user_line_uci):
+                    expected_user_move_from_line = str(remaining_user_line_uci[len(path)] or "").strip()
+                preferred_uci = ""
+                if effective_opening_focus == "kings_indian_defense" and my_color == "black":
+                    preferred_uci = _kings_indian_defense_preferred_move_uci(current_board)
+                elif effective_opening_focus == "kings_indian_attack" and my_color == "white":
+                    preferred_uci = _kings_indian_attack_preferred_move_uci(current_board)
+                elif effective_opening_focus == "pirc_defense" and my_color == "black":
+                    preferred_uci = _pirc_defense_preferred_move_uci(current_board)
+                elif effective_opening_focus == "kings_indian_systems":
+                    preferred_uci = _kings_indian_systems_preferred_move_uci(current_board)
+                if preferred_uci:
+                    preferred_move = chess.Move.from_uci(preferred_uci)
+                    matching_line = next((line for line in lines if (line.get("pv") or [None])[0] and (line.get("pv") or [None])[0].uci() == preferred_uci), None)
+                    line_for_preferred = matching_line or top_line
+                    cp = score_white_cp(line_for_preferred, current_board.turn)
+                    san = current_board.san(preferred_move)
+                    category = user_category(cp - eval_before) if matching_line else "Good"
+                    candidate_moves.append((preferred_move, san, cp, line_for_preferred, 100.0, 0, category, db_moves))
+                else:
+                    mv = top_pv[0]
+                    if mv not in current_board.legal_moves:
+                        continue
+                    san = current_board.san(mv)
+                    cp = score_white_cp(top_line, current_board.turn)
+                    candidate_moves.append((mv, san, cp, top_line, 100.0, 0, "Best", db_moves))
+                # Surface "unknown line" learning at the root by also including
+                # the user's frequently played move when it differs from the best.
+                if ply == 0 and reference_user_move_uci:
+                    try:
+                        user_move = chess.Move.from_uci(reference_user_move_uci)
+                    except ValueError:
+                        user_move = None
+                    if user_move and user_move in current_board.legal_moves and all(item[0].uci() != reference_user_move_uci for item in candidate_moves):
+                        user_line = next(
+                            (
+                                line
+                                for line in lines
+                                if (line.get("pv") or [None])[0]
+                                and (line.get("pv") or [None])[0].uci() == reference_user_move_uci
+                            ),
+                            None,
+                        )
+                        if user_line is not None:
+                            user_cp = score_white_cp(user_line, current_board.turn)
+                            user_san = current_board.san(user_move)
+                            user_category_label = user_category(user_cp - eval_before)
+                            candidate_moves.append((user_move, user_san, user_cp, user_line, 80.0, 0, user_category_label, db_moves))
+                if expected_user_move_from_line:
+                    try:
+                        expected_user_move = chess.Move.from_uci(expected_user_move_from_line)
+                    except ValueError:
+                        expected_user_move = None
+                    if expected_user_move and expected_user_move in current_board.legal_moves and all(
+                        item[0].uci() != expected_user_move_from_line for item in candidate_moves
+                    ):
+                        expected_line = next(
+                            (
+                                line
+                                for line in lines
+                                if (line.get("pv") or [None])[0]
+                                and (line.get("pv") or [None])[0].uci() == expected_user_move_from_line
+                            ),
+                            None,
+                        )
+                        if expected_line is not None:
+                            expected_cp = score_white_cp(expected_line, current_board.turn)
+                            expected_san = current_board.san(expected_user_move)
+                            expected_category_label = user_category(expected_cp - eval_before)
+                            candidate_moves.append(
+                                (
+                                    expected_user_move,
+                                    expected_san,
+                                    expected_cp,
+                                    expected_line,
+                                    78.0,
+                                    0,
+                                    expected_category_label,
+                                    db_moves,
+                                )
+                            )
+                # Play like the user when the known move is still sound; switch
+                # to the strongest correction only when the known move is too weak.
+                if candidate_moves:
+                    best_candidate = candidate_moves[0]
+                    expected_candidate = None
+                    if expected_user_move_from_line:
+                        expected_candidate = next(
+                            (item for item in candidate_moves if item[0].uci() == expected_user_move_from_line),
+                            None,
+                        )
+                    if expected_candidate is not None:
+                        cp_gap = abs(int(best_candidate[2]) - int(expected_candidate[2]))
+                        if cp_gap <= 75:
+                            candidate_moves = [expected_candidate]
+                        else:
+                            # Keep a compact "best + your move" set for clarity.
+                            ordered = [best_candidate, expected_candidate]
+                            seen_user_uci: set[str] = set()
+                            deduped_user: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
+                            for item in ordered:
+                                item_uci = item[0].uci()
+                                if item_uci in seen_user_uci:
+                                    continue
+                                seen_user_uci.add(item_uci)
+                                deduped_user.append(item)
+                            candidate_moves = deduped_user
+                    else:
+                        candidate_moves = [best_candidate]
             else:
                 for line in lines:
                     pv = line.get("pv") or []
@@ -2402,6 +2653,44 @@ def generate_smart_theory_tree(
                         continue
                     selected.append(item)
                 candidate_moves = selected or ranked[:opponent_replies]
+                # Keep one engine-top defensive resource available when enabled,
+                # even if weighting/filtering picked only weaker human-like lines.
+                if include_best_engine_replies and top_best_uci:
+                    engine_best_item = next((item for item in candidate_moves if item[0].uci() == top_best_uci), None)
+                    if engine_best_item is None:
+                        engine_best_item = next((item for item in ranked if item[0].uci() == top_best_uci), None)
+                    if engine_best_item is None:
+                        best_move = top_pv[0] if top_pv else None
+                        if best_move and best_move in current_board.legal_moves:
+                            best_san = current_board.san(best_move)
+                            best_line = next(
+                                (
+                                    line
+                                    for line in lines
+                                    if (line.get("pv") or [None])[0]
+                                    and (line.get("pv") or [None])[0].uci() == top_best_uci
+                                ),
+                                top_line,
+                            )
+                            best_cp = score_white_cp(best_line, current_board.turn)
+                            best_db_entry = db_map.get(top_best_uci, {})
+                            best_popularity = float(best_db_entry.get("popularity", best_db_entry.get("percent", 0.0)) or 0.0)
+                            best_games = int(best_db_entry.get("games", best_db_entry.get("game_count", best_db_entry.get("play_count", 0))) or 0)
+                            best_delta = abs(best_cp - eval_before)
+                            best_category = opponent_category(delta=best_delta, popularity=best_popularity)
+                            engine_best_item = (best_move, best_san, best_cp, best_line, best_popularity, best_games, best_category, db_moves)
+                    if engine_best_item is not None and all(item[0].uci() != top_best_uci for item in candidate_moves):
+                        candidate_moves = [engine_best_item, *candidate_moves]
+                        # De-duplicate while preserving order, then respect cap.
+                        deduped: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
+                        seen_uci: set[str] = set()
+                        for item in candidate_moves:
+                            key = item[0].uci()
+                            if key in seen_uci:
+                                continue
+                            seen_uci.add(key)
+                            deduped.append(item)
+                        candidate_moves = deduped[:opponent_replies]
 
             for move, san, eval_after, line_meta, popularity, game_count, category, db_moves in candidate_moves:
                 if cancelled() or len(node_list) >= max_positions:
@@ -2425,16 +2714,29 @@ def generate_smart_theory_tree(
                 original_user_move = ""
                 corrected_move = ""
                 correction_note = ""
-                if user_to_move and reference_user_move_uci and ply == 0:
-                    original_user_move = reference_user_move_uci
-                    if reference_user_move_uci != move.uci():
+                expected_user_move_uci = ""
+                if user_to_move and remaining_user_line_uci and len(path) < len(remaining_user_line_uci):
+                    expected_user_move_uci = str(remaining_user_line_uci[len(path)] or "").strip()
+                if user_to_move and not expected_user_move_uci and reference_user_move_uci and ply == 0:
+                    expected_user_move_uci = reference_user_move_uci
+                if user_to_move and expected_user_move_uci:
+                    original_user_move = expected_user_move_uci
+                    if expected_user_move_uci != move.uci():
                         corrected_move = move.uci()
-                        candidate = next((line for line in lines if (line.get("pv") or [None])[0] and (line.get("pv") or [None])[0].uci() == reference_user_move_uci), None)
+                        candidate = next(
+                            (
+                                line
+                                for line in lines
+                                if (line.get("pv") or [None])[0]
+                                and (line.get("pv") or [None])[0].uci() == expected_user_move_uci
+                            ),
+                            None,
+                        )
                         ref_cp = score_white_cp(candidate, current_board.turn) if candidate else eval_before
                         ref_delta = abs(eval_before - ref_cp)
                         ref_class = user_category(ref_delta)
                         correction_note = (
-                            f" Correction: your saved move {reference_user_move_uci} is classified as {ref_class}. "
+                            f" Correction: your played-line move {expected_user_move_uci} is classified as {ref_class}. "
                             f"Use {move.uci()} instead."
                         )
                 theory, plan, opp_idea = _smart_rule_explanation(
@@ -2448,6 +2750,12 @@ def generate_smart_theory_tree(
                 )
                 if correction_note:
                     theory = f"{theory}{correction_note}"
+                learning_priority, learning_reason = learning_priority_for_node(
+                    is_user_side=bool(user_to_move),
+                    is_corrected_move=bool(corrected_move),
+                    move_class=move_class,
+                    ply_index=ply + 1,
+                )
                 node_counter += 1
                 node_id = f"n{node_counter}"
                 node = {
@@ -2478,6 +2786,8 @@ def generate_smart_theory_tree(
                     "isCorrectedMove": bool(corrected_move),
                     "originalUserMove": original_user_move,
                     "correctedMove": corrected_move,
+                    "learningPriority": int(learning_priority),
+                    "learningReason": learning_reason,
                     "theoryExplanation": theory,
                     "planForUser": plan,
                     "opponentIdea": opp_idea if not user_to_move else "",
@@ -2496,15 +2806,14 @@ def generate_smart_theory_tree(
                     if nfen not in visited:
                         visited.add(nfen)
                         queue.append((node_id, next_board, ply + 1, [*path, move.uci()]))
-            if len(node_list) % 12 == 0 or positions_done <= 3:
-                cb(
-                    "analyzing",
-                    f"Analyzing position {positions_done} of {positions_total_hint}",
-                    {
-                        "partial_nodes": node_list[-160:],
-                        "partial_total_nodes": len(node_list),
-                    },
-                )
+            cb(
+                "analyzing",
+                f"Analyzing position {positions_done} of {positions_total_hint}",
+                {
+                    "partial_nodes": node_list[-160:],
+                    "partial_total_nodes": len(node_list),
+                },
+            )
 
     if not cancelled() and len(node_list) <= 1:
         warnings.append(
@@ -2513,6 +2822,19 @@ def generate_smart_theory_tree(
         )
     phase = "complete" if not cancelled() else "stopped"
     generation_seconds = round(max(0.0, time.time() - generation_started_at), 3)
+    weak_classes = {"inaccuracy", "mistake", "blunder"}
+    user_weak_nodes = [
+        node
+        for node in node_list
+        if node.get("id") != "root"
+        and bool(node.get("isUserSide"))
+        and str(node.get("classification", "")).strip().lower() in weak_classes
+    ]
+    corrected_nodes = [node for node in node_list if bool(node.get("isCorrectedMove"))]
+    learning_queue = sorted(
+        [node for node in node_list if node.get("id") != "root"],
+        key=lambda item: (-int(item.get("learningPriority", 0) or 0), int(item.get("ply", 0) or 0)),
+    )[:40]
     cb(phase, "Smart theory generation complete." if phase == "complete" else "Smart theory generation stopped.")
     return {
         "status": phase,
@@ -2526,6 +2848,22 @@ def generate_smart_theory_tree(
         "tree": nodes,
         "warnings": warnings[:120],
         "starting_source": starting_source,
+        "opening_focus": effective_opening_focus,
+        "applied_start_line_uci": applied_start_moves,
+        "learning_queue_count": len(learning_queue),
+        "corrected_nodes_count": len(corrected_nodes),
+        "user_weak_nodes_count": len(user_weak_nodes),
+        "learning_queue_preview": [
+            {
+                "id": str(node.get("id", "") or ""),
+                "ply": int(node.get("ply", 0) or 0),
+                "san": str(node.get("san", "") or ""),
+                "classification": str(node.get("classification", "") or ""),
+                "learningPriority": int(node.get("learningPriority", 0) or 0),
+                "learningReason": str(node.get("learningReason", "") or ""),
+            }
+            for node in learning_queue[:12]
+        ],
         "start_fen": board.fen(),
         "effective_start_fen": root_board.fen(),
         "openingName": root_opening,
@@ -2536,6 +2874,7 @@ def generate_smart_theory_tree(
             "max_ply": max_ply,
             "max_positions": max_positions,
             "opponent_replies": opponent_replies,
+            "include_best_engine_replies": include_best_engine_replies,
             "include_rare_sidelines": include_rare_sidelines,
             "include_opponent_mistakes": include_mistakes,
             "include_opponent_blunders": include_blunders,
