@@ -1108,6 +1108,19 @@ select:focus {
   gap: 12px;
 }
 
+.health-meaning-banner {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 162, 255, 0.24);
+  border-radius: 14px;
+  background: rgba(10, 15, 21, 0.68);
+  color: var(--muted);
+}
+
+.health-meaning-banner strong {
+  color: var(--text-strong);
+}
+
 .health-card {
   padding: 18px;
   border: 1px solid rgba(139, 171, 224, 0.18);
@@ -1140,6 +1153,19 @@ select:focus {
   color: var(--text-strong);
   font-size: clamp(32px, 5vw, 54px);
   line-height: 0.95;
+}
+
+.health-card-context {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.health-card-context b {
+  color: var(--text-strong);
 }
 
 .intelligence-grid {

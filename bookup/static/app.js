@@ -2104,15 +2104,64 @@ function renderHealthDashboard(dashboard) {
   const coverage = dashboard.coverage_by_color || [];
   const weakest = dashboard.weakest_lines || [];
   const strongest = dashboard.strongest_lines || [];
+  const explainCard = (card) => {
+    const label = String(card?.label || "").trim().toLowerCase();
+    if (label.includes("repertoire health")) {
+      return {
+        meaning: "How stable your opening prep is overall.",
+        formula: "Built from confidence across repeated positions (0-100).",
+        action: "Keep this above 85 by clearing 'Due today' lines first.",
+      };
+    }
+    if (label.includes("due today")) {
+      return {
+        meaning: "How many lines need immediate review right now.",
+        formula: "Count of repeated-mistake lines currently marked due.",
+        action: "If this is not 0, start with the top 3 weakest branches below.",
+      };
+    }
+    if (label.includes("known coverage")) {
+      return {
+        meaning: "How much of your repertoire is truly memorized.",
+        formula: "Known lines / total tracked lines.",
+        action: "Raise this by finishing clean runs in Study Lines.",
+      };
+    }
+    if (label.includes("review load")) {
+      return {
+        meaning: "Suggested session size for today's focused study.",
+        formula: "Priority-weighted estimate from due/new queues.",
+        action: "Work this count from top to bottom for today's session.",
+      };
+    }
+    return {
+      meaning: "A quick health signal for your current repertoire state.",
+      formula: "Computed from your imported games + review queue state.",
+      action: "Use Needs Work and Study Lines to improve this metric.",
+    };
+  };
   el.healthDashboard.className = "health-dashboard";
   el.healthDashboard.innerHTML = `
+    <div class="health-meaning-banner">
+      <strong>How to read this:</strong> each card now shows meaning, formula, and the next action.
+    </div>
     <div class="health-card-grid">
       ${cards.map((card) => `
+        ${(() => {
+          const info = explainCard(card);
+          return `
         <article class="health-card ${escapeHtml(card.tone || "")}">
           <span>${escapeHtml(card.label)}</span>
           <strong>${escapeHtml(card.value)}</strong>
           <p>${escapeHtml(card.detail)}</p>
+          <div class="health-card-context">
+            <div><b>Meaning:</b> ${escapeHtml(info.meaning)}</div>
+            <div><b>Formula:</b> ${escapeHtml(info.formula)}</div>
+            <div><b>Action:</b> ${escapeHtml(info.action)}</div>
+          </div>
         </article>
+          `;
+        })()}
       `).join("")}
     </div>
     <div class="health-columns">
