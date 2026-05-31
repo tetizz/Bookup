@@ -159,6 +159,7 @@ const el = {
   smartTheoryClear: document.getElementById("smartTheoryClearBtn"),
   smartTheoryExport: document.getElementById("smartTheoryExportBtn"),
   smartTheoryExportLichess: document.getElementById("smartTheoryExportLichessBtn"),
+  smartTheoryFreshStudy: document.getElementById("smartTheoryFreshStudyBtn"),
   smartTheoryImport: document.getElementById("smartTheoryImportInput"),
   smartTheoryPresetButtons: Array.from(document.querySelectorAll("[data-smart-preset]")),
   smartTheoryStatus: document.getElementById("smartTheoryStatus"),
@@ -385,6 +386,7 @@ async function init() {
   el.smartTheoryClear?.addEventListener("click", clearSmartTheoryState);
   el.smartTheoryExport?.addEventListener("click", exportSmartTheoryJson);
   el.smartTheoryExportLichess?.addEventListener("click", () => { void exportSmartTheoryToLichessStudy(); });
+  el.smartTheoryFreshStudy?.addEventListener("click", () => { void createFreshUnifiedBookupStudy(); });
   el.smartTheoryImport?.addEventListener("change", importSmartTheoryJson);
   el.smartTheorySaveCorrection?.addEventListener("click", () => { void saveSmartTheoryCorrection(); });
   [
@@ -7157,6 +7159,7 @@ function setSmartTheoryControlsRunning(running) {
   if (el.smartTheoryStop) el.smartTheoryStop.disabled = !disabled;
   if (el.smartTheoryExport) el.smartTheoryExport.disabled = disabled || !state.smartTheoryTree;
   if (el.smartTheoryExportLichess) el.smartTheoryExportLichess.disabled = disabled || !state.smartTheoryTree;
+  if (el.smartTheoryFreshStudy) el.smartTheoryFreshStudy.disabled = disabled;
   el.smartTheoryPresetButtons?.forEach?.((button) => {
     button.disabled = disabled;
   });
@@ -7934,6 +7937,55 @@ async function exportSmartTheoryToLichessStudy(options = {}) {
     }
   } catch (error) {
     if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error?.message || "Could not export to Lichess study.");
+  }
+}
+
+async function createFreshUnifiedBookupStudy() {
+  const lichessToken = String(el.smartTheoryLichessToken?.value || currentLichessToken() || "").trim();
+  if (!lichessToken) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Add a Lichess token first, then create a fresh unified Bookup study.";
+    return;
+  }
+  if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Creating a fresh unified Bookup study...";
+  try {
+    const response = await fetch("/api/smart-theory/refresh-unified-study", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lichess_token: lichessToken,
+        unified_study_name: "Bookup",
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not create fresh unified Bookup study.");
+    const studyId = String(payload?.study_id || "").trim();
+    const studyUrl = String(payload?.study_url || "").trim();
+    if (studyId && el.smartTheoryLichessStudyId) {
+      el.smartTheoryLichessStudyId.value = studyId;
+      await saveSmartTheoryStudySettings();
+    }
+    renderSmartTheoryStudySyncMeta({
+      status: "success",
+      study_id: studyId,
+      study_url: studyUrl,
+      chapters_created_count: 0,
+      moves_exported: 0,
+      reason: "",
+      error: "",
+    });
+    const cleanupDeleted = Number(payload?.cleanup?.deleted_count || 0);
+    if (el.smartTheoryProgress) {
+      el.smartTheoryProgress.textContent = `Created fresh unified Bookup study${studyId ? ` (${studyId})` : ""}.${cleanupDeleted ? ` Removed ${cleanupDeleted} empty default chapter${cleanupDeleted === 1 ? "" : "s"}.` : ""}`;
+    }
+    if (el.smartTheoryOpeningMeta && studyUrl) {
+      const existing = String(el.smartTheoryOpeningMeta.innerHTML || "");
+      const studyRow = `<div><strong>Lichess study</strong>: <a href="${escapeHtml(studyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(studyUrl)}</a></div>`;
+      if (!existing.includes("Lichess study")) {
+        el.smartTheoryOpeningMeta.innerHTML = `${existing}${studyRow}`;
+      }
+    }
+  } catch (error) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error?.message || "Could not create fresh unified Bookup study.");
   }
 }
 

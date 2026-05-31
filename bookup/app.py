@@ -3125,6 +3125,35 @@ def export_smart_theory_to_lichess_study() -> tuple:
     ), 200
 
 
+@app.post("/api/smart-theory/refresh-unified-study")
+def refresh_unified_smart_theory_study() -> tuple:
+    payload = request.get_json(force=True) or {}
+    config = migrate_engine_defaults(load_config())
+    token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
+    if not token:
+        return jsonify({"error": "A Lichess token with study:write scope is required."}), 400
+    unified_name = str(payload.get("unified_study_name", "Bookup") or "Bookup").strip() or "Bookup"
+    try:
+        created = _create_lichess_study(token=token, study_name=unified_name, visibility="unlisted")
+        study_id = str(created.get("study_id", "") or "")
+        if not study_id:
+            return jsonify({"error": "Lichess did not return a study ID."}), 502
+        config["bookup_study_id"] = study_id
+        save_config(config)
+        cleanup = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
+        return jsonify(
+            {
+                "ok": True,
+                "study_id": study_id,
+                "study_url": f"https://lichess.org/study/{study_id}",
+                "unified_study_name": unified_name,
+                "cleanup": cleanup,
+            }
+        ), 200
+    except Exception as exc:
+        return jsonify({"error": f"Could not create fresh unified Bookup study: {exc}"}), 502
+
+
 @app.post("/api/legal-moves")
 def legal_moves() -> tuple:
     payload = request.get_json(force=True)

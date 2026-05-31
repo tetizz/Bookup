@@ -643,6 +643,30 @@ def test_manual_export_cleanup_placeholder_called() -> None:
         require(int(cleanup.get("deleted_count", 0) or 0) == 1, "manual_cleanup_deleted_count")
 
 
+def test_refresh_unified_study_endpoint() -> None:
+    with app.test_client() as client, patch("bookup.app.load_config", return_value={}), patch(
+        "bookup.app.save_config", return_value=None
+    ), patch(
+        "bookup.app._create_lichess_study",
+        return_value={"study_id": "R3fRe5h1", "study_url": "https://lichess.org/study/R3fRe5h1", "response": {"id": "R3fRe5h1"}},
+    ), patch(
+        "bookup.app._cleanup_default_placeholder_chapters",
+        return_value={"deleted_count": 1, "deleted_chapter_ids": ["abc"], "errors": []},
+    ):
+        response = client.post(
+            "/api/smart-theory/refresh-unified-study",
+            json={
+                "lichess_token": "lip_test_token",
+                "unified_study_name": "Bookup",
+            },
+        )
+        payload = response.get_json() or {}
+        require(response.status_code == 200, "refresh_study_status_200", str(payload))
+        require(str(payload.get("study_id", "")) == "R3fRe5h1", "refresh_study_id")
+        cleanup = payload.get("cleanup", {}) if isinstance(payload.get("cleanup"), dict) else {}
+        require(int(cleanup.get("deleted_count", 0) or 0) == 1, "refresh_study_cleanup")
+
+
 if __name__ == "__main__":
     test_settings_opening_focus()
     test_auto_create_and_chapter_naming()
@@ -656,4 +680,5 @@ if __name__ == "__main__":
     test_background_auto_sync_skips_without_token()
     test_background_auto_sync_skips_when_generation_stopped()
     test_manual_export_cleanup_placeholder_called()
+    test_refresh_unified_study_endpoint()
     print("ALL SMART THEORY LICHESS REGRESSION CHECKS PASSED")
