@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="author" content="tetizz">
-    <meta name="description" content="Bookup Web is a browser chess progress tracker for Chess.com rapid, blitz, and bullet stats, projections, goals, sessions, charts, and training recommendations.">
-    <title>Bookup Web | Chess Progress Tracker</title>
+    <meta name="description" content="Bookup Web imports public Chess.com games in the browser, builds repertoire maps, finds weak lines, trains study branches, tracks goals, and saves local reviews.">
+    <title>Bookup Web | Repertoire Trainer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -18,11 +18,13 @@
         <span>Bookup Web</span>
       </a>
       <nav aria-label="Bookup sections">
-        <a href="#dashboard">Dashboard</a>
-        <a href="#goals">Goals</a>
-        <a href="#projection">Projection</a>
-        <a href="#sessions">Sessions</a>
-        <a href="#training">Training</a>
+        <a href="#setup">Import</a>
+        <a href="#repertoire">Repertoire</a>
+        <a href="#needs">Needs Work</a>
+        <a href="#study">Study</a>
+        <a href="#theory">Theory</a>
+        <a href="#review">Review</a>
+        <a href="#goals">Progress</a>
         <a href="https://github.com/tetizz/Bookup/releases/latest">Desktop</a>
       </nav>
     </header>
@@ -30,9 +32,9 @@
     <main class="app-shell">
       <section id="dashboard" class="command-center">
         <div>
-          <p class="eyebrow">Chess.com progress tracker</p>
-          <h1>Track rapid, blitz, and bullet from the browser.</h1>
-          <p>Bookup Web uses Chess.com's public API for live stats and your browser storage for goals, projections, accuracy, and sessions.</p>
+          <p class="eyebrow">Browser repertoire trainer</p>
+          <h1>Import your games. Build your book. Train what fails.</h1>
+          <p>Bookup Web pulls public Chess.com games, groups your opening branches, finds loss-heavy lines, turns them into study cards, and keeps progress, sessions, and reviews in your browser.</p>
         </div>
         <form id="refreshForm" class="lookup-form">
           <label for="usernameInput">Chess.com username</label>
@@ -48,6 +50,17 @@
         <button class="active" type="button" data-mode="rapid">Rapid</button>
         <button type="button" data-mode="blitz">Blitz</button>
         <button type="button" data-mode="bullet">Bullet</button>
+      </section>
+
+      <section id="setup" class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">Setup</span>
+            <h2>Public Game Import</h2>
+          </div>
+          <span id="importStatus">Waiting for import</span>
+        </div>
+        <div id="importSummary" class="summary-grid"></div>
       </section>
 
       <section class="metric-grid" aria-label="Current stats">
@@ -95,7 +108,7 @@
           <svg id="ratingChart" class="chart" viewBox="0 0 820 300" role="img" aria-label="Recent rating chart"></svg>
         </article>
 
-        <article class="panel">
+        <article id="needs" class="panel">
           <div class="panel-head">
             <div>
               <span class="eyebrow">Accuracy</span>
@@ -109,6 +122,60 @@
             <label>Endgame <input id="accuracyEnd" type="number" min="0" max="100" step="0.1" value="77.2"></label>
           </div>
           <div id="phaseBars" class="phase-bars"></div>
+        </article>
+      </section>
+
+      <section id="repertoire" class="work-grid">
+        <article id="theory" class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Repertoire Map</span>
+              <h2>Branches From Your Games</h2>
+            </div>
+            <span id="repertoireMeta">Refresh to build map</span>
+          </div>
+          <div id="repertoireList" class="line-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Needs Work</span>
+              <h2>Repeated Pain Points</h2>
+            </div>
+            <span id="needsMeta">Loss-heavy lines</span>
+          </div>
+          <div id="needsWorkList" class="line-list compact"></div>
+        </article>
+      </section>
+
+      <section id="study" class="work-grid">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Study Lines</span>
+              <h2>Train A Real Branch</h2>
+            </div>
+            <span id="studyMeta">Imported public games</span>
+          </div>
+          <div id="studyCard" class="study-card"></div>
+          <div class="study-actions">
+            <button id="prevLineBtn" class="ghost-button" type="button">Previous</button>
+            <button id="knownLineBtn" type="button">I knew it</button>
+            <button id="missedLineBtn" class="danger-button" type="button">Missed</button>
+            <button id="nextLineBtn" class="ghost-button" type="button">Next</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Theory</span>
+              <h2>Move Tree</h2>
+            </div>
+            <span id="theoryMeta">Top continuations</span>
+          </div>
+          <div id="theoryTree" class="theory-tree"></div>
         </article>
       </section>
 
@@ -176,6 +243,17 @@
           <svg id="sessionChart" class="chart small" viewBox="0 0 620 240" role="img" aria-label="Session rating chart"></svg>
           <div id="sessionList" class="session-list"></div>
         </article>
+      </section>
+
+      <section id="review" class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">Review</span>
+            <h2>Saved Line Reviews</h2>
+          </div>
+          <button id="clearReviews" class="ghost-button" type="button">Clear reviews</button>
+        </div>
+        <div id="reviewList" class="line-list"></div>
       </section>
 
       <section id="training" class="panel">

@@ -29,7 +29,10 @@ const state = {
   mode: "rapid",
   stats: {},
   recentGames: [],
+  repertoire: [],
+  studyIndex: 0,
   sessions: [],
+  reviews: [],
   dropoff: DEFAULT_DROPOFF.map((row) => [...row]),
   accuracy: { ...DEFAULT_PROFILE.accuracy },
   customGames: 538,
@@ -65,6 +68,7 @@ function saveLocal() {
     username: state.username,
     mode: state.mode,
     sessions: state.sessions,
+    reviews: state.reviews,
     dropoff: state.dropoff,
     accuracy: state.accuracy,
     customGames: state.customGames,
@@ -77,6 +81,7 @@ function loadLocal() {
     if (saved.username) state.username = String(saved.username);
     if (MODE_KEYS.includes(saved.mode)) state.mode = saved.mode;
     if (Array.isArray(saved.sessions)) state.sessions = saved.sessions;
+    if (Array.isArray(saved.reviews)) state.reviews = saved.reviews;
     if (Array.isArray(saved.dropoff) && saved.dropoff.length) {
       state.dropoff = saved.dropoff.map((row) => row.map((item) => number(item, 0)));
     }
@@ -164,6 +169,19 @@ function estimateDurationMinutes(game) {
   return 20;
 }
 
+function parsePgnMoves(pgn) {
+  return String(pgn || "")
+    .replace(/\[[^\]]+\]/g, " ")
+    .replace(/\{[^}]*\}/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\$\d+/g, " ")
+    .replace(/\d+\.(\.\.)?/g, " ")
+    .replace(/\b(1-0|0-1|1\/2-1\/2|\*)\b/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim().replace(/[!?+#]+$/g, ""))
+    .filter((token) => token && !token.startsWith("%") && !token.includes("clk"));
+}
+
 function normalizeGame(game, username) {
   const headers = parseHeaders(game.pgn);
   const lower = username.toLowerCase();
@@ -175,9 +193,53 @@ function normalizeGame(game, username) {
     endTime: number(game.end_time),
     rating: number(player?.rating),
     outcome,
+    isWhite,
+    moves: parsePgnMoves(game.pgn),
     timeClass: String(game.time_class || headers.TimeControl || "").toLowerCase(),
     duration: estimateDurationMinutes(game),
   };
+}
+
+function outcomeScore(outcome) {
+  if (outcome === "win") return 1;
+  if (outcome === "draw") return 0.5;
+  return 0;
+}
+
+function buildRepertoire() {
+  const groups = new Map();
+  state.recentGames.forEach((game) => {
+    const moves = Array.isArray(game.moves) ? game.moves.filter(Boolean) : [];
+    if (moves.length < 4) return;
+    const key = moves.slice(0, Math.min(8, moves.length)).join(" ");
+    const current = groups.get(key) || {
+      key,
+      moves: moves.slice(0, 12),
+      games: 0,
+      wins: 0,
+      draws: 0,
+      losses: 0,
+      score: 0,
+      ratings: [],
+      color: game.isWhite ? "White" : "Black",
+    };
+    current.games += 1;
+    current.wins += game.outcome === "win" ? 1 : 0;
+    current.draws += game.outcome === "draw" ? 1 : 0;
+    current.losses += game.outcome === "loss" ? 1 : 0;
+    current.score += outcomeScore(game.outcome);
+    current.ratings.push(game.rating);
+    groups.set(key, current);
+  });
+  state.repertoire = [...groups.values()]
+    .map((item) => ({
+      ...item,
+      scoreRate: item.games ? item.score / item.games * 100 : 0,
+      avgRating: item.ratings.length ? item.ratings.reduce((a, b) => a + b, 0) / item.ratings.length : 0,
+    }))
+    .sort((a, b) => b.games - a.games || a.scoreRate - b.scoreRate)
+    .slice(0, 40);
+  state.studyIndex = Math.min(state.studyIndex, Math.max(0, state.repertoire.length - 1));
 }
 
 async function fetchRecentGames(username, mode) {
@@ -216,9 +278,11 @@ async function refresh() {
     });
     try {
       state.recentGames = await fetchRecentGames(username, state.mode);
+      buildRepertoire();
       status(`Loaded public ${MODE_LABELS[state.mode]} stats and ${state.recentGames.length} recent games for ${username}.`);
     } catch (error) {
       state.recentGames = [];
+      state.repertoire = [];
       status(`Loaded public ratings. Recent games could not be loaded: ${error.message}`, "warn");
     }
     state.lastUpdated = new Date().toLocaleString();
@@ -329,6 +393,105 @@ function renderRatingChart() {
   const points = games.map((game) => ({ value: game.rating, outcome: game.outcome }));
   renderLineChart(el.ratingChart, points);
   el.chartMeta.textContent = games.length ? `${games.length} recent ${MODE_LABELS[state.mode]} games` : "Refresh to load recent games";
+}
+
+function renderImportSummary() {
+  const games = state.recentGames;
+  const white = games.filter((game) => game.isWhite).length;
+  const black = games.length - white;
+  el.importStatus.textContent = games.length ? `${games.length} ${MODE_LABELS[state.mode]} games imported` : "Refresh imports public games";
+  el.importSummary.innerHTML = [
+    ["Games imported", formatCount(games.length), "Recent public archives"],
+    ["White / Black", `${white} / ${black}`, "Color split"],
+    ["Opening lines", formatCount(state.repertoire.length), "Grouped from PGNs"],
+    ["Storage", "Browser local", "Sessions and reviews stay here"],
+  ].map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("");
+}
+
+function lineRecord(line) {
+  return `${line.wins}W ${line.draws}D ${line.losses}L · ${pct(line.scoreRate)} score`;
+}
+
+function lineCard(line, index, extra = "") {
+  return `
+    <article class="line-card">
+      <div>
+        <span>${line.color} · ${line.games} games</span>
+        <strong>${line.moves.slice(0, 8).join(" ")}</strong>
+      </div>
+      <small>${lineRecord(line)}${extra ? ` · ${extra}` : ""}</small>
+      <button type="button" data-study-line="${index}">Study</button>
+    </article>
+  `;
+}
+
+function renderRepertoire() {
+  el.repertoireMeta.textContent = state.repertoire.length ? `${state.repertoire.length} grouped lines` : "No public game lines yet";
+  el.repertoireList.innerHTML = state.repertoire.length
+    ? state.repertoire.slice(0, 10).map((line, index) => lineCard(line, index)).join("")
+    : `<p class="empty">Refresh public games to build a repertoire map from your recent openings.</p>`;
+
+  const needs = state.repertoire
+    .map((line, index) => ({ ...line, index }))
+    .filter((line) => line.losses || line.scoreRate < 50)
+    .sort((a, b) => b.losses - a.losses || a.scoreRate - b.scoreRate)
+    .slice(0, 8);
+  el.needsMeta.textContent = needs.length ? `${needs.length} lines to review` : "No urgent lines found";
+  el.needsWorkList.innerHTML = needs.length
+    ? needs.map((line) => lineCard(line, line.index, "review priority")).join("")
+    : `<p class="empty">No repeated pain point found in the loaded recent games.</p>`;
+}
+
+function renderStudy() {
+  const line = state.repertoire[state.studyIndex];
+  if (!line) {
+    el.studyMeta.textContent = "No study line loaded";
+    el.studyCard.innerHTML = `<p class="empty">Refresh public games, then Bookup Web turns repeated openings into study cards.</p>`;
+    return;
+  }
+  el.studyMeta.textContent = `Line ${state.studyIndex + 1} of ${state.repertoire.length}`;
+  el.studyCard.innerHTML = `
+    <span class="line-label">${line.color} repertoire · ${line.games} games</span>
+    <h3>${line.moves[0] || "-"}</h3>
+    <p>${line.moves.slice(1, 10).join(" ") || "No continuation available from imported games."}</p>
+    <div class="study-stats">
+      <span>${lineRecord(line)}</span>
+      <span>Average rating ${formatRating(line.avgRating)}</span>
+    </div>
+  `;
+}
+
+function renderTheory() {
+  const firstMoves = new Map();
+  state.recentGames.forEach((game) => {
+    const move = game.moves?.[0];
+    if (!move) return;
+    const item = firstMoves.get(move) || { move, games: 0, score: 0, replies: new Map() };
+    item.games += 1;
+    item.score += outcomeScore(game.outcome);
+    const reply = game.moves?.[1] || "No reply";
+    item.replies.set(reply, (item.replies.get(reply) || 0) + 1);
+    firstMoves.set(move, item);
+  });
+  const rows = [...firstMoves.values()].sort((a, b) => b.games - a.games).slice(0, 8);
+  el.theoryMeta.textContent = rows.length ? `${rows.length} first moves` : "Refresh to build tree";
+  el.theoryTree.innerHTML = rows.length
+    ? rows.map((row) => {
+      const replies = [...row.replies.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([move, count]) => `${move} ${count}x`).join(" · ");
+      return `<article><strong>${row.move}</strong><span>${row.games} games · ${pct(row.score / row.games * 100)} score</span><p>${replies}</p></article>`;
+    }).join("")
+    : `<p class="empty">The theory tree appears after the browser imports public games.</p>`;
+}
+
+function renderReviews() {
+  el.reviewList.innerHTML = state.reviews.length
+    ? state.reviews.slice(-12).reverse().map((review) => `
+      <article class="line-card">
+        <div><span>${review.result} · ${review.date}</span><strong>${review.line}</strong></div>
+        <small>${review.note}</small>
+      </article>
+    `).join("")
+    : `<p class="empty">Mark study lines as known or missed to build a local review queue.</p>`;
 }
 
 function renderAccuracy() {
@@ -505,6 +668,11 @@ function renderAll() {
   document.querySelectorAll("[data-mode]").forEach((button) => button.classList.toggle("active", button.dataset.mode === state.mode));
   renderMetrics();
   renderRatingChart();
+  renderImportSummary();
+  renderRepertoire();
+  renderStudy();
+  renderTheory();
+  renderReviews();
   renderAccuracy();
   renderGoals();
   renderProjection();
@@ -553,6 +721,22 @@ function bind() {
     sessionChart: $("sessionChart"),
     sessionList: $("sessionList"),
     clearSessions: $("clearSessions"),
+    importStatus: $("importStatus"),
+    importSummary: $("importSummary"),
+    repertoireMeta: $("repertoireMeta"),
+    repertoireList: $("repertoireList"),
+    needsMeta: $("needsMeta"),
+    needsWorkList: $("needsWorkList"),
+    studyMeta: $("studyMeta"),
+    studyCard: $("studyCard"),
+    prevLineBtn: $("prevLineBtn"),
+    nextLineBtn: $("nextLineBtn"),
+    knownLineBtn: $("knownLineBtn"),
+    missedLineBtn: $("missedLineBtn"),
+    theoryMeta: $("theoryMeta"),
+    theoryTree: $("theoryTree"),
+    clearReviews: $("clearReviews"),
+    reviewList: $("reviewList"),
     trainingGrid: $("trainingGrid"),
     weaknessLabel: $("weaknessLabel"),
   });
@@ -593,6 +777,40 @@ function bind() {
     state.sessions = [];
     saveLocal();
     renderAll();
+  });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-study-line]");
+    if (!button) return;
+    state.studyIndex = Math.max(0, Math.min(state.repertoire.length - 1, number(button.dataset.studyLine)));
+    renderStudy();
+    document.getElementById("study")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  el.prevLineBtn.addEventListener("click", () => {
+    state.studyIndex = Math.max(0, state.studyIndex - 1);
+    renderStudy();
+  });
+  el.nextLineBtn.addEventListener("click", () => {
+    state.studyIndex = Math.min(Math.max(0, state.repertoire.length - 1), state.studyIndex + 1);
+    renderStudy();
+  });
+  const saveReview = (result) => {
+    const line = state.repertoire[state.studyIndex];
+    if (!line) return;
+    state.reviews.push({
+      result,
+      date: new Date().toLocaleDateString(),
+      line: line.moves.slice(0, 8).join(" "),
+      note: lineRecord(line),
+    });
+    saveLocal();
+    renderReviews();
+  };
+  el.knownLineBtn.addEventListener("click", () => saveReview("known"));
+  el.missedLineBtn.addEventListener("click", () => saveReview("missed"));
+  el.clearReviews.addEventListener("click", () => {
+    state.reviews = [];
+    saveLocal();
+    renderReviews();
   });
 }
 

@@ -57,6 +57,12 @@ button { cursor: pointer; }
   gap: 10px;
 }
 
+.topbar nav {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 2px;
+}
+
 .brand {
   color: var(--ink);
   font-weight: 900;
@@ -75,9 +81,9 @@ button { cursor: pointer; }
 }
 
 .topbar nav a {
-  padding: 10px 11px;
+  padding: 8px 9px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -223,7 +229,7 @@ button:disabled {
     radial-gradient(circle at 100% 0%, rgba(129, 217, 154, 0.22), transparent 11rem),
     linear-gradient(150deg, rgba(21, 47, 31, 0.96), rgba(12, 20, 29, 0.96));
 }
-.metric-card span, .projection-results span, .goal-card span, .training-grid span {
+.metric-card span, .projection-results span, .goal-card span, .training-grid span, .summary-grid span, .line-card span, .line-label, .theory-tree span {
   display: block;
   color: var(--muted);
   font-family: var(--mono);
@@ -244,6 +250,33 @@ button:disabled {
   margin-top: 8px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-grid article {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(5, 12, 9, 0.5);
+}
+
+.summary-grid strong {
+  display: block;
+  margin-top: 10px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 24px;
+}
+
+.summary-grid small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
 }
 
 .work-grid {
@@ -429,6 +462,81 @@ button:disabled {
   font-size: 15px;
 }
 
+.line-list, .theory-tree {
+  display: grid;
+  gap: 12px;
+}
+
+.line-card, .theory-tree article, .study-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(5, 12, 9, 0.5);
+}
+
+.line-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.line-card strong, .theory-tree strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.line-card small {
+  color: var(--muted);
+}
+
+.line-card button {
+  min-width: 92px;
+}
+
+.line-list.compact .line-card {
+  grid-template-columns: 1fr;
+}
+
+.study-card h3 {
+  margin: 10px 0;
+  color: var(--ink);
+  font-size: clamp(2.4rem, 5vw, 4.5rem);
+}
+
+.study-stats, .study-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.study-stats span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.study-actions {
+  margin-top: 14px;
+}
+
+.danger-button {
+  color: #250705;
+  border-color: rgba(255, 130, 125, 0.7);
+  background: linear-gradient(135deg, #ff9a92, var(--red));
+}
+
+.theory-tree article p {
+  margin: 8px 0 0;
+  font-size: 15px;
+}
+
 .training-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -446,7 +554,7 @@ button:disabled {
 }
 
 @media (max-width: 1180px) {
-  .metric-grid, .goal-grid, .training-grid {
+  .metric-grid, .goal-grid, .training-grid, .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .command-center, .work-grid {
@@ -477,7 +585,10 @@ button:disabled {
   .lookup-form div, .panel-head {
     flex-direction: column;
   }
-  .lookup-form button, .projection-results, .metric-grid, .goal-grid, .training-grid, .accuracy-grid, .session-form {
+  .lookup-form button, .projection-results, .metric-grid, .goal-grid, .training-grid, .summary-grid, .accuracy-grid, .session-form {
+    grid-template-columns: 1fr;
+  }
+  .line-card {
     grid-template-columns: 1fr;
   }
   .projection-results {
