@@ -45,7 +45,7 @@
     <nav class="workspace-tabs">
       <button class="workspace-tab active" data-tab-target="setup">Setup</button>
       <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire Map</button>
-      <button class="workspace-tab" data-tab-target="stats">Stats</button>
+      <button class="workspace-tab" data-tab-target="stats">Progress</button>
       <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
       <button class="workspace-tab" data-tab-target="trainer">Study Lines</button>
       <button class="workspace-tab" data-tab-target="theory">Theory</button>
@@ -147,6 +147,7 @@
           </div>
           <div class="setup-actions">
             <button id="analyzeBtn" class="primary-btn" type="button">Build Repertoire</button>
+            <button id="saveSetupBtn" class="ghost-btn" type="button">Save Setup</button>
             <div class="progress-stack">
               <div class="progress-track" id="progressTrack" aria-hidden="true">
                 <div class="progress-fill" id="progressFill"></div>
@@ -273,28 +274,114 @@
       <section class="section-block">
         <div class="section-label">Known Line Archive</div>
         <h2 class="section-title">Lines you already know well enough to keep out of the urgent queue</h2>
-        <div id="knownArchiveList" class="stack empty">Known lines will show up here.</div>
+        <div id="knownArchiveList" class="stack empty">Complete clean reps to build the known-lines archive.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Transpositions</div>
         <h2 class="section-title">Different paths into the same position</h2>
-        <div id="transpositionList" class="stack empty">Transposition groups will show up here after import.</div>
+        <div id="transpositionList" class="stack empty">Import games to detect shared positions and transpositions.</div>
       </section>
     </section>
 
     <section class="workspace-panel" data-tab-panel="stats">
+      <section class="section-block progress-cockpit-section">
+        <div class="section-label">Progress Dashboard</div>
+        <div class="progress-cockpit-head">
+          <div>
+            <h2 class="section-title">Live ratings, goals, sessions, and what to study next</h2>
+            <p class="summary-copy">Your Chess.com progress sits beside Bookup’s prep tools, so each rating trend turns into a concrete training plan.</p>
+          </div>
+          <div class="progress-cockpit-actions">
+            <div class="progress-mode-tabs" role="tablist" aria-label="Progress time control">
+              <button class="progress-mode-btn active" type="button" data-progress-mode="rapid">Rapid</button>
+              <button class="progress-mode-btn" type="button" data-progress-mode="blitz">Blitz</button>
+              <button class="progress-mode-btn" type="button" data-progress-mode="bullet">Bullet</button>
+            </div>
+            <button id="progressRefreshBtn" class="launch-btn" type="button">Refresh Chess.com</button>
+          </div>
+        </div>
+        <div id="progressStatus" class="line-note">Progress tracker will load with your saved Chess.com username.</div>
+        <div id="progressMetricGrid" class="progress-metric-grid-v2"></div>
+        <div class="progress-dashboard-grid">
+          <article class="card progress-chart-card">
+            <div class="rating-progress-head">
+              <div>
+                <h3>Rating Over Time</h3>
+                <p class="summary-copy">Recent live games plus local session snapshots.</p>
+              </div>
+            </div>
+            <canvas id="progressRatingChart" class="progress-canvas" height="220"></canvas>
+          </article>
+          <article class="card progress-chart-card">
+            <h3>Daily Gain/Loss</h3>
+            <canvas id="progressDeltaChart" class="progress-canvas" height="220"></canvas>
+          </article>
+          <article class="card progress-chart-card">
+            <h3>Phase Accuracy</h3>
+            <canvas id="progressPhaseChart" class="progress-canvas" height="220"></canvas>
+          </article>
+          <article class="card progress-insight-card">
+            <h3>Weakness and Plan</h3>
+            <div id="progressWeaknessPanel" class="stack empty">Refresh progress to see weakness and phase accuracy.</div>
+          </article>
+        </div>
+        <div class="progress-dashboard-grid lower">
+          <article class="card">
+            <h3>Goal Progress</h3>
+            <div id="progressGoalGrid" class="progress-goal-grid"></div>
+          </article>
+          <article class="card">
+            <h3>Projection</h3>
+            <div class="progress-projection-controls">
+              <label class="field compact"><span>Custom games</span><input id="progressCustomGames" type="number" min="1" value="538"></label>
+              <button id="progressSaveProjectionBtn" class="ghost-btn" type="button">Save projection</button>
+            </div>
+            <div id="progressProjectionPanel" class="stack empty">Refresh progress to calculate rating projections.</div>
+          </article>
+          <article class="card">
+            <h3>Time Calculator</h3>
+            <div id="progressTimePanel" class="stack empty">Refresh progress to estimate real playing time.</div>
+          </article>
+          <article class="card">
+            <h3>Training Recommendations</h3>
+            <div id="progressRecommendationPanel" class="stack empty">Refresh progress to build today’s training focus.</div>
+          </article>
+        </div>
+        <div class="progress-session-layout">
+          <form id="progressSessionForm" class="card progress-session-form">
+            <h3>Save Session</h3>
+            <div class="progress-session-grid">
+              <label class="field compact"><span>Date</span><input name="date" type="date"></label>
+              <label class="field compact"><span>Start rating</span><input name="start_rating" type="number"></label>
+              <label class="field compact"><span>End rating</span><input name="end_rating" type="number" required></label>
+              <label class="field compact"><span>Wins</span><input name="wins" type="number" min="0" value="0"></label>
+              <label class="field compact"><span>Draws</span><input name="draws" type="number" min="0" value="0"></label>
+              <label class="field compact"><span>Losses</span><input name="losses" type="number" min="0" value="0"></label>
+              <label class="field compact"><span>Accuracy</span><input name="accuracy" type="number" step="0.01"></label>
+              <label class="field compact"><span>Mistake theme</span><input name="mistake_theme" type="text" placeholder="missed tactics, time trouble"></label>
+            </div>
+            <label class="field"><span>Notes</span><textarea name="notes" rows="3"></textarea></label>
+            <label class="field"><span>What to work on next</span><textarea name="next_work" rows="3"></textarea></label>
+            <button class="launch-btn" type="submit">Save session</button>
+          </form>
+          <article class="card">
+            <h3>Recent Sessions</h3>
+            <div id="progressSessionList" class="stack empty">No local progress sessions yet.</div>
+          </article>
+        </div>
+      </section>
+
       <section class="section-block">
-        <div class="section-label">Stats</div>
-        <h2 class="section-title">Rating, results, and form over time</h2>
+        <div class="section-label">Game Split</div>
+        <h2 class="section-title">Results and time-control mix from imported games</h2>
         <div id="statsSummaryPanel" class="stats-summary-panel empty">Import rated games to see your W/D/L, score rate, and time-control split.</div>
-        <div id="ratingProgressPanel" class="rating-progress-panel empty">Import rated games to see your 30-day, 90-day, and all-time progress graph.</div>
       </section>
 
       <section id="brilliantTrackerSection" class="section-block">
         <div class="section-label">Brilliant Tracker</div>
         <h2 class="section-title">Brilliants, great moves, and tactical chances from your repertoire</h2>
-        <div id="brilliantTrackerPanel" class="brilliant-tracker-panel empty">Bookup will track brilliant candidates after Stockfish classifies your repertoire positions.</div>
+        <div id="brilliantTrackerPanel" class="brilliant-tracker-panel empty">Run analysis to track brilliant candidates from your repertoire positions.</div>
       </section>
 
       <section class="section-block">
@@ -303,47 +390,47 @@
         <div class="split-grid intelligence-grid">
           <article class="card">
             <h3>Line Memory Score</h3>
-            <div id="memoryScorePanel" class="stack empty">Memory scores will show up after import.</div>
+            <div id="memoryScorePanel" class="stack empty">Import games to score line memory and retention.</div>
           </article>
           <article class="card">
             <h3>Opening Drift Detector</h3>
-            <div id="driftDetectorPanel" class="stack empty">Bookup will compare your recent first moves with your long-term repertoire.</div>
+            <div id="driftDetectorPanel" class="stack empty">Import games to compare recent first moves with your long-term repertoire.</div>
           </article>
         </div>
         <div class="split-grid intelligence-grid">
           <article class="card">
             <h3>Preparation Pack</h3>
-            <div id="prepPackPanel" class="stack empty">Your compact study pack will show up here.</div>
+            <div id="prepPackPanel" class="stack empty">Import games to assemble a compact study pack.</div>
           </article>
           <article class="card">
             <h3>Engine Cache</h3>
-            <div id="cacheDashboard" class="stack empty">Cache stats will show after Bookup loads.</div>
+            <div id="cacheDashboard" class="stack empty">Cache diagnostics are ready after Bookup loads the local workspace.</div>
           </article>
         </div>
         <div class="split-grid intelligence-grid">
           <article class="card">
             <h3>Study Plan Generator</h3>
-            <div id="studyPlanPanel" class="stack empty">Bookup will build a short session plan after import.</div>
+            <div id="studyPlanPanel" class="stack empty">Import games to build a short study session plan.</div>
           </article>
           <article class="card">
             <h3>Confidence Graph</h3>
-            <div id="confidenceGraphPanel" class="stack empty">Line confidence distribution will show up here.</div>
+            <div id="confidenceGraphPanel" class="stack empty">Import games to map line-confidence distribution.</div>
           </article>
         </div>
         <div class="split-grid intelligence-grid">
           <article class="card">
             <h3>Drift Fixes</h3>
-            <div id="driftFixPanel" class="stack empty">If your first moves drift, Bookup will suggest whether to adopt or repair them.</div>
+            <div id="driftFixPanel" class="stack empty">Import games to review adopt-or-repair choices for drifting first moves.</div>
           </article>
           <article class="card">
             <h3>Import Speed Dashboard</h3>
-            <div id="importSpeedPanel" class="stack empty">Import and cache diagnostics will show up here.</div>
+            <div id="importSpeedPanel" class="stack empty">Import games to review speed and cache diagnostics.</div>
           </article>
         </div>
         <div class="split-grid intelligence-grid">
           <article class="card stockfish-stats-card">
             <h3>Stockfish Runtime</h3>
-            <div id="stockfishStatsPanel" class="stack empty">Live Stockfish throughput, ETA, CPU, and memory will show up here.</div>
+            <div id="stockfishStatsPanel" class="stack empty">Run analysis to see Stockfish throughput, ETA, CPU, and memory.</div>
           </article>
           <article class="card">
             <h3>Parallel Analysis</h3>
@@ -356,47 +443,47 @@
     <section class="workspace-panel" data-tab-panel="needs-work">
       <section class="section-block">
         <div class="section-label">Due Today</div>
-        <div id="urgentList" class="stack empty">Due lines will show up here.</div>
+        <div id="urgentList" class="stack empty">Due lines appear here when a review is ready.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">New Later</div>
-        <div id="sidelineList" class="stack empty">Fresh lines will show up here.</div>
+        <div id="sidelineList" class="stack empty">Fresh lines appear here after import.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Suggested Upgrades</div>
-        <div id="suggestionList" class="stack empty">Suggested repertoire upgrades will show up here.</div>
+        <div id="suggestionList" class="stack empty">Import games to surface repertoire upgrade candidates.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Mistake Heatmap</div>
         <h2 class="section-title">Squares where repeated problems cluster</h2>
-        <div id="mistakeHeatmap" class="heatmap-panel empty">Repeated-mistake square pressure will show up here.</div>
+        <div id="mistakeHeatmap" class="heatmap-panel empty">Import games to map repeated-mistake square pressure.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Mistake Timeline</div>
         <h2 class="section-title">When each repeated problem started and whether it is improving</h2>
-        <div id="mistakeTimeline" class="timeline-panel empty">Repeated-mistake history will show up here.</div>
+        <div id="mistakeTimeline" class="timeline-panel empty">Import games to chart repeated-mistake history.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Spaced Review</div>
         <h2 class="section-title">Maintenance schedule</h2>
-        <div id="reviewSchedule" class="stack empty">Review schedule will show up here.</div>
+        <div id="reviewSchedule" class="stack empty">Review schedule appears once lines enter the queue.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Smart Retry</div>
         <h2 class="section-title">Repeat the exact positions that are not sticking yet</h2>
-        <div id="smartRetryPanel" class="stack empty">Smart retry cards will show up here.</div>
+        <div id="smartRetryPanel" class="stack empty">Retry cards appear once Bookup finds missed lines.</div>
       </section>
 
       <section class="section-block">
         <div class="section-label">Pre-Move Quiz</div>
         <h2 class="section-title">Quick prompts before you enter the trainer</h2>
-        <div id="premoveQuizPanel" class="stack empty">Pre-move quiz cards will show up here.</div>
+        <div id="premoveQuizPanel" class="stack empty">Pre-move quiz cards appear after import.</div>
       </section>
     </section>
 
@@ -404,7 +491,7 @@
       <section class="section-block">
         <div class="section-label">Review</div>
         <h2 class="section-title">Repeated positions that still need correction</h2>
-        <div id="mistakeList" class="stack empty">Opening mistakes will show up here.</div>
+        <div id="mistakeList" class="stack empty">Opening mistakes appear after import.</div>
       </section>
     </section>
 
@@ -434,32 +521,32 @@
           <div class="chip-row">
             <button id="generateTheoryBtn" class="launch-btn" type="button">Generate Theory</button>
           </div>
-          <div id="theoryOutput" class="theory-output empty">Generated theory will show up here.</div>
+          <div id="theoryOutput" class="theory-output empty">Generate a move to create theory.</div>
 
           <div class="section-divider"></div>
           <div class="section-label">Theory Presets</div>
           <h2 class="section-title compact-title">One-click seeds from your repertoire</h2>
-          <div id="theoryPresetPanel" class="stack empty">Bookup will suggest theory seeds after import.</div>
+          <div id="theoryPresetPanel" class="stack empty">Import games to suggest theory seeds.</div>
 
           <div class="section-divider"></div>
           <div class="section-label">Response Builder</div>
           <h2 class="section-title compact-title">Prepare against common replies</h2>
-          <div id="databaseTrainingList" class="stack empty">Database-weighted training replies will show up here.</div>
+          <div id="databaseTrainingList" class="stack empty">Import games to rank database-weighted training replies.</div>
 
           <div class="section-divider"></div>
           <div class="section-label">Opponent Simulator</div>
           <h2 class="section-title compact-title">Practice the moves people actually play</h2>
-          <div id="opponentSimulatorPanel" class="stack empty">Opponent simulator scenarios will show up here.</div>
+          <div id="opponentSimulatorPanel" class="stack empty">Import games to build opponent simulator scenarios.</div>
 
           <div class="section-divider"></div>
           <div class="section-label">Blunder Trap Finder</div>
           <h2 class="section-title compact-title">Common replies with concrete punishments</h2>
-          <div id="trapFinderPanel" class="stack empty">Trap candidates will show up here.</div>
+          <div id="trapFinderPanel" class="stack empty">Import games to surface trap candidates.</div>
 
           <div class="section-divider"></div>
           <div class="section-label">Repertoire Export</div>
           <h2 class="section-title compact-title">Save your prepared lines</h2>
-          <div id="repertoireExportPanel" class="stack empty">Export will show up here after import.</div>
+          <div id="repertoireExportPanel" class="stack empty">Import games to prepare a repertoire export.</div>
         </aside>
       </div>
     </section>
@@ -485,7 +572,7 @@
               <div class="eval-bar" id="studyEvalBar">
                 <div id="studyEvalFill" class="eval-fill"></div>
               </div>
-              <div id="studyEvalCaption" class="eval-caption">Waiting for live analysis</div>
+              <div id="studyEvalCaption" class="eval-caption">Ready for live analysis</div>
             </aside>
 
             <div class="board-area">
@@ -517,7 +604,7 @@
                 <span>Stockfish</span>
                 <span id="studyAnalysisMeta" class="line-badge">Depth -- | 5 sec | MultiPV --</span>
               </div>
-              <div id="studyEngineLines" class="stack empty">Engine lines will show up here.</div>
+              <div id="studyEngineLines" class="stack empty">Load a study position to see engine lines.</div>
             </div>
 
             <div class="study-panel-section">
@@ -525,15 +612,15 @@
                 <span>Lichess Database</span>
                 <span id="studyDatabaseMeta" class="line-badge">No position loaded</span>
               </div>
-              <div id="studyDatabaseMoves" class="stack empty">Database moves will show up here.</div>
+              <div id="studyDatabaseMoves" class="stack empty">Load a study position to see database moves.</div>
             </div>
 
             <div class="study-panel-section">
               <div class="study-section-header">
                 <span>Move Review</span>
-                <span id="studyMoveMeta" class="line-badge">Waiting for a move</span>
+                <span id="studyMoveMeta" class="line-badge">Ready for a move</span>
               </div>
-              <div id="studyMoveClassifications" class="stack empty">Move classifications will show up here.</div>
+              <div id="studyMoveClassifications" class="stack empty">Play a move to see its classification.</div>
               <div id="studyMoveTrail" class="study-move-trail empty">No played line yet.</div>
             </div>
 
@@ -605,7 +692,7 @@
                 <button id="realignUseStartBtn" class="ghost-btn" type="button">Use start position</button>
                 <button id="realignGenerateBtn" class="launch-btn" type="button">Generate realign plan</button>
               </div>
-              <div id="realignStatus" class="line-note">Bookup will compare your current physical setup against the analysis-board position.</div>
+              <div id="realignStatus" class="line-note">Compare your current physical setup against the analysis-board position.</div>
               <div id="realignOutput" class="realign-output empty">No realign plan generated yet.</div>
             </div>
           </section>
@@ -628,9 +715,12 @@
         <div class="section-label">Grandmaster Theory</div>
         <h2 class="section-title">Smart Theory Generator</h2>
         <div class="smart-theory-layout">
-          <article class="card">
+          <article class="card smart-theory-lab-card">
             <div class="smart-theory-guidance">
-              <p>Choose a quick profile, verify the start source, then generate a practical tree you can save back into your repertoire.</p>
+              <div>
+                <p class="smart-eyebrow">Theory lab</p>
+                <p>Generate the line you should actually study, then send it straight into your unified Lichess study.</p>
+              </div>
               <div class="smart-theory-presets">
                 <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="balanced">Balanced</button>
                 <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="fast">Fast drill</button>
@@ -638,70 +728,102 @@
                 <button class="ghost-btn smart-preset-btn" type="button" data-smart-preset="realistic">Most realistic</button>
               </div>
             </div>
-            <div class="smart-theory-controls">
-              <label class="field compact"><span>Starting source</span><select id="smartTheoryStartingSource"><option value="starting_position">Starting position</option><option value="current_board">Current board position</option><option value="saved_line">Saved line</option><option value="selected_move">Selected generated move</option><option value="imported_pgn">Imported PGN context</option><option value="custom_fen">Custom FEN</option></select></label>
-              <label class="field compact"><span>My color</span><select id="smartTheoryMyColor"><option value="white">White</option><option value="black">Black</option></select></label>
-              <label class="field compact"><span>Opponent accuracy</span><select id="smartTheoryOpponentAccuracy"><option value="mixed">Mixed realistic</option><option value="grandmaster">Grandmaster</option><option value="strong_club">Strong club player</option><option value="club">Club player</option><option value="beginner_intermediate">Beginner/intermediate</option></select></label>
-              <label class="field compact"><span>Engine depth</span><input id="smartTheoryDepth" type="number" min="10" max="28" value="18"></label>
-              <label class="field compact"><span>Engine movetime (sec)</span><input id="smartTheoryMoveTime" type="number" min="0.2" step="0.1" value="1.2"></label>
-              <label class="field compact"><span>Opponent replies</span><input id="smartTheoryReplies" type="number" min="1" max="8" value="3"></label>
-              <label class="field compact"><span>Max ply</span><input id="smartTheoryMaxPly" type="number" min="2" max="40" value="20"></label>
-              <label class="field compact"><span>Max positions</span><input id="smartTheoryMaxPositions" type="number" min="10" max="1500" value="300"></label>
-              <label class="field compact"><span>Custom FEN (optional)</span><input id="smartTheoryCustomFen" type="text" placeholder="startpos or FEN"></label>
-              <label class="field compact"><span>Lichess study ID / URL</span><input id="smartTheoryLichessStudyId" type="text" placeholder="Leave blank to auto-create unified Bookup study"></label>
-              <label class="field compact"><span>Lichess chapter name</span><input id="smartTheoryLichessChapterName" type="text" placeholder="Bookup Smart Theory"></label>
-              <label class="field compact"><span>Lichess orientation</span><select id="smartTheoryLichessOrientation"><option value="white">White</option><option value="black">Black</option></select></label>
-              <label class="field compact"><span>Chapter strategy</span><select id="smartTheoryChapterStrategy"><option value="first_move">One chapter per first move</option><option value="unknown_focus">Focus unknown branches first</option><option value="single">Single full-tree chapter</option></select></label>
+            <div class="smart-theory-controls smart-quick-grid">
+              <label class="field compact"><span>Start from</span><select id="smartTheoryStartingSource"><option value="starting_position">Starting position</option><option value="current_board">Current board position</option><option value="saved_line">Saved line</option><option value="selected_move">Selected generated move</option><option value="imported_pgn">Imported PGN context</option><option value="custom_fen">Custom FEN</option></select></label>
+              <label class="field compact"><span>I play</span><select id="smartTheoryMyColor"><option value="white">White</option><option value="black">Black</option></select></label>
+              <label class="field compact"><span>Opponent</span><select id="smartTheoryOpponentAccuracy"><option value="mixed">Mixed realistic</option><option value="grandmaster">Grandmaster</option><option value="strong_club">Strong club player</option><option value="club">Club player</option><option value="beginner_intermediate">Beginner/intermediate</option></select></label>
               <label class="field compact"><span>Opening focus</span><select id="smartTheoryOpeningFocus"><option value="auto">Auto</option><option value="kings_indian_systems">King's Indian systems + Pirc (auto by color)</option><option value="kings_indian_defense">King's Indian Defense (Black)</option><option value="kings_indian_attack">King's Indian Attack (White)</option><option value="pirc_defense">Pirc Defense (Black vs e4/e5)</option></select></label>
-              <label class="field compact"><span>Lichess personal token (optional)</span><input id="smartTheoryLichessToken" type="password" placeholder="Uses Setup token if blank"></label>
-              <label class="field field-check compact"><span>Include rare sidelines</span><label class="checkbox-row"><input id="smartTheoryIncludeRare" type="checkbox" checked><span>Enabled</span></label></label>
-              <label class="field field-check compact"><span>Include mistakes</span><label class="checkbox-row"><input id="smartTheoryIncludeMistakes" type="checkbox" checked><span>Enabled</span></label></label>
-              <label class="field field-check compact"><span>Include blunders</span><label class="checkbox-row"><input id="smartTheoryIncludeBlunders" type="checkbox"><span>Enabled</span></label></label>
-              <label class="field field-check compact"><span>Include best engine replies</span><label class="checkbox-row"><input id="smartTheoryIncludeBestEngineReplies" type="checkbox" checked><span>Enabled</span></label></label>
-              <label class="field field-check compact"><span>Avoid absurd moves</span><label class="checkbox-row"><input id="smartTheoryAvoidAbsurd" type="checkbox" checked><span>Enabled</span></label></label>
-              <label class="field field-check compact"><span>ECO-only mode</span><label class="checkbox-row"><input id="smartTheoryEcoOnly" type="checkbox"><span>Enabled</span></label></label>
-              <label class="field field-check compact"><span>Cache evaluations</span><label class="checkbox-row"><input id="smartTheoryCacheEvals" type="checkbox" checked><span>Enabled</span></label></label>
             </div>
-            <div class="chip-row">
+            <div class="chip-row smart-action-row">
               <button id="smartTheoryGenerateBtn" class="launch-btn" type="button">Generate</button>
               <button id="smartTheoryStopBtn" class="ghost-btn" type="button">Stop</button>
               <button id="smartTheoryClearBtn" class="ghost-btn" type="button">Clear</button>
               <button id="smartTheoryExportBtn" class="ghost-btn" type="button">Export JSON</button>
+              <button id="smartTheoryPreviewChaptersBtn" class="ghost-btn" type="button">Preview Study Chapters</button>
+              <button id="smartTheoryCheckStudyBtn" class="ghost-btn" type="button">Check Existing Study</button>
               <button id="smartTheoryExportLichessBtn" class="launch-btn" type="button">Export To Lichess Study</button>
               <button id="smartTheoryFreshStudyBtn" class="ghost-btn" type="button">Create Fresh Bookup Study</button>
               <label class="ghost-btn" for="smartTheoryImportInput">Import JSON</label>
               <input id="smartTheoryImportInput" type="file" accept=".json" style="display:none;">
             </div>
-            <label class="field field-check compact">
-              <span>Auto sync to unified Bookup study after generation</span>
-              <label class="checkbox-row"><input id="smartTheoryAutoSyncStudy" type="checkbox"><span>Enabled</span></label>
-            </label>
-            <div id="smartTheoryStatus" class="line-note">Idle</div>
-            <div id="smartTheoryProgress" class="line-note">No generation in progress.</div>
-            <div id="smartTheoryStudySyncMeta" class="stack empty">Study sync status will show here.</div>
-            <div id="smartTheoryRunSummary" class="stack empty">Run summary will show here.</div>
+            <div id="smartTheoryLichessHint" class="line-note">Generate or import a tree, then export it to your Lichess study.</div>
+            <div class="smart-status-panel">
+              <div><span>Status</span><strong id="smartTheoryStatus">Idle</strong></div>
+              <div><span>Progress</span><strong id="smartTheoryProgress">No generation in progress.</strong></div>
+            </div>
+            <details class="smart-advanced-settings">
+              <summary>Advanced engine, study, and export settings <span>Depth, Lichess, confidence, cache</span></summary>
+              <div class="smart-theory-controls smart-advanced-grid">
+                <label class="field compact"><span>Engine depth</span><input id="smartTheoryDepth" type="number" min="10" max="28" value="18"></label>
+                <label class="field compact"><span>Engine movetime (sec)</span><input id="smartTheoryMoveTime" type="number" min="0.2" step="0.1" value="1.2"></label>
+                <label class="field compact"><span>Opponent replies</span><input id="smartTheoryReplies" type="number" min="1" max="12" value="6"></label>
+                <label class="field compact"><span>Line depth (plies)</span><input id="smartTheoryMaxPly" type="number" min="2" max="40" value="40"></label>
+                <label class="field compact"><span>Max positions</span><input id="smartTheoryMaxPositions" type="number" min="10" max="1500" value="900"></label>
+                <label class="field compact"><span>Custom FEN (optional)</span><input id="smartTheoryCustomFen" type="text" placeholder="startpos or FEN"></label>
+                <label class="field compact"><span>Follow-my-line confidence (cp)</span><input id="smartTheoryExpectedMoveConfidenceCp" type="number" min="20" max="300" value="125"></label>
+                <label class="field compact"><span>Style fallback confidence (cp)</span><input id="smartTheoryStyleMoveConfidenceCp" type="number" min="20" max="300" value="90"></label>
+                <label class="field compact"><span>Minimum style weight</span><input id="smartTheoryStyleMinWeight" type="number" min="0.2" max="8" step="0.1" value="1.2"></label>
+                <div class="line-note smart-field-note">Confidence is centipawn tolerance: if your move is close enough to best, Smart Theory follows your repertoire; if not, it recommends a correction.</div>
+                <label class="field compact"><span>Lichess study title</span><input id="smartTheoryLichessStudyName" type="text" placeholder="Bookup"></label>
+                <label class="field compact"><span>Lichess study ID / URL</span><input id="smartTheoryLichessStudyId" type="text" placeholder="Leave blank to auto-create unified Bookup study"></label>
+                <label class="field compact"><span>Lichess chapter name</span><input id="smartTheoryLichessChapterName" type="text" placeholder="Bookup Smart Theory"></label>
+                <label class="field compact"><span>Lichess orientation</span><select id="smartTheoryLichessOrientation"><option value="white">White</option><option value="black">Black</option></select></label>
+                <label class="field compact"><span>Chapter strategy</span><select id="smartTheoryChapterStrategy"><option value="deep_focus">62 deep focus chapters</option><option value="first_move">One chapter per first move</option><option value="unknown_focus">Focus unknown branches first</option><option value="single">Single full-tree chapter</option></select></label>
+                <label class="field compact"><span>Study chapters</span><input id="smartTheoryMaxChapters" type="number" min="1" max="80" value="62"></label>
+                <label class="field compact"><span>Minimum chapter moves</span><input id="smartTheoryMinChapterMoves" type="number" min="0" max="80" value="40"></label>
+                <label class="field compact"><span>Lichess personal token (optional)</span><input id="smartTheoryLichessToken" type="password" placeholder="Uses Setup token if blank"></label>
+                <label class="field field-check compact"><span>Auto sync after generation</span><label class="checkbox-row"><input id="smartTheoryAutoSyncStudy" type="checkbox"><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Replace old study chapters</span><label class="checkbox-row"><input id="smartTheoryReplaceChapters" type="checkbox" checked><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Include rare sidelines</span><label class="checkbox-row"><input id="smartTheoryIncludeRare" type="checkbox" checked><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Include mistakes</span><label class="checkbox-row"><input id="smartTheoryIncludeMistakes" type="checkbox" checked><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Include blunders</span><label class="checkbox-row"><input id="smartTheoryIncludeBlunders" type="checkbox"><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Include best engine replies</span><label class="checkbox-row"><input id="smartTheoryIncludeBestEngineReplies" type="checkbox" checked><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Avoid absurd moves</span><label class="checkbox-row"><input id="smartTheoryAvoidAbsurd" type="checkbox" checked><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>ECO-only mode</span><label class="checkbox-row"><input id="smartTheoryEcoOnly" type="checkbox"><span>Enabled</span></label></label>
+                <label class="field field-check compact"><span>Cache evaluations</span><label class="checkbox-row"><input id="smartTheoryCacheEvals" type="checkbox" checked><span>Enabled</span></label></label>
+              </div>
+            </details>
+            <div id="smartTheoryStudySyncMeta" class="stack empty">No study sync has run in this session.</div>
+            <div id="smartTheoryRunSummary" class="stack empty">Choose a source and generate a line to see run details.</div>
+            <div id="smartTheoryChapterPreview" class="stack empty">Preview chapters after a Smart Theory tree is generated.</div>
             <div class="mini-board-wrap">
-              <div id="smartTheoryMiniBoard" class="mini-board-grid empty">Generate or select a node to view the board.</div>
+              <div id="smartTheoryMiniBoard" class="smart-theory-mini-board empty">Generate or select a node to view the board.</div>
             </div>
           </article>
-          <article class="card">
+          <article class="card smart-theory-result-card">
             <h3>Current Node</h3>
             <div id="smartTheoryCurrentMeta" class="stack empty">No node selected.</div>
             <h3>Move List</h3>
-            <div id="smartTheoryMoveList" class="stack empty">Move list will show here.</div>
+            <div id="smartTheoryMoveList" class="stack empty">Select or generate a node to inspect its move path.</div>
             <h3>Opening / FEN</h3>
-            <div id="smartTheoryOpeningMeta" class="stack empty">Opening name, ECO, and current FEN will show here.</div>
+            <div id="smartTheoryOpeningMeta" class="stack empty">Opening details appear after a generated node is selected.</div>
             <h3>Recommended Move</h3>
-            <div id="smartTheoryRecommendation" class="stack empty">Best response and continuation will show here.</div>
+            <div id="smartTheoryRecommendation" class="stack empty">Generate a line to get the recommended continuation.</div>
             <h3>Study First</h3>
-            <div id="smartTheoryLearningQueue" class="stack empty">Priority study queue will show here after generation.</div>
+            <div id="smartTheoryLearningQueue" class="stack empty">Generate a line to build the priority study queue.</div>
             <div class="chip-row"><button id="smartTheorySaveCorrectionBtn" class="launch-btn" type="button">Save corrected move as repertoire line</button></div>
             <h3>Opponent Replies</h3>
-            <div id="smartTheoryOpponentReplies" class="stack empty">Opponent candidate replies will show here.</div>
+            <div id="smartTheoryOpponentReplies" class="stack empty">Generate a line to compare opponent replies.</div>
             <h3>Theory Explanation</h3>
             <div id="smartTheoryExplanation" class="stack empty">Click a generated move to see the explanation.</div>
             <h3>Generated Tree</h3>
-            <div id="smartTheoryTree" class="stack empty">Generated moves will appear here.</div>
+            <div class="smart-tree-toolbar">
+              <label class="field compact">
+                <span>Tree focus</span>
+                <select id="smartTheoryTreeFocus">
+                  <option value="all">All generated lines</option>
+                  <option value="corrected">Corrected lines</option>
+                  <option value="needs_work">Needs work (my mistakes)</option>
+                  <option value="engine_pressure">Engine pressure lines</option>
+                  <option value="style_matched">Style-matched lines</option>
+                </select>
+              </label>
+              <label class="field compact">
+                <span>Search line</span>
+                <input id="smartTheoryTreeSearch" type="text" placeholder="SAN, UCI, opening, idea">
+              </label>
+            </div>
+            <div id="smartTheoryTree" class="stack empty">Generate a Smart Theory tree to inspect moves.</div>
           </article>
         </div>
       </section>

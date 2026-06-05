@@ -4,174 +4,338 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="author" content="tetizz">
-    <meta name="description" content="Download Bookup, a local desktop repertoire trainer powered by your games, Stockfish, and optional Lichess database context.">
-    <title>Bookup | Download The Desktop Repertoire Trainer</title>
+    <meta name="description" content="Use Bookup Web in the browser, explore repertoire study tools, and look up real Chess.com rapid, blitz, and bullet stats from the public API.">
+    <title>Bookup | Web Repertoire Trainer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
   </head>
-  <body class="landing-page">
-    <header class="top-nav">
-      <a class="brand" href="index.html" aria-label="Bookup home">
+  <body class="app-page">
+    <header class="top-nav app-nav">
+      <a class="brand" href="index.html" aria-label="Bookup web home">
         <span class="brand-mark">B</span>
         <span>Bookup</span>
       </a>
-      <nav aria-label="Website navigation">
-        <a href="#download">Download</a>
-        <a href="#desktop">Desktop</a>
-        <a href="app.html">Web demo</a>
+      <nav aria-label="Bookup web navigation">
+        <a href="https://github.com/tetizz/Bookup/releases/latest">Desktop app</a>
+        <a href="#study" data-nav-tab="study">Study</a>
+        <a href="#theory" data-nav-tab="theory">Theory</a>
+        <a href="#stats" data-nav-tab="stats">Stats</a>
+        <a href="#review" data-nav-tab="review">Review</a>
         <a href="https://github.com/tetizz/Bookup">GitHub</a>
       </nav>
     </header>
 
-    <main class="site-shell">
-      <section class="download-hero section-panel">
-        <div class="download-copy">
-          <p class="section-kicker">Bookup for Windows</p>
-          <h1>Install the local repertoire trainer.</h1>
+    <main class="web-app-shell">
+      <section class="web-app-hero section-panel">
+        <div>
+          <p class="section-kicker">Bookup Web</p>
+          <h1>Study your repertoire in the browser.</h1>
           <p class="hero-lede">
-            The full Bookup experience runs on your computer: it imports your public Chess.com games,
-            stores your repertoire locally, analyzes with bundled Stockfish, and can use your private
-            optional Lichess token without sending it to a website.
-          </p>
-          <div class="hero-actions" id="download">
-            <a class="primary-action" href="https://github.com/tetizz/Bookup/releases/latest">Download desktop installer</a>
-            <a class="secondary-action" href="app.html">Open the web demo</a>
-          </div>
-          <p class="privacy-note">Latest release: <strong>v2026.05.08.3</strong>. Private tokens, config, and training cache stay local. The website is only a preview.</p>
-        </div>
-
-        <div class="download-card" aria-label="Bookup release options">
-          <div class="release-tile main-release">
-            <span class="tile-label">Recommended</span>
-            <h2>Windows installer</h2>
-            <p>Installs Bookup into your user apps folder, creates shortcuts, and keeps the executable easy to find.</p>
-            <a href="https://github.com/tetizz/Bookup/releases/latest">Get Bookup-Setup.exe</a>
-          </div>
-          <div class="release-grid">
-            <div class="release-tile">
-              <span class="tile-label">Portable</span>
-              <h3>Zip folder</h3>
-              <p>Extract and run <strong>Bookup.exe</strong> directly.</p>
-            </div>
-            <div class="release-tile">
-              <span class="tile-label">Source</span>
-              <h3>Developer mode</h3>
-              <p>Run with Python when you want to inspect or modify the trainer.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="desktop" class="desktop-proof">
-        <div class="section-heading centered">
-          <p class="section-kicker">Why desktop first</p>
-          <h2>The real trainer needs local files, local cache, and a real engine.</h2>
-          <p>
-            The website can show the workflow, but the desktop release is where imports,
-            background analysis, saved training progress, and Stockfish settings actually run.
+            Use the public site to explore Bookup's study board, theory tree, review queue, and real
+            Chess.com public stats lookup. Download the desktop release when you want live archive imports,
+            local Stockfish analysis, persistent local cache, and private tokens.
           </p>
         </div>
-        <div class="proof-grid">
-          <article class="proof-card">
-            <span>01</span>
-            <h3>Local game import</h3>
-            <p>Build a move tree from your public Chess.com games and save it in your local Bookup data folder.</p>
-          </article>
-          <article class="proof-card">
-            <span>02</span>
-            <h3>Bundled Stockfish</h3>
-            <p>Analyze positions with MultiPV lines, cached evaluations, and configurable time/depth settings.</p>
-          </article>
-          <article class="proof-card">
-            <span>03</span>
-            <h3>Private study cache</h3>
-            <p>Keep lesson progress, known lines, repeated misses, and Lichess context on your own machine.</p>
-          </article>
-          <article class="proof-card">
-            <span>04</span>
-            <h3>Parallel analysis</h3>
-            <p>Run multiple Stockfish workers over different positions while cache hits skip repeated analysis work.</p>
-          </article>
-          <article class="proof-card">
-            <span>05</span>
-            <h3>Strict brilliant tracking</h3>
-            <p>Confirmed Brilliant moves require sound tactical compensation, not stale false positives from old scans.</p>
-          </article>
-          <article class="proof-card">
-            <span>06</span>
-            <h3>Book-state trainer</h3>
-            <p>Opening moves stay Book until the line leaves book, then the coach switches to engine classifications.</p>
-          </article>
-        </div>
+        <a class="primary-action" href="#study" data-nav-tab="study">Start studying</a>
       </section>
 
-      <section class="desktop-showcase section-panel">
-        <div class="showcase-board">
-          <div class="preview-header">
-            <span>Desktop trainer preview</span>
-            <span>Depth 24 | MultiPV 5</span>
-          </div>
-          <div class="study-demo-grid compact">
-            <div class="board-wrap">
-              <div class="eval-rail" aria-label="Evaluation +0.56">
-                <span>+0.56</span>
-                <div><i style="height:58%"></i></div>
-                <span>White edge</span>
+      <section class="desktop-app-frame">
+        <div class="tab-bar" role="tablist" aria-label="Bookup demo sections">
+          <button class="tab-button" type="button" data-demo-tab="setup">Setup</button>
+          <button class="tab-button" type="button" data-demo-tab="map">Repertoire Map</button>
+          <button class="tab-button" type="button" data-demo-tab="work">Needs Work</button>
+          <button class="tab-button active" type="button" data-demo-tab="study">Study Lines</button>
+          <button class="tab-button" type="button" data-demo-tab="theory">Theory</button>
+          <button class="tab-button" type="button" data-demo-tab="stats">Stats</button>
+          <button class="tab-button" type="button" data-demo-tab="review">Review</button>
+        </div>
+
+        <div class="desktop-content">
+          <section class="demo-tab-panel" data-panel="setup">
+            <div class="panel-copy">
+              <p class="section-kicker">Setup</p>
+              <h2>Build once, then keep it fresh.</h2>
+              <p>In the desktop app, Bookup imports public Chess.com archives, auto-imports new games on startup, stores a local analysis cache, and uses optional Lichess explorer data for practical move weighting.</p>
+              <div class="setup-form-demo">
+                <label>Chess.com username <span>your-handle</span></label>
+                <label>Import scope <span>All public games</span></label>
+                <label>Lichess database <span>Token stored locally, never committed</span></label>
+                <label>Stockfish settings <span>Depth 26 | MultiPV 5 | 8 workers | Cache on</span></label>
               </div>
-              <div id="landingBoard" class="chess-board" aria-label="Bookup demo chess position"></div>
             </div>
-            <aside class="side-panel">
-              <p class="panel-title">Live local analysis</p>
-              <div class="engine-line">
-                <span class="eval">+0.56</span>
-                <strong>Be3</strong>
-                <span class="class book"><img src="assets/move-classifications/book.png" alt="">Book</span>
-                <small>Bookup follows this branch because it is part of your imported repertoire.</small>
+            <div class="engine-dashboard-demo">
+              <div class="progress-demo">
+                <span>Import sample</span>
+                <div><i style="width:92%"></i></div>
+                <p>92% - classifying moves, storing lessons, and warming cache</p>
               </div>
-              <div class="engine-line">
-                <span class="eval">+0.54</span>
-                <strong>Bg5</strong>
-                <span class="class excellent"><img src="assets/move-classifications/excellent.png" alt="">Excellent</span>
-                <small>Stockfish keeps this as a close legal candidate from the same position.</small>
+              <div class="worker-grid">
+                <div><span>Stockfish CPU</span><strong>72%</strong></div>
+                <div><span>Workers</span><strong>8/8</strong></div>
+                <div><span>Positions/sec</span><strong>14.8</strong></div>
+                <div><span>ETA</span><strong>1m 12s</strong></div>
+                <div><span>Cache hits</span><strong>2,241</strong></div>
+                <div><span>Hash budget</span><strong>39 GB</strong></div>
               </div>
-              <div class="engine-line">
-                <span class="eval">+0.53</span>
-                <strong>O-O</strong>
-                <span class="class excellent"><img src="assets/move-classifications/excellent.png" alt="">Excellent</span>
-                <small>Castling is legal here because the bishop has already moved from f1.</small>
+            </div>
+          </section>
+
+          <section class="demo-tab-panel" data-panel="map">
+            <div class="panel-copy">
+              <p class="section-kicker">Repertoire Map</p>
+              <h2>Positions, not random opening labels.</h2>
+              <p>Transpositions collapse into the same node, and known best moves stay out of urgent review.</p>
+            </div>
+            <div class="node-list-demo">
+              <article class="node-card selected">
+                <span class="node-path">After e4 d6 d4 Nf6 Nc3 g6 Nf3 Bg7 Be2 O-O</span>
+                <h3>White chooses Be3</h3>
+                <p>Repeated 37x. Classified as <strong>Book</strong> because it belongs to the imported branch.</p>
+              </article>
+              <article class="node-card">
+                <span class="node-path">After Be3 e5 dxe5 dxe5</span>
+                <h3>Common reply ...e5</h3>
+                <p>Seen in database samples, legal from the shown position, and ready for practical training.</p>
+              </article>
+              <article class="node-card">
+                <span class="node-path">Transposition group 18</span>
+                <h3>Same position, one node</h3>
+                <p>Bookup merges move-order transpositions so the trainer improves the actual position you reach.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="demo-tab-panel" data-panel="work">
+            <div class="panel-copy">
+              <p class="section-kicker">Needs Work</p>
+              <h2>Queue explainer included.</h2>
+              <p>Bookup explains why a line is due. Repeated misses matter; one-off losses do not become urgent by themselves.</p>
+            </div>
+            <div class="queue-demo">
+              <div class="queue-item hot">
+                <span>Due today</span>
+                <h3>After Qd2 a6</h3>
+                <p>Repeated miss: h3 was skipped 6 times. Practical reply frequency is high enough to drill.</p>
               </div>
+              <div class="queue-item known">
+                <span>Known archive</span>
+                <h3>After e4 d6 d4 Nf6</h3>
+                <p>Correct 100+ times, archived instead of cluttering the active queue.</p>
+              </div>
+              <div class="queue-item">
+                <span>Why not urgent?</span>
+                <h3>One-off loss ignored</h3>
+                <p>A single bad result does not become "costing points" until the same repertoire position repeats.</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="study" class="demo-tab-panel study-panel active" data-panel="study">
+            <div class="study-board-area">
+              <div class="preview-header">
+                <span>Study Lines</span>
+                <span>Live demo position</span>
+              </div>
+              <div class="board-wrap">
+                <div class="eval-rail" aria-label="Evaluation +0.56">
+                  <span id="webEval">+0.56</span>
+                  <div><i id="webEvalFill" style="height:56%"></i></div>
+                  <span>White edge</span>
+                </div>
+                <div id="webBoard" class="chess-board interactive-board" aria-label="Interactive Bookup study demo"></div>
+              </div>
+              <div class="study-prompt">
+                <h2>Your move here</h2>
+                <p id="studyPrompt">Choose a pregenerated branch below. The board, arrows, classification, engine lines, and database replies update together.</p>
+                <div class="choice-row">
+                  <button type="button" data-demo-choice="book">Play Be3</button>
+                  <button type="button" data-demo-choice="castle">Play O-O</button>
+                  <button type="button" data-demo-choice="bg5">Play Bg5</button>
+                </div>
+              </div>
+            </div>
+            <aside class="analysis-panel">
+              <p class="panel-title">Live engine and database</p>
+              <div id="webLines" class="analysis-lines"></div>
               <div class="database-card">
                 <span>Lichess replies</span>
-                <b>...e5 41%</b>
-                <b>...c6 23%</b>
-                <b>...a6 18%</b>
+                <b id="replyOne">...e5 41%</b>
+                <b id="replyTwo">...c6 23%</b>
+                <b id="replyThree">...a6 18%</b>
               </div>
-              <div class="database-card">
-                <span>Worker cache</span>
-                <b>8 Stockfish workers ready</b>
-                <b>Cache hits skip repeats</b>
-                <b>No command windows per move</b>
+              <div class="move-review-card">
+                <span>Move review</span>
+                <p id="moveReview">Be3 is a book move because it is part of the imported repertoire branch.</p>
+              </div>
+              <div class="move-review-card">
+                <span>Book state</span>
+                <p id="bookStateCopy">Book mode is active. Classification switches from Book only after the line leaves trusted repertoire/database territory.</p>
               </div>
             </aside>
-          </div>
+          </section>
+
+          <section id="theory" class="demo-tab-panel" data-panel="theory">
+            <div class="panel-copy">
+              <p class="section-kicker">Theory</p>
+              <h2>Tree from imported games.</h2>
+              <p>Click a branch in the desktop app to open that exact position on the analysis board. This demo previews the shape.</p>
+            </div>
+            <div class="theory-tree-panel">
+              <div class="tree-root">Start</div>
+              <button type="button" class="tree-branch thick" data-demo-choice="book"><span>Be3</span><b>44%</b></button>
+              <button type="button" class="tree-branch" data-demo-choice="castle"><span>O-O</span><b>28%</b></button>
+              <button type="button" class="tree-branch" data-demo-choice="bg5"><span>Bg5</span><b>17%</b></button>
+              <button type="button" class="tree-branch muted" data-demo-choice="book"><span>c4</span><b>7%</b></button>
+              <div class="theory-lines">
+                <strong>Generated theory sample</strong>
+                <p>Nf3 d5 c4 dxc4 e3 a6 Bxc4 e6 O-O c5</p>
+                <p>d4 Nf6 Nf3 g6 c4 Bg7 Nc3 O-O</p>
+              </div>
+              <div class="theory-lines">
+                <strong>Next 10 best moves</strong>
+                <p>Pick a move and Bookup generates a 10-move Stockfish-backed theory continuation with database replies beside it.</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="stats" class="demo-tab-panel stats-panel" data-panel="stats">
+            <div class="panel-copy">
+              <p class="section-kicker">Stats</p>
+              <h2>Real public ratings plus training context.</h2>
+              <p>Look up rapid, blitz, and bullet ratings from Chess.com's public API, then use the sample charts below to see how Bookup organizes progress, tactics, and review work.</p>
+            </div>
+            <div class="live-lookup-card" aria-label="Chess.com public stats lookup">
+              <div class="rating-demo-head">
+                <div>
+                  <span class="review-date">Chess.com Public Lookup</span>
+                  <h3>Rapid, blitz, and bullet</h3>
+                  <p id="liveLookupStatus">Uses only Chess.com's public API. No fallback numbers are shown as live data.</p>
+                </div>
+                <form id="liveLookupForm" class="live-lookup-form">
+                  <label for="liveUsername">Username</label>
+                  <div>
+                    <input id="liveUsername" name="liveUsername" type="text" value="trixize1234" autocomplete="username" spellcheck="false">
+                    <button type="submit">Refresh</button>
+                  </div>
+                </form>
+              </div>
+              <div id="liveLookupGrid" class="live-lookup-grid">
+                <article>
+                  <span>Rapid</span>
+                  <strong data-live-rating="rapid">-</strong>
+                  <small data-live-record="rapid">Waiting for refresh</small>
+                </article>
+                <article>
+                  <span>Blitz</span>
+                  <strong data-live-rating="blitz">-</strong>
+                  <small data-live-record="blitz">Waiting for refresh</small>
+                </article>
+                <article>
+                  <span>Bullet</span>
+                  <strong data-live-rating="bullet">-</strong>
+                  <small data-live-record="bullet">Waiting for refresh</small>
+                </article>
+              </div>
+            </div>
+            <div class="stats-summary-demo">
+              <div><span>Current rapid</span><strong>1494</strong><small>+42 over selected range</small></div>
+              <div><span>Record</span><strong>121W 14D 92L</strong><small>53.3% wins</small></div>
+              <div><span>Brilliants</span><strong>4</strong><small>confirmed tactical examples</small></div>
+              <div><span>Scan coverage</span><strong>39,150</strong><small>moves classified with cache</small></div>
+            </div>
+            <div class="rating-progress-demo" aria-label="Bookup rating progress demo">
+              <div class="rating-demo-head">
+                <div>
+                  <span class="review-date">Elo Over Time</span>
+                  <h3 id="ratingDemoTitle">Rapid · Last 90 days</h3>
+                  <p id="ratingDemoCopy">1494 current rating with 227 games in this sample range.</p>
+                </div>
+                <div class="rating-demo-controls">
+                  <div class="rating-button-row" aria-label="Rating range">
+                    <button class="active" type="button" data-rating-range="7">7 days</button>
+                    <button type="button" data-rating-range="30">30 days</button>
+                    <button type="button" data-rating-range="90">90 days</button>
+                    <button type="button" data-rating-range="365">1 year</button>
+                    <button type="button" data-rating-range="all">All time</button>
+                  </div>
+                  <div class="rating-button-row compact" aria-label="Time control">
+                    <button class="active" type="button" data-rating-time="rapid">Rapid</button>
+                    <button type="button" data-rating-time="blitz">Blitz</button>
+                    <button type="button" data-rating-time="bullet">Bullet</button>
+                  </div>
+                </div>
+              </div>
+              <div class="rating-demo-stats">
+                <span><strong id="ratingDemoRating">1494</strong> current</span>
+                <span><strong id="ratingDemoRecord">121W 14D 92L</strong> record</span>
+                <span><strong id="ratingDemoWinrate">53.3%</strong> wins</span>
+              </div>
+              <div class="rating-chart-shell">
+                <svg id="ratingDemoSvg" class="rating-demo-svg" viewBox="0 0 720 260" role="img" aria-label="Sample rating progress chart"></svg>
+              </div>
+              <div id="ratingDemoHighlight" class="rating-demo-highlight">Hover or tap a point in the desktop app to see games, W/D/L, and win rate for that day.</div>
+            </div>
+            <div class="brilliant-tracker-demo" aria-label="Bookup brilliant tracker demo">
+              <div class="rating-demo-head">
+                <div>
+                  <span class="review-date">Brilliant Tracker</span>
+                  <h3>Confirmed tactics from your games</h3>
+                  <p>Brilliant candidates are rescanned with the stricter tactical compensation gate so old false positives do not clog the list.</p>
+                </div>
+                <div class="brilliant-summary">
+                  <strong>4</strong>
+                  <span>confirmed examples shown</span>
+                </div>
+              </div>
+              <div class="brilliant-list-demo">
+                <article>
+                  <span class="class brilliant"><img src="assets/move-classifications/brilliant.png" alt="">Brilliant</span>
+                  <h3>...Nxe4</h3>
+                  <p>Pirc structure. A tactical sacrifice that remains sound after the reply.</p>
+                  <small>Open game in desktop review</small>
+                </article>
+                <article>
+                  <span class="class brilliant"><img src="assets/move-classifications/brilliant.png" alt="">Brilliant</span>
+                  <h3>...Nxg4</h3>
+                  <p>Attack keeps compensation alive; stale mate-only flags are filtered out.</p>
+                  <small>Stored with PGN path and move number</small>
+                </article>
+              </div>
+            </div>
+          </section>
+
+          <section id="review" class="demo-tab-panel" data-panel="review">
+            <div class="panel-copy">
+              <p class="section-kicker">Review</p>
+              <h2>Line history, misses, and completed work.</h2>
+              <p>Review stays focused on study progress: completed lines, known archive entries, miss history, queue explanations, and cached engine context for what to train next.</p>
+            </div>
+            <div class="review-demo">
+              <div>
+                <span class="review-date">Completed</span>
+                <h3>Be3 branch</h3>
+                <p>Finished 3 times this week with no repeat miss.</p>
+              </div>
+              <div>
+                <span class="review-date">Timeline</span>
+                <h3>Mistake trend</h3>
+                <p>Repeated misses dropped from 6 to 2 after focused reps.</p>
+              </div>
+              <div>
+                <span class="review-date">Cache</span>
+                <h3>Ready next</h3>
+                <p>Engine lines and database replies are already stored for the next lesson.</p>
+              </div>
+              <div>
+                <span class="review-date">Known archive</span>
+                <h3>100+ correct</h3>
+                <p>Stable repertoire lines stay visible without cluttering active Needs Work.</p>
+              </div>
+            </div>
+          </section>
         </div>
-      </section>
-
-      <section class="install-card section-panel">
-        <div>
-          <p class="section-kicker">Install path</p>
-          <h2>One obvious executable, no clutter hunt.</h2>
-          <p>The installer adds Bookup to your Start Menu. The portable release keeps the app folder simple with <strong>Bookup.exe</strong> at the top.</p>
-        </div>
-        <pre><code>Start Menu -> Bookup
-
-Portable:
-Bookup\Bookup.exe
-
-Source:
-py -3.13 main.py</code></pre>
       </section>
     </main>
 

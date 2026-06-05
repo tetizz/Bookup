@@ -83,6 +83,7 @@ const el = {
   parallelWorkers: document.getElementById("parallelWorkersInput"),
   hash: document.getElementById("hashInput"),
   analyze: document.getElementById("analyzeBtn"),
+  saveSetup: document.getElementById("saveSetupBtn"),
   pgnImport: document.getElementById("pgnImportInput"),
   importPgn: document.getElementById("importPgnBtn"),
   pgnImportStatus: document.getElementById("pgnImportStatus"),
@@ -112,7 +113,22 @@ const el = {
   healthDashboard: document.getElementById("healthDashboard"),
   statsSummary: document.getElementById("statsSummaryPanel"),
   brilliantTrackerSection: document.getElementById("brilliantTrackerSection"),
-  ratingProgress: document.getElementById("ratingProgressPanel"),
+  progressStatus: document.getElementById("progressStatus"),
+  progressRefresh: document.getElementById("progressRefreshBtn"),
+  progressModeButtons: Array.from(document.querySelectorAll("[data-progress-mode]")),
+  progressMetricGrid: document.getElementById("progressMetricGrid"),
+  progressRatingChart: document.getElementById("progressRatingChart"),
+  progressDeltaChart: document.getElementById("progressDeltaChart"),
+  progressPhaseChart: document.getElementById("progressPhaseChart"),
+  progressWeakness: document.getElementById("progressWeaknessPanel"),
+  progressGoalGrid: document.getElementById("progressGoalGrid"),
+  progressCustomGames: document.getElementById("progressCustomGames"),
+  progressSaveProjection: document.getElementById("progressSaveProjectionBtn"),
+  progressProjection: document.getElementById("progressProjectionPanel"),
+  progressTime: document.getElementById("progressTimePanel"),
+  progressRecommendations: document.getElementById("progressRecommendationPanel"),
+  progressSessionForm: document.getElementById("progressSessionForm"),
+  progressSessionList: document.getElementById("progressSessionList"),
   brilliantTracker: document.getElementById("brilliantTrackerPanel"),
   memoryScorePanel: document.getElementById("memoryScorePanel"),
   driftDetectorPanel: document.getElementById("driftDetectorPanel"),
@@ -137,15 +153,22 @@ const el = {
   smartTheoryDepth: document.getElementById("smartTheoryDepth"),
   smartTheoryMoveTime: document.getElementById("smartTheoryMoveTime"),
   smartTheoryReplies: document.getElementById("smartTheoryReplies"),
+  smartTheoryExpectedMoveConfidenceCp: document.getElementById("smartTheoryExpectedMoveConfidenceCp"),
+  smartTheoryStyleMoveConfidenceCp: document.getElementById("smartTheoryStyleMoveConfidenceCp"),
+  smartTheoryStyleMinWeight: document.getElementById("smartTheoryStyleMinWeight"),
   smartTheoryMaxPly: document.getElementById("smartTheoryMaxPly"),
   smartTheoryMaxPositions: document.getElementById("smartTheoryMaxPositions"),
   smartTheoryCustomFen: document.getElementById("smartTheoryCustomFen"),
+  smartTheoryLichessStudyName: document.getElementById("smartTheoryLichessStudyName"),
   smartTheoryLichessStudyId: document.getElementById("smartTheoryLichessStudyId"),
   smartTheoryLichessChapterName: document.getElementById("smartTheoryLichessChapterName"),
   smartTheoryLichessOrientation: document.getElementById("smartTheoryLichessOrientation"),
   smartTheoryChapterStrategy: document.getElementById("smartTheoryChapterStrategy"),
+  smartTheoryMaxChapters: document.getElementById("smartTheoryMaxChapters"),
+  smartTheoryMinChapterMoves: document.getElementById("smartTheoryMinChapterMoves"),
   smartTheoryOpeningFocus: document.getElementById("smartTheoryOpeningFocus"),
   smartTheoryAutoSyncStudy: document.getElementById("smartTheoryAutoSyncStudy"),
+  smartTheoryReplaceChapters: document.getElementById("smartTheoryReplaceChapters"),
   smartTheoryLichessToken: document.getElementById("smartTheoryLichessToken"),
   smartTheoryIncludeRare: document.getElementById("smartTheoryIncludeRare"),
   smartTheoryIncludeMistakes: document.getElementById("smartTheoryIncludeMistakes"),
@@ -158,14 +181,18 @@ const el = {
   smartTheoryStop: document.getElementById("smartTheoryStopBtn"),
   smartTheoryClear: document.getElementById("smartTheoryClearBtn"),
   smartTheoryExport: document.getElementById("smartTheoryExportBtn"),
+  smartTheoryPreviewChapters: document.getElementById("smartTheoryPreviewChaptersBtn"),
+  smartTheoryCheckStudy: document.getElementById("smartTheoryCheckStudyBtn"),
   smartTheoryExportLichess: document.getElementById("smartTheoryExportLichessBtn"),
   smartTheoryFreshStudy: document.getElementById("smartTheoryFreshStudyBtn"),
   smartTheoryImport: document.getElementById("smartTheoryImportInput"),
   smartTheoryPresetButtons: Array.from(document.querySelectorAll("[data-smart-preset]")),
   smartTheoryStatus: document.getElementById("smartTheoryStatus"),
   smartTheoryProgress: document.getElementById("smartTheoryProgress"),
+  smartTheoryLichessHint: document.getElementById("smartTheoryLichessHint"),
   smartTheoryStudySyncMeta: document.getElementById("smartTheoryStudySyncMeta"),
   smartTheoryRunSummary: document.getElementById("smartTheoryRunSummary"),
+  smartTheoryChapterPreview: document.getElementById("smartTheoryChapterPreview"),
   smartTheoryMiniBoard: document.getElementById("smartTheoryMiniBoard"),
   smartTheoryCurrentMeta: document.getElementById("smartTheoryCurrentMeta"),
   smartTheoryMoveList: document.getElementById("smartTheoryMoveList"),
@@ -175,6 +202,8 @@ const el = {
   smartTheorySaveCorrection: document.getElementById("smartTheorySaveCorrectionBtn"),
   smartTheoryOpponentReplies: document.getElementById("smartTheoryOpponentReplies"),
   smartTheoryExplanation: document.getElementById("smartTheoryExplanation"),
+  smartTheoryTreeFocus: document.getElementById("smartTheoryTreeFocus"),
+  smartTheoryTreeSearch: document.getElementById("smartTheoryTreeSearch"),
   smartTheoryTree: document.getElementById("smartTheoryTree"),
   theoryPresetPanel: document.getElementById("theoryPresetPanel"),
   opponentSimulatorPanel: document.getElementById("opponentSimulatorPanel"),
@@ -247,9 +276,6 @@ const state = {
   knownArchive: [],
   lessonIndex: -1,
   activeLessonId: "",
-  ratingProgressRange: "90",
-  ratingProgressTimeClass: "",
-  ratingProgressPointIndex: null,
   brilliantProgressRange: "90",
   brilliantProgressTimeClass: "",
   brilliantProgressPointIndex: null,
@@ -305,6 +331,8 @@ const state = {
   analysisProgressTimer: 0,
   analysisProgressValue: 0,
   analysisStatusTimer: 0,
+  progress: null,
+  progressMode: defaults.progress_mode || "rapid",
   analysisStatusPollStartedAt: 0,
   autoImportRunning: false,
   prepPackText: "",
@@ -314,6 +342,9 @@ const state = {
   smartTheoryPollTimer: 0,
   smartTheoryStatus: "idle",
   smartTheoryLastAutoSyncedJobId: "",
+  smartTheoryChapterPreviewData: [],
+  smartTheoryTreeFocus: "all",
+  smartTheoryTreeSearch: "",
 };
 
 async function init() {
@@ -327,7 +358,10 @@ async function init() {
   el.maxGames.value = defaults.max_games ?? 0;
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
   if (el.autoImportStartup) el.autoImportStartup.checked = defaults.auto_import_on_startup !== false;
-  el.lichessToken.value = defaults.lichess_token || "";
+  el.lichessToken.value = "";
+  if (defaults.lichess_token_configured && el.lichessToken) {
+    el.lichessToken.placeholder = "Saved local token configured";
+  }
   el.enginePath.value = defaults.engine_path || "";
   if (el.chessnutDbPath) el.chessnutDbPath.value = defaults.chessnut_db_path || "";
   if (el.chessnutPlayerColor) el.chessnutPlayerColor.value = defaults.chessnut_player_color || "white";
@@ -339,19 +373,34 @@ async function init() {
   el.hash.value = defaults.hash_mb || 2048;
   if (el.smartTheoryDepth) el.smartTheoryDepth.value = "18";
   if (el.smartTheoryMoveTime) el.smartTheoryMoveTime.value = "1";
-  if (el.smartTheoryReplies) el.smartTheoryReplies.value = "3";
-  if (el.smartTheoryMaxPly) el.smartTheoryMaxPly.value = "20";
-  if (el.smartTheoryMaxPositions) el.smartTheoryMaxPositions.value = "300";
+  if (el.smartTheoryReplies) el.smartTheoryReplies.value = "6";
+  if (el.smartTheoryExpectedMoveConfidenceCp) el.smartTheoryExpectedMoveConfidenceCp.value = String(defaults.bookup_expected_move_confidence_cp ?? 125);
+  if (el.smartTheoryStyleMoveConfidenceCp) el.smartTheoryStyleMoveConfidenceCp.value = String(defaults.bookup_style_move_confidence_cp ?? 90);
+  if (el.smartTheoryStyleMinWeight) el.smartTheoryStyleMinWeight.value = String(defaults.bookup_style_min_weight ?? 1.2);
+  if (el.smartTheoryMaxPly) el.smartTheoryMaxPly.value = "40";
+  if (el.smartTheoryMaxPositions) el.smartTheoryMaxPositions.value = "900";
+  if (el.smartTheoryLichessStudyName) el.smartTheoryLichessStudyName.value = String(defaults.bookup_study_name || "Bookup");
   if (el.smartTheoryLichessChapterName) el.smartTheoryLichessChapterName.value = "Bookup Smart Theory";
   if (el.smartTheoryLichessOrientation) el.smartTheoryLichessOrientation.value = "white";
-  if (el.smartTheoryChapterStrategy) el.smartTheoryChapterStrategy.value = String(defaults.bookup_chapter_strategy || "first_move");
+  if (el.smartTheoryChapterStrategy) {
+    const savedChapterStrategy = String(defaults.bookup_chapter_strategy || "deep_focus").trim().toLowerCase();
+    el.smartTheoryChapterStrategy.value = savedChapterStrategy === "first_move" ? "deep_focus" : savedChapterStrategy;
+  }
+  if (el.smartTheoryMaxChapters) el.smartTheoryMaxChapters.value = "62";
+  if (el.smartTheoryMinChapterMoves) el.smartTheoryMinChapterMoves.value = "40";
   if (el.smartTheoryOpeningFocus) el.smartTheoryOpeningFocus.value = String(defaults.bookup_opening_focus || "kings_indian_systems");
   if (el.smartTheoryAutoSyncStudy) el.smartTheoryAutoSyncStudy.checked = Boolean(defaults.bookup_auto_study_sync);
+  if (el.smartTheoryReplaceChapters) el.smartTheoryReplaceChapters.checked = true;
   if (el.smartTheoryLichessStudyId) el.smartTheoryLichessStudyId.value = String(defaults.bookup_study_id || "");
-  if (el.smartTheoryLichessToken) el.smartTheoryLichessToken.value = currentLichessToken();
+  if (el.smartTheoryLichessToken) {
+    el.smartTheoryLichessToken.value = "";
+    if (defaults.lichess_token_configured) el.smartTheoryLichessToken.placeholder = "Uses saved local token if blank";
+  }
+  if (el.smartTheoryTreeFocus) el.smartTheoryTreeFocus.value = "all";
+  if (el.smartTheoryTreeSearch) el.smartTheoryTreeSearch.value = "";
   if (el.smartTheoryIncludeRare) el.smartTheoryIncludeRare.checked = true;
   if (el.smartTheoryIncludeMistakes) el.smartTheoryIncludeMistakes.checked = true;
-  if (el.smartTheoryIncludeBlunders) el.smartTheoryIncludeBlunders.checked = false;
+  if (el.smartTheoryIncludeBlunders) el.smartTheoryIncludeBlunders.checked = true;
   if (el.smartTheoryIncludeBestEngineReplies) {
     el.smartTheoryIncludeBestEngineReplies.checked = Boolean(defaults.bookup_include_best_engine_replies !== false);
   }
@@ -362,6 +411,7 @@ async function init() {
   syncStudySettingsFromSetup();
 
   el.analyze.addEventListener("click", runAnalysis);
+  el.saveSetup?.addEventListener("click", () => { void saveSetupSettings(); });
   el.importPgn?.addEventListener("click", importPgnGames);
   el.importChessnut?.addEventListener("click", importChessnutGames);
   el.importAllGames?.addEventListener("change", syncImportScope);
@@ -385,18 +435,58 @@ async function init() {
   el.smartTheoryStop?.addEventListener("click", () => { void stopSmartTheoryGeneration(); });
   el.smartTheoryClear?.addEventListener("click", clearSmartTheoryState);
   el.smartTheoryExport?.addEventListener("click", exportSmartTheoryJson);
+  el.smartTheoryPreviewChapters?.addEventListener("click", () => { void previewSmartTheoryChapters(); });
+  el.smartTheoryCheckStudy?.addEventListener("click", () => { void checkSmartTheoryLichessStudy(); });
   el.smartTheoryExportLichess?.addEventListener("click", () => { void exportSmartTheoryToLichessStudy(); });
   el.smartTheoryFreshStudy?.addEventListener("click", () => { void createFreshUnifiedBookupStudy(); });
   el.smartTheoryImport?.addEventListener("change", importSmartTheoryJson);
   el.smartTheorySaveCorrection?.addEventListener("click", () => { void saveSmartTheoryCorrection(); });
+  el.progressRefresh?.addEventListener("click", () => { void refreshProgressCockpit(); });
+  el.progressSaveProjection?.addEventListener("click", () => { void saveProgressProjectionSettings(); });
+  el.progressCustomGames?.addEventListener("change", () => { void saveProgressProjectionSettings(); });
+  el.progressSessionForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveProgressSession();
+  });
+  el.progressModeButtons?.forEach((button) => {
+    button.addEventListener("click", () => { void saveProgressMode(button.dataset.progressMode || "rapid"); });
+  });
   [
+    el.smartTheoryLichessStudyName,
     el.smartTheoryLichessStudyId,
     el.smartTheoryChapterStrategy,
     el.smartTheoryAutoSyncStudy,
     el.smartTheoryOpeningFocus,
     el.smartTheoryIncludeBestEngineReplies,
+    el.smartTheoryExpectedMoveConfidenceCp,
+    el.smartTheoryStyleMoveConfidenceCp,
+    el.smartTheoryStyleMinWeight,
   ].forEach((input) => {
     input?.addEventListener("change", () => { void saveSmartTheoryStudySettings(); });
+  });
+  [
+    el.smartTheoryMyColor,
+    el.smartTheoryLichessOrientation,
+    el.smartTheoryLichessToken,
+    el.lichessToken,
+  ].forEach((input) => {
+    input?.addEventListener("change", () => {
+      const activeFen = String(
+        currentSmartTheoryNode()?.fen
+        || state.smartTheoryTree?.start_fen
+        || START_FEN,
+      );
+      renderSmartTheoryMiniBoard(activeFen);
+      updateSmartTheoryLichessHint();
+    });
+  });
+  el.smartTheoryTreeFocus?.addEventListener("change", () => {
+    state.smartTheoryTreeFocus = String(el.smartTheoryTreeFocus?.value || "all");
+    renderSmartTheoryTree();
+  });
+  el.smartTheoryTreeSearch?.addEventListener("input", () => {
+    state.smartTheoryTreeSearch = String(el.smartTheoryTreeSearch?.value || "").trim().toLowerCase();
+    renderSmartTheoryTree();
   });
   el.smartTheoryPresetButtons?.forEach?.((button) => {
     button.addEventListener("click", () => {
@@ -516,9 +606,12 @@ async function init() {
   }
   renderCoords();
   renderBoard(START_FEN, { animate: false });
-  setActiveTab("setup");
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const initialTab = normalizeTabName(requestedTab);
+  setActiveTab(initialTab);
   renderStudyWorkspace();
   await bootstrapLocalState();
+  await loadProgressCockpit();
   void initializeFreeAnalysisBoard();
   if (savedNotice) {
     setProgress(0, savedNotice, { allowDecrease: true });
@@ -535,7 +628,12 @@ function normalizeFen(fen) {
 }
 
 function syncStudySettingsFromSetup() {
-  if (el.studyLichessToken) el.studyLichessToken.value = el.lichessToken?.value || defaults.lichess_token || "";
+  if (el.studyLichessToken) {
+    el.studyLichessToken.value = el.lichessToken?.value || "";
+    if (defaults.lichess_token_configured && !el.studyLichessToken.value) {
+      el.studyLichessToken.placeholder = "Uses saved local token if blank";
+    }
+  }
   if (el.studyEnginePath) el.studyEnginePath.value = el.enginePath?.value || "";
   if (el.studyDepth) el.studyDepth.value = el.depth?.value || defaults.depth || 24;
   if (el.studyThinkTime) el.studyThinkTime.value = String(el.thinkTime?.value || defaults.think_time_sec || 5);
@@ -586,7 +684,15 @@ function handleMainIdentityChange() {
 }
 
 function applyStudySettingsToSetup(saved = {}) {
-  if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token")) el.lichessToken.value = saved.lichess_token || "";
+  if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token") && saved.lichess_token) {
+    el.lichessToken.value = saved.lichess_token;
+  }
+  if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token_configured")) {
+    defaults.lichess_token_configured = Boolean(saved.lichess_token_configured);
+    if (defaults.lichess_token_configured && !el.lichessToken.value) {
+      el.lichessToken.placeholder = "Saved local token configured";
+    }
+  }
   if (el.enginePath && Object.prototype.hasOwnProperty.call(saved, "engine_path")) el.enginePath.value = saved.engine_path || "";
   if (el.depth && Object.prototype.hasOwnProperty.call(saved, "depth")) el.depth.value = saved.depth;
   if (el.thinkTime && Object.prototype.hasOwnProperty.call(saved, "think_time_sec")) el.thinkTime.value = String(saved.think_time_sec);
@@ -605,8 +711,23 @@ function applyDefaultsToState(saved = {}) {
 }
 
 function currentLichessToken() {
-  const token = String(el.studyLichessToken?.value || el.lichessToken?.value || defaults.lichess_token || "").trim();
+  const token = String(el.studyLichessToken?.value || el.lichessToken?.value || "").trim();
   return ["demo-token", "your-token", "lichess-token", "paste-token-here"].includes(token.toLowerCase()) ? "" : token;
+}
+
+function withOptionalLichessToken(payload = {}, token = currentLichessToken()) {
+  const cleaned = String(token || "").trim();
+  if (!cleaned) return payload;
+  return { ...payload, lichess_token: cleaned };
+}
+
+function hasConfiguredLichessToken() {
+  return Boolean(currentLichessToken() || defaults.lichess_token_configured);
+}
+
+function currentSmartTheoryStudyName() {
+  const configured = String(el.smartTheoryLichessStudyName?.value || defaults.bookup_study_name || "Bookup").trim();
+  return configured || "Bookup";
 }
 
 function studyCopyValue(kind) {
@@ -634,8 +755,7 @@ async function copyStudyValue(kind, button) {
 }
 
 function currentStudySettingsPayload() {
-  return {
-    lichess_token: currentLichessToken(),
+  return withOptionalLichessToken({
     engine_path: String(el.studyEnginePath?.value || el.enginePath?.value || "").trim(),
     depth: Number(el.studyDepth?.value || el.depth?.value || defaults.depth || 24),
     think_time_sec: Number(el.studyThinkTime?.value || el.thinkTime?.value || defaults.think_time_sec || 5),
@@ -643,11 +763,11 @@ function currentStudySettingsPayload() {
     threads: Number(el.studyThreads?.value || el.threads?.value || defaults.threads || 8),
     parallel_workers: Number(el.studyParallelWorkers?.value || el.parallelWorkers?.value || defaults.parallel_workers || 1),
     hash_mb: Number(el.studyHash?.value || el.hash?.value || defaults.hash_mb || 2048),
-  };
+  });
 }
 
 function currentSetupSettingsPayload() {
-  return {
+  return withOptionalLichessToken({
     username: resolveConfiguredUsername(),
     main_platform: String(el.mainPlatform?.value || defaults.main_platform || "chesscom").trim().toLowerCase(),
     main_username: String(el.mainUsername?.value || defaults.main_username || "").trim(),
@@ -657,8 +777,8 @@ function currentSetupSettingsPayload() {
     auto_import_on_startup: el.autoImportStartup?.checked !== false,
     chessnut_db_path: String(el.chessnutDbPath?.value || defaults.chessnut_db_path || "").trim(),
     chessnut_player_color: String(el.chessnutPlayerColor?.value || defaults.chessnut_player_color || "white").trim().toLowerCase(),
-    ...currentStudySettingsPayload(),
-  };
+    ...setupEngineSettingsPayload(),
+  }, el.lichessToken?.value || "");
 }
 
 async function saveStartupImportSetting() {
@@ -671,6 +791,40 @@ async function saveStartupImportSetting() {
     defaults.auto_import_on_startup = el.autoImportStartup?.checked !== false;
   } catch {
     // Non-critical; the next profile save will persist the same checkbox value.
+  }
+}
+
+async function saveSetupSettings() {
+  if (!el.saveSetup) return;
+  const original = el.saveSetup.textContent;
+  el.saveSetup.disabled = true;
+  el.saveSetup.textContent = "Saving...";
+  setProgress(Math.max(4, Number(el.progressLabel?.textContent?.replace("%", "") || 0)), "Saving setup locally...");
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentSetupSettingsPayload()),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Could not save setup.");
+    }
+    applyDefaultsToState(data.defaults || {});
+    applyStudySettingsToSetup(data.defaults || {});
+    el.saveSetup.textContent = "Saved";
+    setProgress(100, "Setup saved locally. Imports, analysis, study, and progress now use these settings.");
+    window.setTimeout(() => {
+      if (el.saveSetup) el.saveSetup.textContent = original || "Save Setup";
+    }, 1200);
+  } catch (error) {
+    el.saveSetup.textContent = "Save failed";
+    setProgress(0, error.message || "Could not save setup.", { allowDecrease: true });
+    window.setTimeout(() => {
+      if (el.saveSetup) el.saveSetup.textContent = original || "Save Setup";
+    }, 1600);
+  } finally {
+    el.saveSetup.disabled = false;
   }
 }
 
@@ -1435,7 +1589,7 @@ function renderStockfishStats(stats, options = {}) {
   if (!stats) {
     if (!live && node) {
       node.className = "stack empty";
-      node.textContent = "Live Stockfish throughput, ETA, CPU, and memory will show up here.";
+      node.textContent = "Run analysis to see Stockfish throughput, ETA, CPU, and memory.";
     }
     renderAnalysisPreviewPanel(null);
     return;
@@ -1750,17 +1904,55 @@ function startAnalysisProgress() {
   }, 220);
 }
 
+function normalizeTabName(name) {
+  const requested = String(name || "").trim().toLowerCase();
+  const aliases = {
+    progress: "stats",
+  };
+  const normalized = aliases[requested] || requested || "setup";
+  return el.tabPanels.some((panel) => panel.dataset.tabPanel === normalized) ? normalized : "setup";
+}
+
 function setActiveTab(name) {
+  const activeName = normalizeTabName(name);
   el.tabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.tabTarget === name);
+    button.classList.toggle("active", button.dataset.tabTarget === activeName);
   });
   el.tabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.tabPanel === name);
+    panel.classList.toggle("active", panel.dataset.tabPanel === activeName);
   });
-  document.body.dataset.activeTab = name;
-  if (name === "trainer") {
+  document.body.dataset.activeTab = activeName;
+  if (activeName === "trainer") {
     renderStudyWorkspace();
   }
+  if (activeName === "stats" && state.progress) {
+    setTimeout(() => renderProgressCharts(state.progress?.charts || {}), 40);
+  }
+}
+
+function setupEngineSettingsPayload() {
+  return {
+    engine_path: el.enginePath.value.trim(),
+    depth: Number(el.depth.value || defaults.depth || 24),
+    multipv: Number(el.multiPv.value || defaults.multipv || 5),
+    threads: Number(el.threads.value || defaults.threads || 8),
+    parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
+    hash_mb: Number(el.hash.value || defaults.hash_mb || 2048),
+    think_time_sec: Number(el.thinkTime?.value || defaults.think_time_sec || 5),
+  };
+}
+
+function fastImportEngineSettingsPayload() {
+  const base = setupEngineSettingsPayload();
+  return {
+    ...base,
+    depth: Math.max(10, Math.min(16, Number(base.depth || 16))),
+    multipv: Math.max(1, Math.min(4, Number(base.multipv || 4))),
+    threads: Math.max(1, Math.min(8, Number(base.threads || 8))),
+    hash_mb: Math.max(256, Math.min(4096, Number(base.hash_mb || 4096))),
+    think_time_sec: Math.max(0.05, Math.min(1, Number(base.think_time_sec || 1))),
+    deep_import: false,
+  };
 }
 
 async function runAnalysis(options = {}) {
@@ -1846,24 +2038,17 @@ async function importPgnGames() {
   }
   startAnalysisProgress();
   if (el.importPgn) el.importPgn.disabled = true;
-  if (el.pgnImportStatus) el.pgnImportStatus.textContent = "Importing PGN and building local repertoire...";
+  if (el.pgnImportStatus) el.pgnImportStatus.textContent = "Fast-importing PGN and indexing the repertoire...";
   try {
     const response = await fetch("/api/import-pgn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(withOptionalLichessToken({
         username: resolveConfiguredUsername() || "PGN Player",
         pgn,
         player_color: "white",
-        lichess_token: el.lichessToken.value.trim(),
-        engine_path: el.enginePath.value.trim(),
-        depth: Number(el.depth.value || defaults.depth || 24),
-        multipv: Number(el.multiPv.value || defaults.multipv || 5),
-        threads: Number(el.threads.value || defaults.threads || 8),
-        parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
-        hash_mb: Number(el.hash.value || defaults.hash_mb || 2048),
-        think_time_sec: Number(el.thinkTime.value || defaults.think_time_sec || 5),
-      }),
+        ...fastImportEngineSettingsPayload(),
+      }, el.lichessToken.value.trim())),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "PGN import failed.");
@@ -1897,21 +2082,14 @@ async function importChessnutGames() {
     const response = await fetch("/api/import-chessnut", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(withOptionalLichessToken({
         username: resolveConfiguredUsername() || "Chessnut Player",
         db_path: dbPath,
         player_color: playerColor,
         chessnut_db_path: dbPath,
         chessnut_player_color: playerColor,
-        lichess_token: el.lichessToken.value.trim(),
-        engine_path: el.enginePath.value.trim(),
-        depth: Number(el.depth.value || defaults.depth || 24),
-        multipv: Number(el.multiPv.value || defaults.multipv || 5),
-        threads: Number(el.threads.value || defaults.threads || 8),
-        parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
-        hash_mb: Number(el.hash.value || defaults.hash_mb || 2048),
-        think_time_sec: Number(el.thinkTime.value || defaults.think_time_sec || 5),
-      }),
+        ...fastImportEngineSettingsPayload(),
+      }, el.lichessToken.value.trim())),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "NewChessnut import failed.");
@@ -1937,21 +2115,14 @@ async function fetchProfilePayload(username, options = {}) {
   const response = await fetch("/api/profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withOptionalLichessToken({
       username,
       time_classes: el.timeClasses.value.trim(),
       max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
       auto_import_on_startup: el.autoImportStartup?.checked !== false,
       force_refresh: Boolean(options.forceRefresh),
-      lichess_token: currentLichessToken(),
-      engine_path: el.enginePath.value.trim(),
-      depth: Number(el.depth.value),
-      think_time_sec: Number(el.thinkTime?.value || defaults.think_time_sec || 5),
-      multipv: Number(el.multiPv.value),
-      threads: Number(el.threads.value),
-      parallel_workers: Number(el.parallelWorkers?.value || defaults.parallel_workers || 1),
-      hash_mb: Number(el.hash.value),
-    }),
+      ...fastImportEngineSettingsPayload(),
+    })),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Bookup could not build your repertoire.");
@@ -2044,7 +2215,6 @@ function renderProfile(payload) {
   renderRepertoireMap(profile.repertoire_map || {});
   renderHealthDashboard(profile.health_dashboard || null);
   renderStatsSummary(profile, payload);
-  renderRatingProgress(profile.rating_progress || null);
   if (brilliantTrackerEnabled) {
     renderBrilliantTracker(profile.brilliant_tracker || null);
   }
@@ -2079,7 +2249,8 @@ function renderProfile(payload) {
 
   clearTrainer();
   renderStudyWorkspace();
-  setActiveTab("repertoire-map");
+  const currentTab = document.body.dataset.activeTab || "setup";
+  setActiveTab(currentTab === "setup" ? "repertoire-map" : currentTab);
 }
 
 function renderFirstMoves(data) {
@@ -2112,7 +2283,7 @@ function renderKnownArchive(items) {
   const combinedItems = state.knownArchive?.length ? state.knownArchive : items;
   if (!combinedItems.length) {
     el.knownArchiveList.className = "stack empty";
-    el.knownArchiveList.textContent = "Known lines will show up here once Bookup sees you playing the best move 100+ times or you complete a line cleanly enough in training.";
+    el.knownArchiveList.textContent = "Complete clean reps or import repeated best moves to build the known-lines archive.";
     return;
   }
   el.knownArchiveList.className = "stack";
@@ -2252,7 +2423,7 @@ function renderStatsSummary(profile, payload) {
   const games = Number(payload?.games_imported ?? progress.total_games ?? 0);
   const winRate = typeof summary.win_rate === "number" ? `${summary.win_rate}%` : "--";
   const scoreRate = typeof summary.score_rate === "number" ? `${summary.score_rate}%` : "--";
-  const currentRange = progress?.ranges?.[state.ratingProgressRange] || progress?.ranges?.["90"] || progress?.ranges?.["30"] || null;
+  const currentRange = progress?.ranges?.["90"] || progress?.ranges?.["30"] || progress?.ranges?.["all"] || null;
   const ratingNow = currentRange?.rating_end ?? progress.rating_end ?? "--";
   const ratingDelta = currentRange?.delta ?? 0;
   const split = (progress.time_class_breakdown || []).slice(0, 4);
@@ -2295,6 +2466,370 @@ function renderStatsSummary(profile, payload) {
       `).join("") : "<p>No rated time-control split available yet.</p>"}
     </div>
   `;
+}
+
+async function loadProgressCockpit() {
+  if (!el.progressMetricGrid) return;
+  const username = resolveConfiguredUsername();
+  if (!username) {
+    renderProgressCockpit(null);
+    return;
+  }
+  try {
+    const response = await fetch(`/api/progress?username=${encodeURIComponent(username)}&mode=${encodeURIComponent(state.progressMode || "rapid")}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load progress.");
+    state.progressMode = payload.mode || state.progressMode || "rapid";
+    renderProgressCockpit(payload);
+  } catch (error) {
+    if (el.progressStatus) el.progressStatus.textContent = String(error.message || "Could not load progress.");
+  }
+}
+
+async function refreshProgressCockpit() {
+  if (!el.progressRefresh) return;
+  const username = resolveConfiguredUsername();
+  if (!username) {
+    if (el.progressStatus) el.progressStatus.textContent = "Save a Chess.com username before refreshing progress.";
+    return;
+  }
+  el.progressRefresh.disabled = true;
+  if (el.progressStatus) el.progressStatus.textContent = "Refreshing live Chess.com progress...";
+  try {
+    const response = await fetch("/api/progress/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not refresh progress.");
+    renderProgressCockpit(payload.progress);
+  } catch (error) {
+    if (el.progressStatus) el.progressStatus.textContent = String(error.message || "Could not refresh progress.");
+    await loadProgressCockpit();
+  } finally {
+    el.progressRefresh.disabled = false;
+  }
+}
+
+async function saveProgressMode(mode) {
+  state.progressMode = mode || "rapid";
+  const username = resolveConfiguredUsername();
+  if (!username) return;
+  try {
+    const response = await fetch("/api/progress/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, mode: state.progressMode }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not switch progress mode.");
+    renderProgressCockpit(payload.progress);
+  } catch (error) {
+    if (el.progressStatus) el.progressStatus.textContent = String(error.message || "Could not switch progress mode.");
+  }
+}
+
+async function saveProgressProjectionSettings() {
+  const username = resolveConfiguredUsername();
+  if (!username) return;
+  try {
+    const response = await fetch("/api/progress/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username,
+        mode: state.progressMode || state.progress?.mode || "rapid",
+        custom_games: Number(el.progressCustomGames?.value || 538),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not save projection settings.");
+    renderProgressCockpit(payload.progress);
+    if (el.progressStatus) el.progressStatus.textContent = "Projection settings saved locally.";
+  } catch (error) {
+    if (el.progressStatus) el.progressStatus.textContent = String(error.message || "Could not save projection settings.");
+  }
+}
+
+async function saveProgressSession() {
+  const username = resolveConfiguredUsername();
+  if (!username || !el.progressSessionForm) return;
+  const form = new FormData(el.progressSessionForm);
+  const payload = Object.fromEntries(form.entries());
+  payload.username = username;
+  payload.mode = state.progressMode || state.progress?.mode || "rapid";
+  try {
+    const response = await fetch("/api/progress/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not save session.");
+    renderProgressCockpit(data.progress);
+    el.progressSessionForm.reset();
+    const dateInput = el.progressSessionForm.querySelector("input[name='date']");
+    if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
+    if (el.progressStatus) el.progressStatus.textContent = "Session saved locally.";
+  } catch (error) {
+    if (el.progressStatus) el.progressStatus.textContent = String(error.message || "Could not save session.");
+  }
+}
+
+function ratingText(value) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? String(Math.round(numeric)) : "--";
+}
+
+function formatNumber(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return escapeHtml(value);
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: Number.isInteger(numeric) ? 0 : 1 }).format(numeric);
+}
+
+function renderProgressCockpit(progress) {
+  if (!el.progressMetricGrid) return;
+  state.progress = progress || null;
+  if (!progress?.profile) {
+    el.progressStatus.textContent = "Save a Chess.com username, then refresh live progress.";
+    el.progressMetricGrid.innerHTML = "";
+    return;
+  }
+  const profile = progress.profile;
+  const mode = String(progress.mode || profile.mode || "rapid");
+  el.progressModeButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.progressMode === mode);
+  });
+  if (el.progressCustomGames) el.progressCustomGames.value = progress.projection?.custom_games || 538;
+  const fetched = profile.fetched_at ? new Date(profile.fetched_at).toLocaleString() : "using saved fallback";
+  el.progressStatus.textContent = `${mode[0].toUpperCase()}${mode.slice(1)} progress · ${profile.fallback_active ? "fallback values" : `live Chess.com data refreshed ${fetched}`}`;
+  const recent = profile.recent || {};
+  el.progressMetricGrid.innerHTML = `
+    <article class="progress-stat-card"><span>Current rating</span><strong>${ratingText(profile.rating)}</strong><small>${mode} rating from ${profile.fallback_active ? "fallback" : "Chess.com"}</small></article>
+    <article class="progress-stat-card"><span>Games played</span><strong>${formatNumber(profile.total_games)}</strong><small>${formatNumber(profile.wins)}W ${formatNumber(profile.draws)}D ${formatNumber(profile.losses)}L</small></article>
+    <article class="progress-stat-card"><span>Win rate</span><strong>${Number(profile.win_rate || 0).toFixed(1)}%</strong><small>All-time ${mode}</small></article>
+    <article class="progress-stat-card"><span>Score %</span><strong>${Number(profile.score_percentage || 0).toFixed(1)}%</strong><small>Draw = 0.5</small></article>
+    <article class="progress-stat-card"><span>Recent form</span><strong>${recent.games ? `${recent.wins}W ${recent.draws}D ${recent.losses}L` : "--"}</strong><small>${recent.games ? `${recent.games} recent games · ${Number(recent.score_percentage || 0).toFixed(1)}% score` : "Refresh for recent games"}</small></article>
+  `;
+  renderProgressCharts(progress.charts || {});
+  renderProgressWeakness(profile);
+  renderProgressGoals(progress.goals || []);
+  renderProgressProjection(progress.projection || {});
+  renderProgressTime(progress.projection || {});
+  renderProgressRecommendations(progress.recommendations || []);
+  renderProgressSessions(progress.sessions || []);
+}
+
+function renderProgressWeakness(profile) {
+  if (!el.progressWeakness) return;
+  const accuracy = profile.accuracy || {};
+  const phases = ["opening", "middlegame", "endgame"];
+  el.progressWeakness.className = "stack";
+  el.progressWeakness.innerHTML = `
+    <article class="progress-recommendation-card">
+      <strong>Main weakness: ${escapeHtml(accuracy.main_weakness || "middlegame")}</strong>
+      <p class="summary-copy">Best phase: ${escapeHtml(accuracy.best_phase || "opening")} · Average accuracy ${Number(accuracy.average || 0).toFixed(2)}${accuracy.average_is_live ? " from recent Chess.com games" : " fallback"}</p>
+    </article>
+    ${phases.map((phase) => `
+      <div class="progress-phase-row">
+        <strong>${escapeHtml(phase)}</strong>
+        <div class="progress-bar"><span style="--progress:${Math.max(0, Math.min(100, Number(accuracy[phase] || 0)))}%"></span></div>
+        <span>${Number(accuracy[phase] || 0).toFixed(1)}</span>
+      </div>
+    `).join("")}
+  `;
+}
+
+function renderProgressGoals(goals) {
+  if (!el.progressGoalGrid) return;
+  el.progressGoalGrid.innerHTML = goals.map((goal) => `
+    <article class="progress-goal-card">
+      <div class="progress-goal-top">
+        <strong>${escapeHtml(goal.label)}</strong>
+        <span>${String(goal.label).includes("rating") ? ratingText(goal.value) : formatNumber(goal.value)} / ${String(goal.label).includes("rating") ? ratingText(goal.target) : formatNumber(goal.target)}</span>
+      </div>
+      <div class="progress-bar"><span style="--progress:${Number(goal.progress || 0)}%"></span></div>
+      <small>${Number(goal.progress || 0).toFixed(1)}% complete</small>
+    </article>
+  `).join("");
+}
+
+function renderProgressProjection(projection) {
+  if (!el.progressProjection) return;
+  const simple = projection.simple || [];
+  const dropoff = projection.dropoff || [];
+  el.progressProjection.className = "stack";
+  el.progressProjection.innerHTML = simple.map((item, index) => {
+    const realistic = dropoff[index] || item;
+    return `
+      <article class="progress-projection-card">
+        <strong>${Number(item.games || 0)} games</strong>
+        <div><span>Simple</span><b>${ratingText(item.final_rating)}</b><small>${signedNumber(item.net_rating_change)} rating</small></div>
+        <div><span>Drop-off</span><b>${ratingText(realistic.final_rating)}</b><small>${signedNumber(realistic.net_rating_change)} rating</small></div>
+        <div><span>Expected</span><b>${Number(realistic.expected_wins || 0).toFixed(1)}W</b><small>${Number(realistic.expected_draws || 0).toFixed(1)}D ${Number(realistic.expected_losses || 0).toFixed(1)}L</small></div>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderProgressTime(projection) {
+  if (!el.progressTime) return;
+  const summary = projection.duration_summary || {};
+  el.progressTime.className = "stack";
+  el.progressTime.innerHTML = `
+    <article class="progress-recommendation-card"><strong>Average ${Number(summary.average || 20).toFixed(1)} min</strong><p class="summary-copy">Shortest ${Number(summary.shortest || 20).toFixed(1)} · longest ${Number(summary.longest || 20).toFixed(1)} · ${Number(summary.games_used || 0)} games used${summary.sample_warning ? " · small sample" : ""}</p></article>
+    ${(projection.time || []).map((row) => `
+      <article class="progress-time-row">
+        <strong>${Number(row.games || 0)} games</strong>
+        <div><span>Max</span><b>${formatNumber(row.max_minutes)} min</b><small>${escapeHtml(row.max_label)}</small></div>
+        <div><span>Real</span><b>${formatNumber(row.real_minutes)} min</b><small>${escapeHtml(row.real_label)}</small></div>
+        <div><span>Days</span><small>${Object.entries(row.days_at || {}).map(([rate, days]) => `${rate}/day ${days}`).join(" · ")}</small></div>
+      </article>
+    `).join("")}
+  `;
+}
+
+function renderProgressRecommendations(items) {
+  if (!el.progressRecommendations) return;
+  el.progressRecommendations.className = "stack";
+  el.progressRecommendations.innerHTML = items.map((item) => `
+    <article class="progress-recommendation-card">
+      <strong>${escapeHtml(item.area)} · ${escapeHtml(item.priority)}</strong>
+      <p class="summary-copy">${escapeHtml(item.text)}</p>
+    </article>
+  `).join("");
+}
+
+function renderProgressSessions(items) {
+  if (!el.progressSessionList) return;
+  if (!items.length) {
+    el.progressSessionList.className = "stack empty";
+    el.progressSessionList.textContent = "No local progress sessions yet.";
+    return;
+  }
+  el.progressSessionList.className = "stack";
+  el.progressSessionList.innerHTML = items.slice().reverse().map((item) => `
+    <article class="progress-session-item">
+      <strong>${escapeHtml(item.date || "")} · ${escapeHtml(item.mode || "rapid")}</strong>
+      <p class="summary-copy">${ratingText(item.start_rating)} → ${ratingText(item.end_rating)} · ${Number(item.wins || 0)}W ${Number(item.draws || 0)}D ${Number(item.losses || 0)}L${item.accuracy ? ` · ${Number(item.accuracy).toFixed(1)} accuracy` : ""}</p>
+      ${item.mistake_theme ? `<p>${escapeHtml(item.mistake_theme)}</p>` : ""}
+      ${item.next_work ? `<p><b>Next:</b> ${escapeHtml(item.next_work)}</p>` : ""}
+    </article>
+  `).join("");
+}
+
+function renderProgressCharts(charts) {
+  drawMiniLineChart(el.progressRatingChart, charts.rating || [], "#65c36a", "Rating");
+  drawMiniBarChart(el.progressDeltaChart, charts.daily_delta || []);
+  drawProgressPhaseChart(el.progressPhaseChart, charts.phase_accuracy || []);
+}
+
+function drawMiniLineChart(canvas, points, color, label) {
+  if (!canvas) return;
+  const ctx = prepareCanvas(canvas);
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const values = points.map((point) => Number(point.value ?? point.rating ?? 0)).filter(Number.isFinite);
+  if (!values.length) {
+    drawEmptyCanvas(ctx, rect, "No rating points yet");
+    return;
+  }
+  const pad = { left: 42, right: 14, top: 18, bottom: 28 };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  drawGrid(ctx, rect, pad);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  values.forEach((value, index) => {
+    const x = pad.left + (index / Math.max(1, values.length - 1)) * (rect.width - pad.left - pad.right);
+    const y = pad.top + (1 - ((value - min) / span)) * (rect.height - pad.top - pad.bottom);
+    if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "rgba(226, 232, 240, 0.7)";
+  ctx.font = "12px Outfit, sans-serif";
+  ctx.fillText(String(Math.round(max)), 8, pad.top + 5);
+  ctx.fillText(String(Math.round(min)), 8, rect.height - pad.bottom + 4);
+  ctx.fillText(label, pad.left, rect.height - 8);
+}
+
+function drawMiniBarChart(canvas, points) {
+  if (!canvas) return;
+  const ctx = prepareCanvas(canvas);
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const values = points.map((point) => Number(point.value || 0));
+  if (!values.length) {
+    drawEmptyCanvas(ctx, rect, "No daily deltas yet");
+    return;
+  }
+  const pad = { left: 18, right: 12, top: 18, bottom: 20 };
+  drawGrid(ctx, rect, pad);
+  const zeroY = pad.top + (rect.height - pad.top - pad.bottom) / 2;
+  const maxAbs = Math.max(8, ...values.map((value) => Math.abs(value)));
+  const slot = (rect.width - pad.left - pad.right) / values.length;
+  const barWidth = Math.max(3, slot - 4);
+  values.forEach((value, index) => {
+    const height = Math.abs(value) / maxAbs * ((rect.height - pad.top - pad.bottom) / 2);
+    ctx.fillStyle = value >= 0 ? "#65c36a" : "#ef6860";
+    ctx.fillRect(pad.left + index * slot, value >= 0 ? zeroY - height : zeroY, barWidth, height || 1);
+  });
+}
+
+function drawProgressPhaseChart(canvas, points) {
+  if (!canvas) return;
+  const ctx = prepareCanvas(canvas);
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const latest = points[points.length - 1] || { opening: 0, middlegame: 0, endgame: 0 };
+  [["Opening", latest.opening, "#65c36a"], ["Middlegame", latest.middlegame, "#e2bf5b"], ["Endgame", latest.endgame, "#7aa2ff"]].forEach(([label, value, color], index) => {
+    const y = 42 + index * 52;
+    ctx.fillStyle = "rgba(226, 232, 240, 0.82)";
+    ctx.font = "13px Outfit, sans-serif";
+    ctx.fillText(label, 12, y);
+    ctx.fillStyle = "rgba(255,255,255,.08)";
+    ctx.fillRect(112, y - 12, rect.width - 170, 12);
+    ctx.fillStyle = color;
+    ctx.fillRect(112, y - 12, (rect.width - 170) * Math.max(0, Math.min(100, Number(value || 0))) / 100, 12);
+    ctx.fillStyle = "rgba(226, 232, 240, 0.72)";
+    ctx.fillText(Number(value || 0).toFixed(1), rect.width - 48, y);
+  });
+}
+
+function prepareCanvas(canvas) {
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return ctx;
+}
+
+function drawGrid(ctx, rect, pad) {
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.11)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i += 1) {
+    const y = pad.top + i * ((rect.height - pad.top - pad.bottom) / 3);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(rect.width - pad.right, y);
+    ctx.stroke();
+  }
+}
+
+function drawEmptyCanvas(ctx, rect, message) {
+  ctx.fillStyle = "rgba(226, 232, 240, 0.62)";
+  ctx.font = "13px Outfit, sans-serif";
+  ctx.fillText(message, 16, rect.height / 2);
+}
+
+function signedNumber(value) {
+  const numeric = Number(value || 0);
+  return `${numeric >= 0 ? "+" : ""}${formatNumber(numeric)}`;
 }
 
 function renderBrilliantTracker(tracker) {
@@ -2662,173 +3197,6 @@ function renderBrilliantGameList(items, emptyText) {
   `).join("");
 }
 
-function renderRatingProgress(progress) {
-  if (!el.ratingProgress) return;
-  if (!progress?.available || !progress.ranges || !Object.keys(progress.ranges).length) {
-    el.ratingProgress.className = "rating-progress-panel empty";
-    el.ratingProgress.textContent = progress?.message || "Import rated Chess.com games to see rating, record, and form over time.";
-    return;
-  }
-  const splitPayloads = progress.time_class_progress || {};
-  const splitKeys = [];
-  (progress.time_class_breakdown || []).forEach((item) => {
-    const key = String(item.label || item.key || "").trim();
-    if (key && splitPayloads[key] && !splitKeys.includes(key)) splitKeys.push(key);
-  });
-  Object.keys(splitPayloads).forEach((key) => {
-    if (!splitKeys.includes(key)) splitKeys.push(key);
-  });
-  const timeClassOrder = splitKeys;
-  const defaultTimeKey = progress.default_time_class && timeClassOrder.includes(progress.default_time_class)
-    ? progress.default_time_class
-    : (timeClassOrder[0] || "");
-  if (timeClassOrder.length && (!state.ratingProgressTimeClass || !timeClassOrder.includes(state.ratingProgressTimeClass))) {
-    state.ratingProgressTimeClass = defaultTimeKey;
-  }
-  if (!timeClassOrder.length) {
-    state.ratingProgressTimeClass = "";
-  }
-  const activeTimeKey = timeClassOrder.length && timeClassOrder.includes(state.ratingProgressTimeClass)
-    ? state.ratingProgressTimeClass
-    : "";
-  const activeProgress = activeTimeKey ? (splitPayloads[activeTimeKey] || progress) : progress;
-  const timeClassLabel = activeTimeKey
-    ? activeProgress.time_class_label || activeTimeKey.replace(/_/g, " ")
-    : "Rated games";
-  const ranges = activeProgress.ranges || {};
-  const rangeOrder = ["7", "30", "90", "365", "all"].filter((key) => ranges[key]);
-  if (!rangeOrder.includes(state.ratingProgressRange)) {
-    state.ratingProgressRange = activeProgress.default_range || progress.default_range || rangeOrder[0] || "90";
-  }
-  const activeKey = ranges[state.ratingProgressRange] ? state.ratingProgressRange : rangeOrder[0];
-  const range = ranges[activeKey] || {};
-  const points = Array.isArray(range.points) ? range.points : [];
-  const graphPoints = points
-    .map((point, index) => ({ ...point, index, graphValue: Number(point.rating_graph ?? point.rating) }))
-    .filter((point) => Number.isFinite(point.graphValue));
-  const selectedIndex = pickRatingProgressIndex(graphPoints);
-  const selected = graphPoints[selectedIndex] || graphPoints[graphPoints.length - 1] || points[points.length - 1] || null;
-  const isMixedAllChart = false;
-  const chart = buildRatingProgressChart(graphPoints, selected?.index, {
-    dense: graphPoints.length > 130,
-    baselineValue: range.rating_start,
-    minSpread: 300,
-  });
-  const ratingEnd = range.rating_end ?? activeProgress.latest_rating ?? progress.latest_rating ?? null;
-  const ratingChange = range.rating_change;
-  const changeClass = Number(ratingChange || 0) > 0 ? "up" : Number(ratingChange || 0) < 0 ? "down" : "flat";
-  const gameTypeText = activeTimeKey ? `${timeClassLabel.toLowerCase()} game` : "rated game";
-  el.ratingProgress.className = "rating-progress-panel";
-  el.ratingProgress.innerHTML = `
-    <div class="rating-progress-head">
-      <div>
-        <div class="line-badge">Imported form tracker</div>
-        <h3>${escapeHtml(range.label || "Progress")} · ${escapeHtml(timeClassLabel)}</h3>
-        <p>${Number(range.games || 0)} ${escapeHtml(gameTypeText)}${Number(range.games || 0) === 1 ? "" : "s"} from ${escapeHtml(range.start_date || "")} to ${escapeHtml(range.end_date || "")}</p>
-      </div>
-      <div class="progress-filter-stack">
-        <div class="progress-range-tabs" role="tablist" aria-label="Progress range">
-          ${rangeOrder.map((key) => `
-            <button class="progress-range-btn ${key === activeKey ? "active" : ""}" type="button" data-progress-range="${escapeHtml(key)}">
-              ${escapeHtml(ranges[key]?.label || key)}
-            </button>
-          `).join("")}
-        </div>
-        ${timeClassOrder.length ? `<div class="progress-range-tabs compact" role="tablist" aria-label="Time-control split">
-          ${timeClassOrder.map((key) => {
-            const payload = splitPayloads[key] || {};
-            const label = payload.time_class_label || key.replace(/_/g, " ");
-            const games = payload.dated_games || payload.total_games || 0;
-            return `
-              <button class="progress-range-btn ${key === activeTimeKey ? "active" : ""}" type="button" data-progress-time-class="${escapeHtml(key)}">
-                ${escapeHtml(label)} <span>${Number(games || 0)}</span>
-              </button>
-            `;
-          }).join("")}
-        </div>` : ""}
-      </div>
-    </div>
-    <div class="progress-metric-grid">
-      <article>
-        <span>Rating now</span>
-        <strong>${ratingEnd == null ? "--" : Number(ratingEnd)}</strong>
-        <small class="${changeClass}">${formatRatingDelta(ratingChange)}</small>
-      </article>
-      <article>
-        <span>Record</span>
-        <strong>${escapeHtml(range.record || "0W 0D 0L")}</strong>
-        <small>${Number(range.win_rate || 0).toFixed(1)}% wins</small>
-      </article>
-      <article>
-        <span>Score rate</span>
-        <strong>${Number(range.score_rate || 0).toFixed(1)}%</strong>
-        <small>${Number(range.games || 0)} games</small>
-      </article>
-      <article>
-        <span>Peak</span>
-        <strong>${range.best_rating == null ? "--" : Number(range.best_rating)}</strong>
-        <small>${range.worst_rating == null ? "No rating floor yet" : `low ${Number(range.worst_rating)}`}</small>
-      </article>
-    </div>
-    <div class="rating-chart-wrap">
-      <div class="rating-chart ${chart.dense ? "dense" : ""} ${isMixedAllChart ? "mixed" : ""}">
-        ${chart.svg}
-        <div class="rating-point-layer">
-          ${chart.points.map((point) => `
-            <button
-              class="rating-point ${escapeHtml(point.tone)} ${point.sourceIndex === selected?.index ? "active" : ""}"
-              type="button"
-              style="left:${point.x}%; top:${point.y}%"
-              title="${escapeHtml(point.title)}"
-              data-progress-index="${point.sourceIndex}"
-              aria-label="${escapeHtml(point.title)}"
-            ></button>
-          `).join("")}
-        </div>
-        <div class="rating-result-ribbon" aria-hidden="true">
-          ${chart.resultTicks.map((tick) => `
-            <span
-              class="rating-result-tick ${escapeHtml(tick.tone)}"
-              style="left:${tick.x}%"
-              title="${escapeHtml(tick.title)}"
-            ></span>
-          `).join("")}
-        </div>
-        <div class="rating-chart-legend">
-          <span><i class="win"></i>Win</span>
-          <span><i class="draw"></i>Draw</span>
-          <span><i class="loss"></i>Loss</span>
-        </div>
-        <div class="rating-axis top">${chart.maxLabel}</div>
-        <div class="rating-axis bottom">${chart.minLabel}</div>
-        <div class="rating-axis baseline">Start ${chart.baselineLabel}</div>
-      </div>
-      <div class="progress-highlight" data-progress-highlight>
-        ${renderRatingProgressHighlight(selected, range)}
-      </div>
-    </div>
-    <div class="progress-insights">
-      ${renderRatingProgressInsight("Busiest day", range.busiest_day)}
-      ${renderRatingProgressInsight("Best scoring day", range.best_score_day)}
-      ${renderTimeClassBreakdown(activeProgress.time_class_breakdown || progress.time_class_breakdown || [])}
-    </div>
-  `;
-  bindRatingProgressEvents();
-}
-
-function pickRatingProgressIndex(graphPoints) {
-  if (!graphPoints.length) return -1;
-  const requested = Number(state.ratingProgressPointIndex);
-  if (Number.isInteger(requested)) {
-    const found = graphPoints.findIndex((point) => Number(point.index) === requested);
-    if (found >= 0) return found;
-  }
-  for (let index = graphPoints.length - 1; index >= 0; index -= 1) {
-    if (Number(graphPoints[index].games || 0) > 0) return index;
-  }
-  return graphPoints.length - 1;
-}
-
 function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}) {
   if (!graphPoints.length) {
     return {
@@ -2984,110 +3352,6 @@ function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}
   };
 }
 
-function bindRatingProgressEvents() {
-  el.ratingProgress.querySelectorAll("[data-progress-range]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.ratingProgressRange = button.dataset.progressRange || "90";
-      state.ratingProgressPointIndex = null;
-      renderRatingProgress(state.payload?.profile?.rating_progress || null);
-    });
-  });
-  el.ratingProgress.querySelectorAll("[data-progress-time-class]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.ratingProgressTimeClass = button.dataset.progressTimeClass || "";
-      state.ratingProgressPointIndex = null;
-      renderRatingProgress(state.payload?.profile?.rating_progress || null);
-    });
-  });
-  el.ratingProgress.querySelectorAll("[data-progress-index]").forEach((button) => {
-    const update = () => {
-      state.ratingProgressPointIndex = Number(button.dataset.progressIndex);
-      renderRatingProgress(state.payload?.profile?.rating_progress || null);
-    };
-    button.addEventListener("click", update);
-    button.addEventListener("focus", update);
-    button.addEventListener("mouseenter", update);
-  });
-}
-
-function formatRatingDelta(value) {
-  if (value == null || !Number.isFinite(Number(value))) return "no rating change yet";
-  const numeric = Number(value);
-  if (numeric > 0) return `+${numeric} over range`;
-  if (numeric < 0) return `${numeric} over range`;
-  return "even over range";
-}
-
-function renderRatingProgressHighlight(point, range) {
-  if (!point) {
-    return "<strong>No day selected</strong><span>Hover a chart marker to inspect that day.</span>";
-  }
-  const opponents = Array.isArray(point.opponents) && point.opponents.length
-    ? point.opponents.map((name) => escapeHtml(name)).join(", ")
-    : "No opponent list for this day";
-  const rating = point.rating ?? point.rating_graph ?? range.rating_end ?? "--";
-  const gameLinks = renderRatingProgressGameLinks(point.game_links || []);
-  const openGame = point.last_game_url
-    ? `<a class="tiny-action" href="${escapeHtml(point.last_game_url)}" target="_blank" rel="noreferrer">Open latest game</a>`
-    : "";
-  return `
-    <div>
-      <span class="line-badge">${escapeHtml(point.label || point.date || "Selected day")}</span>
-      <strong>${escapeHtml(point.summary || "No games imported for this day.")}</strong>
-      <p>${Number(point.score_rate || 0).toFixed(1)}% score · ${Number(point.win_rate || 0).toFixed(1)}% wins · rating ${escapeHtml(rating)}</p>
-    </div>
-    <div class="progress-highlight-grid">
-      <span><b>${Number(point.games || 0)}</b> games</span>
-      <span><b>${Number(point.wins || 0)}</b> wins</span>
-      <span><b>${Number(point.draws || 0)}</b> draws</span>
-      <span><b>${Number(point.losses || 0)}</b> losses</span>
-    </div>
-    ${gameLinks}
-    <small>${opponents}</small>
-    ${openGame}
-  `;
-}
-
-function renderRatingProgressGameLinks(items) {
-  if (!Array.isArray(items) || !items.length) return "";
-  return `
-    <div class="progress-game-list">
-      ${items.slice(-5).reverse().map((item) => {
-        const tone = item.result || "idle";
-        const label = item.opponent || "Unknown opponent";
-        const rating = item.rating == null ? "" : ` · ${Number(item.rating)}`;
-        const moves = item.move_count == null ? "" : ` · ${Number(item.move_count)} moves`;
-        const opening = item.opening ? ` · ${item.opening}` : "";
-        const detail = `${item.color || ""}${rating}${moves}${opening}`;
-        const content = `<span class="progress-game-dot ${escapeHtml(tone)}"></span><b>${escapeHtml(label)}</b><small>${escapeHtml(detail)}</small>`;
-        return item.url
-          ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${content}</a>`
-          : `<span>${content}</span>`;
-      }).join("")}
-    </div>
-  `;
-}
-
-function renderRatingProgressInsight(label, item) {
-  if (!item) {
-    return `
-      <article class="progress-insight">
-        <span>${escapeHtml(label)}</span>
-        <strong>Waiting for games</strong>
-        <small>No day data in this range yet.</small>
-      </article>
-    `;
-  }
-  const score = item.score_rate == null ? "" : ` · ${Number(item.score_rate).toFixed(1)}% score`;
-  return `
-    <article class="progress-insight">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(item.label || item.date || "")}</strong>
-      <small>${Number(item.games || 0)} games · ${escapeHtml(item.record || "")}${score}</small>
-    </article>
-  `;
-}
-
 function renderTimeClassBreakdown(items) {
   const top = items.slice(0, 3);
   return `
@@ -3103,7 +3367,7 @@ function renderMemoryScores(memory) {
   if (!el.memoryScorePanel) return;
   if (!memory || (!memory.fragile_count && !memory.building_count && !memory.strong_count)) {
     el.memoryScorePanel.className = "stack empty";
-    el.memoryScorePanel.textContent = "Memory scores will show up after Bookup has repeated positions to measure.";
+    el.memoryScorePanel.textContent = "Train imported lines more than once to build memory scores for fragile, building, and strong positions.";
     return;
   }
   const fragile = memory.fragile_lines || [];
@@ -3141,7 +3405,7 @@ function renderOpeningDrift(drift) {
   const sections = drift?.sections || [];
   if (!sections.length) {
     el.driftDetectorPanel.className = "stack empty";
-    el.driftDetectorPanel.textContent = "Bookup will compare your recent first moves with your long-term repertoire after import.";
+    el.driftDetectorPanel.textContent = "Import games to compare recent first moves with your long-term repertoire.";
     return;
   }
   const alerts = drift?.alerts || [];
@@ -3197,7 +3461,7 @@ function renderPrepPack(pack) {
   const maintenance = pack?.maintenance || [];
   if (!focus.length && !nextUp.length && !common.length && !maintenance.length) {
     el.prepPackPanel.className = "stack empty";
-    el.prepPackPanel.textContent = "Your compact study pack will show up once Bookup has lines to prepare.";
+    el.prepPackPanel.textContent = "Import games or save repertoire lines to generate a compact study pack.";
     state.prepPackText = "";
     return;
   }
@@ -3384,7 +3648,7 @@ function renderReviewSchedule(schedule) {
   const total = groups.reduce((sum, group) => sum + group.items.length, 0);
   if (!total) {
     el.reviewSchedule.className = "review-schedule compact-review-schedule empty";
-    el.reviewSchedule.innerHTML = `<div class="compact-empty">Review schedule will show up here once lines enter your queues.</div>`;
+    el.reviewSchedule.innerHTML = `<div class="compact-empty">Review schedule appears once lines enter your queues.</div>`;
     return;
   }
   el.reviewSchedule.className = "review-schedule compact-review-schedule";
@@ -3422,7 +3686,7 @@ function renderStudyPlan(plan) {
   const blocks = plan?.blocks || [];
   if (!blocks.length) {
     el.studyPlanPanel.className = "stack empty";
-    el.studyPlanPanel.textContent = "Bookup will build a short session plan after import.";
+    el.studyPlanPanel.textContent = "Import games to build a short study session plan.";
     return;
   }
   el.studyPlanPanel.className = "stack";
@@ -3498,7 +3762,7 @@ function renderConfidenceGraph(graph) {
   const buckets = graph?.buckets || [];
   if (!buckets.length) {
     el.confidenceGraphPanel.className = "stack empty";
-    el.confidenceGraphPanel.textContent = "Line confidence distribution will show up here.";
+    el.confidenceGraphPanel.textContent = "Import games to map line-confidence distribution.";
     return;
   }
   el.confidenceGraphPanel.className = "stack";
@@ -3560,7 +3824,7 @@ function renderImportSpeed(report) {
   if (!el.importSpeedPanel) return;
   if (!report) {
     el.importSpeedPanel.className = "stack empty";
-    el.importSpeedPanel.textContent = "Import and cache diagnostics will show up here.";
+    el.importSpeedPanel.textContent = "Import games to review speed and cache diagnostics.";
     return;
   }
   const cards = [
@@ -3586,7 +3850,7 @@ function renderSmartRetry(retry) {
   const deck = retry?.deck || [];
   if (!deck.length) {
     el.smartRetryPanel.className = "stack empty";
-    el.smartRetryPanel.textContent = "Smart retry cards will show up when repeated misses are due.";
+    el.smartRetryPanel.textContent = "Complete review attempts to create smart retry cards from repeated misses.";
     return;
   }
   el.smartRetryPanel.className = "stack";
@@ -3607,7 +3871,7 @@ function renderPremoveQuiz(quiz) {
   const cards = quiz?.cards || [];
   if (!cards.length) {
     el.premoveQuizPanel.className = "stack empty";
-    el.premoveQuizPanel.textContent = "Pre-move quiz cards will show up here.";
+    el.premoveQuizPanel.textContent = "Pre-move quiz cards appear after import.";
     return;
   }
   el.premoveQuizPanel.className = "stack";
@@ -3627,7 +3891,7 @@ function renderTheoryPresets(theory) {
   const seeds = theory?.seeds || [];
   if (!seeds.length) {
     el.theoryPresetPanel.className = "theory-seed-grid empty";
-    el.theoryPresetPanel.innerHTML = `<div class="compact-empty">Bookup will suggest theory seeds after import.</div>`;
+    el.theoryPresetPanel.innerHTML = `<div class="compact-empty">Import games to suggest theory seeds.</div>`;
     return;
   }
   el.theoryPresetPanel.className = "theory-seed-grid";
@@ -3644,7 +3908,7 @@ function renderOpponentSimulator(simulator) {
   const scenarios = simulator?.scenarios || [];
   if (!scenarios.length) {
     el.opponentSimulatorPanel.className = "stack empty";
-    el.opponentSimulatorPanel.textContent = "Opponent simulator scenarios will show up here.";
+    el.opponentSimulatorPanel.textContent = "Import games to build opponent simulator scenarios.";
     return;
   }
   el.opponentSimulatorPanel.className = "stack";
@@ -3689,7 +3953,7 @@ function renderRepertoireExport(exportPayload) {
   state.repertoireExportText = exportPayload?.text || "";
   if (!state.repertoireExportText) {
     el.repertoireExportPanel.className = "stack empty";
-    el.repertoireExportPanel.textContent = "Export will show up here after import.";
+    el.repertoireExportPanel.textContent = "Import games to prepare a repertoire export.";
     return;
   }
   el.repertoireExportPanel.className = "stack";
@@ -4096,9 +4360,9 @@ function renderStudyMoveCard(title, san, classification, copy) {
 
 function renderReactionMarkup(reaction) {
   if (!reaction) return "";
-  const reasons = Array.isArray(reaction?.reasons) ? reaction.reasons.filter(Boolean).slice(0, 3) : [];
+  const reasons = Array.isArray(reaction?.reasons) ? reaction.reasons.filter(Boolean).slice(0, 6) : [];
   const fallbackFeatures = Array.isArray(reaction?.features) ? reaction.features.filter(Boolean).slice(0, 4) : [];
-  const motifs = Array.isArray(reaction?.motifs) ? reaction.motifs.filter(Boolean).slice(0, 6) : fallbackFeatures;
+  const motifs = Array.isArray(reaction?.motifs) ? reaction.motifs.filter(Boolean).slice(0, 10) : fallbackFeatures;
   const rawTone = String(reaction?.tone || reaction?.classification_key || "neutral").toLowerCase();
   const tone = rawTone.replace(/[^a-z0-9_-]/g, "") || "neutral";
   const summary = reaction?.summary || "";
@@ -4473,7 +4737,7 @@ function renderEmptyStudyWorkspace() {
     el.studyEvalScore.textContent = "+0.00";
   }
   if (el.studyEvalCaption) {
-    el.studyEvalCaption.textContent = "Waiting for live analysis";
+    el.studyEvalCaption.textContent = "Ready for live analysis";
   }
   if (el.studyOpeningMeta) {
     el.studyOpeningMeta.textContent = "Open a line to see its live engine and Lichess database context here.";
@@ -4493,19 +4757,19 @@ function renderEmptyStudyWorkspace() {
     el.studyDatabaseMeta.textContent = "No position loaded";
   }
   if (el.studyMoveMeta) {
-    el.studyMoveMeta.textContent = "Waiting for a move";
+    el.studyMoveMeta.textContent = "Ready for a move";
   }
   if (el.studyEngineLines) {
     el.studyEngineLines.className = "stack empty";
-    el.studyEngineLines.textContent = "Engine lines will show up here.";
+    el.studyEngineLines.textContent = "Load a study position to see engine lines.";
   }
   if (el.studyDatabaseMoves) {
     el.studyDatabaseMoves.className = "stack empty";
-    el.studyDatabaseMoves.textContent = "Database moves will show up here.";
+    el.studyDatabaseMoves.textContent = "Load a study position to see database moves.";
   }
   if (el.studyMoveClassifications) {
     el.studyMoveClassifications.className = "stack empty";
-    el.studyMoveClassifications.textContent = "Move classifications will show up here.";
+    el.studyMoveClassifications.textContent = "Play a move to see its classification.";
   }
   if (el.studyMoveTrail) {
     el.studyMoveTrail.classList.add("empty");
@@ -4600,7 +4864,7 @@ function renderFreeStudyWorkspace() {
   if (el.studyMoveMeta) {
     el.studyMoveMeta.textContent = playedMoveSan
       ? `Last move: ${playedMoveSan}`
-      : (state.insightLoading ? "Analyzing current position..." : "Waiting for a move");
+      : (state.insightLoading ? "Analyzing current position..." : "Ready for a move");
   }
   if (el.studyMoveClassifications) {
     const cards = [];
@@ -4672,7 +4936,7 @@ function renderStudyWorkspace() {
       ? (state.insightLoading && !insight && state.lastEvalCp !== null
         ? `${evalCaption(evalCp)} · updating`
         : evalCaption(evalCp))
-      : "Waiting for live analysis";
+      : "Ready for live analysis";
   }
 
   if (el.studyOpeningMeta) {
@@ -4734,7 +4998,7 @@ function renderStudyWorkspace() {
   if (el.studyMoveMeta) {
     el.studyMoveMeta.textContent = playedMoveSan
       ? `Last move: ${playedMoveSan}`
-      : (state.insightLoading ? "Analyzing current position..." : "Waiting for your next move");
+      : (state.insightLoading ? "Analyzing current position..." : "Ready for your next move");
   }
 
   if (el.studyMoveClassifications) {
@@ -4898,15 +5162,14 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
   const response = await fetch("/api/position-insight", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withOptionalLichessToken({
       ...currentStudySettingsPayload(),
       fen,
-      lichess_token: currentLichessToken(),
       play_uci: playUci,
       your_move_uci: yourMoveUci,
       your_move_san: yourMoveSan,
       your_move_count: yourMoveCount,
-    }),
+    })),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load position insight.");
@@ -4917,11 +5180,10 @@ async function fetchDatabaseContext(fen, playUci = []) {
   const response = await fetch("/api/database-moves", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withOptionalLichessToken({
       fen,
-      lichess_token: currentLichessToken(),
       play_uci: playUci,
-    }),
+    })),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load database moves.");
@@ -5060,17 +5322,22 @@ function saveManualRepertoireMove(lessonId) {
   const moveUci = lesson.recommended_move_uci || lesson.best_reply_uci || lesson.preferred_branch_uci || "";
   const moveSan = lesson.recommended_move || lesson.best_reply || lesson.preferred_branch_san || "";
   const positionKey = lesson.position_fen || lesson.decision_fen || lesson.transposition_group_id || lessonId;
+  const positionFen = String(lesson.position_fen || lesson.decision_fen || state.boardFen || "").trim();
   if (!positionKey || !moveUci) return;
   state.manualRepertoire[positionKey] = {
     lesson_id: lessonId,
     move_uci: moveUci,
     move_san: moveSan,
     line_label: lesson.line_label || lesson.opening_name || "",
+    position_fen: positionFen || undefined,
+    opening_name: lesson.opening_name || "",
+    source: "manual_repertoire",
     saved_at: new Date().toISOString(),
   };
-  if (state.payload?.username) {
-    saveReviewStats(state.payload.username);
-    void persistReviewStats(state.payload.username);
+  const progressUser = state.payload?.username || resolveConfiguredUsername();
+  if (progressUser) {
+    saveReviewStats(progressUser);
+    void persistReviewStats(progressUser);
   }
   const message = `Saved ${moveSan || moveUci} as your repertoire move for this position.`;
   if (el.trainerFeedback) {
@@ -6893,29 +7160,36 @@ function labelForStatus(status) {
   return "Needs work";
 }
 
-function smartTheoryPieceGlyph(piece) {
-  const map = {
-    P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
-    p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
-  };
-  return map[piece] || "";
-}
-
 function renderSmartTheoryMiniBoard(fen) {
   if (!el.smartTheoryMiniBoard) return;
   const squares = parseFenBoard(fen || START_FEN);
   if (!Array.isArray(squares) || squares.length !== 64) {
-    el.smartTheoryMiniBoard.className = "mini-board-grid empty";
+    el.smartTheoryMiniBoard.className = "smart-theory-mini-board empty";
     el.smartTheoryMiniBoard.textContent = "Invalid board.";
     return;
   }
-  el.smartTheoryMiniBoard.className = "mini-board-grid";
-  el.smartTheoryMiniBoard.innerHTML = squares.map((piece, idx) => {
-    const rank = Math.floor(idx / 8);
-    const file = idx % 8;
-    const light = (rank + file) % 2 === 0 ? "light" : "dark";
-    return `<div class="mini-board-square ${light}">${smartTheoryPieceGlyph(piece)}</div>`;
-  }).join("");
+  const orientation = String(
+    el.smartTheoryMyColor?.value
+    || el.smartTheoryLichessOrientation?.value
+    || "white",
+  ).toLowerCase() === "black" ? "black" : "white";
+  el.smartTheoryMiniBoard.className = "smart-theory-mini-board";
+  el.smartTheoryMiniBoard.innerHTML = renderMiniBoard(fen || START_FEN, orientation);
+}
+
+function updateSmartTheoryLichessHint() {
+  if (!el.smartTheoryLichessHint) return;
+  const hasTree = Boolean(Array.isArray(state.smartTheoryTree?.nodes) && state.smartTheoryTree.nodes.length > 1);
+  const hasToken = Boolean(String(el.smartTheoryLichessToken?.value || currentLichessToken() || "").trim());
+  if (!hasToken) {
+    el.smartTheoryLichessHint.textContent = "Add a Lichess token (study:write) to create/export studies.";
+    return;
+  }
+  if (!hasTree) {
+    el.smartTheoryLichessHint.textContent = "Lichess is connected. Generate or import a Smart Theory tree, then export.";
+    return;
+  }
+  el.smartTheoryLichessHint.textContent = "Ready: export this Smart Theory tree to your Lichess study.";
 }
 
 function smartTheoryNodeMeta(node) {
@@ -6955,7 +7229,7 @@ function renderSmartTheoryLearningQueue() {
   const nodes = Array.isArray(tree?.nodes) ? tree.nodes.filter((node) => String(node.id) !== "root") : [];
   if (!nodes.length) {
     el.smartTheoryLearningQueue.className = "stack empty";
-    el.smartTheoryLearningQueue.textContent = "Priority study queue will show here after generation.";
+    el.smartTheoryLearningQueue.textContent = "Generate a line to build the priority study queue.";
     return;
   }
   const explicitQueue = Array.isArray(tree?.learning_queue_preview) ? tree.learning_queue_preview : [];
@@ -6998,37 +7272,110 @@ function renderSmartTheoryLearningQueue() {
   });
 }
 
+function smartTheoryTreeBucket(node) {
+  if (!node || typeof node !== "object") return "context";
+  const cls = String(node.classification || "").trim().toLowerCase();
+  if (Boolean(node.isCorrectedMove)) return "corrected";
+  if (Boolean(node.isUserSide) && ["inaccuracy", "mistake", "blunder"].includes(cls)) return "needs_work";
+  if (Boolean(node.isOpponentSide) && Boolean(node.isBestEngineReply)) return "engine_pressure";
+  if (Boolean(node.isUserSide) && Boolean(node.styleMatchedMove)) return "style_matched";
+  if (Boolean(node.isUserSide)) return "user_plan";
+  return "context";
+}
+
+function smartTheoryBucketLabel(bucket) {
+  if (bucket === "corrected") return "Corrected Lines";
+  if (bucket === "needs_work") return "Needs Work";
+  if (bucket === "engine_pressure") return "Engine Pressure";
+  if (bucket === "style_matched") return "Style-Matched";
+  if (bucket === "user_plan") return "My Repertoire Continuations";
+  return "Context Lines";
+}
+
+function smartTheoryNodeMatchesSearch(node, query) {
+  if (!query) return true;
+  const haystack = [
+    String(node.san || ""),
+    String(node.uci || ""),
+    String(node.classification || ""),
+    String(node.openingName || ""),
+    String(node.ecoCode || ""),
+    String(node.learningReason || ""),
+    String(node.theoryExplanation || ""),
+    String(node.recommendedResponseSan || node.recommendedResponseUci || ""),
+  ].join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
 function renderSmartTheoryTree() {
   if (!el.smartTheoryTree) return;
   const tree = state.smartTheoryTree;
   if (!tree || !Array.isArray(tree.nodes) || !tree.nodes.length) {
     el.smartTheoryTree.className = "stack empty";
-    el.smartTheoryTree.textContent = "Generated moves will appear here.";
+    el.smartTheoryTree.textContent = "Generate a Smart Theory tree to inspect moves.";
     return;
   }
+  const focus = String(state.smartTheoryTreeFocus || el.smartTheoryTreeFocus?.value || "all").trim().toLowerCase();
+  const query = String(state.smartTheoryTreeSearch || el.smartTheoryTreeSearch?.value || "").trim().toLowerCase();
   const rows = tree.nodes
     .filter((node) => node.id !== "root")
+    .filter((node) => {
+      const bucket = smartTheoryTreeBucket(node);
+      if (focus === "all") return true;
+      return bucket === focus;
+    })
+    .filter((node) => smartTheoryNodeMatchesSearch(node, query))
     .sort((a, b) => {
       const priorityDelta = Number(b.learningPriority || 0) - Number(a.learningPriority || 0);
       if (priorityDelta) return priorityDelta;
       return Number(a.ply || 0) - Number(b.ply || 0);
     })
     .slice(0, 500);
+  if (!rows.length) {
+    el.smartTheoryTree.className = "stack empty";
+    el.smartTheoryTree.textContent = "No generated lines match the current filter.";
+    renderSmartTheoryLearningQueue();
+    return;
+  }
+  const orderedBuckets = ["corrected", "needs_work", "engine_pressure", "style_matched", "user_plan", "context"];
+  const byBucket = new Map();
+  orderedBuckets.forEach((bucket) => byBucket.set(bucket, []));
+  rows.forEach((node) => {
+    const bucket = smartTheoryTreeBucket(node);
+    const bucketRows = byBucket.get(bucket) || [];
+    bucketRows.push(node);
+    byBucket.set(bucket, bucketRows);
+  });
   el.smartTheoryTree.className = "stack";
-  el.smartTheoryTree.innerHTML = rows.map((node) => `
-    <div class="smart-tree-row ${smartTheoryPriorityClass(node)} ${String(node.id) === String(state.smartTheorySelectedNodeId) ? "selected" : ""}" data-smart-node="${escapeHtml(node.id)}" role="button" tabindex="0">
-      <strong>${escapeHtml(`${node.ply}. ${node.san || ""}`)}</strong>
-      <div class="tree-meta">
-        ${escapeHtml(node.classification || "")}
-        ${node.isCorrectedMove ? " · corrected" : ""}
-        ${node.isUserSide && ["Inaccuracy", "Mistake", "Blunder"].includes(String(node.classification || "")) ? " · needs work" : ""}
-        · ${escapeHtml(formatEval(node.evalAfter || 0))}
-        · ${escapeHtml(node.openingName || "")}
-      </div>
-      <div class="line-note">${escapeHtml(node.learningReason || "")}${node.learningPriority ? ` (priority ${Number(node.learningPriority)})` : ""}</div>
-      <div class="line-note">${escapeHtml(node.theoryExplanation || "")}</div>
-    </div>
-  `).join("");
+  el.smartTheoryTree.innerHTML = orderedBuckets
+    .map((bucket) => {
+      const bucketRows = byBucket.get(bucket) || [];
+      if (!bucketRows.length) return "";
+      const header = `
+        <div class="smart-tree-section-head">
+          <strong>${escapeHtml(smartTheoryBucketLabel(bucket))}</strong>
+          <span class="smart-tree-section-count">${bucketRows.length} line${bucketRows.length === 1 ? "" : "s"}</span>
+        </div>
+      `;
+      const items = bucketRows.map((node) => `
+        <div class="smart-tree-row ${smartTheoryPriorityClass(node)} ${String(node.id) === String(state.smartTheorySelectedNodeId) ? "selected" : ""}" data-smart-node="${escapeHtml(node.id)}" role="button" tabindex="0">
+          <strong>${escapeHtml(`${node.ply}. ${node.san || ""}`)}</strong>
+          <div class="tree-meta">
+            ${escapeHtml(node.classification || "")}
+            ${node.isCorrectedMove ? " · corrected" : ""}
+            ${node.isUserSide && ["Inaccuracy", "Mistake", "Blunder"].includes(String(node.classification || "")) ? " · needs work" : ""}
+            ${node.isBestEngineReply ? " · best engine reply" : ""}
+            ${node.styleMatchedMove ? " · style matched" : ""}
+            · ${escapeHtml(formatEval(node.evalAfter || 0))}
+            · ${escapeHtml(node.openingName || "")}
+          </div>
+          <div class="line-note">${escapeHtml(node.learningReason || "")}${node.learningPriority ? ` (priority ${Number(node.learningPriority)})` : ""}</div>
+          <div class="line-note">${escapeHtml(node.theoryExplanation || "")}</div>
+        </div>
+      `).join("");
+      return `<section class="smart-tree-section">${header}${items}</section>`;
+    })
+    .join("");
   el.smartTheoryTree.querySelectorAll("[data-smart-node]").forEach((item) => {
     const onSelect = () => {
       const nodeId = item.getAttribute("data-smart-node") || "";
@@ -7059,7 +7406,7 @@ function selectSmartTheoryNode(nodeId) {
     const path = smartTheoryMovePath(tree, node);
     if (!path.length) {
       el.smartTheoryMoveList.className = "stack empty";
-      el.smartTheoryMoveList.textContent = "Move list will show here.";
+      el.smartTheoryMoveList.textContent = "This root position has no move path yet.";
     } else {
       el.smartTheoryMoveList.className = "stack";
       el.smartTheoryMoveList.innerHTML = path
@@ -7079,12 +7426,20 @@ function selectSmartTheoryNode(nodeId) {
     el.smartTheoryRecommendation.className = "stack";
     const originalMove = String(node.originalUserMove || "").trim();
     const correctedMove = String(node.correctedMove || "").trim();
+    const stylePreferred = String(node.stylePreferredMoveUci || "").trim();
+    const styleWeight = Number(node.stylePreferredMoveWeight || 0);
+    const styleMatched = Boolean(node.styleMatchedMove);
+    const recommendedResponse = String(node.recommendedResponseSan || node.recommendedResponseUci || "").trim();
+    const isBestEngineReply = Boolean(node.isBestEngineReply);
     el.smartTheoryRecommendation.innerHTML = `
       <div><strong>Best move</strong>: ${escapeHtml(node.bestMoveSan || node.bestMoveUci || "N/A")}</div>
       <div><strong>Eval before</strong>: ${escapeHtml(formatEval(node.evalBefore || 0))}</div>
       <div><strong>Eval after</strong>: ${escapeHtml(formatEval(node.evalAfter || 0))}</div>
       <div><strong>Swing</strong>: ${escapeHtml(formatCp(node.evalSwing || 0))}</div>
       <div><strong>Classification</strong>: ${escapeHtml(node.classification || "")}</div>
+      ${isBestEngineReply ? "<div><strong>Engine pressure</strong>: Opponent chose the best engine reply</div>" : ""}
+      ${recommendedResponse ? `<div><strong>Your best response</strong>: ${escapeHtml(recommendedResponse)}</div>` : ""}
+      ${stylePreferred ? `<div><strong>Style prior</strong>: ${escapeHtml(stylePreferred)}${styleWeight > 0 ? ` (weight ${styleWeight.toFixed(2)})` : ""}${styleMatched ? " · matched" : ""}</div>` : ""}
       ${originalMove ? `<div><strong>Your played-line move</strong>: ${escapeHtml(originalMove)}</div>` : ""}
       ${correctedMove ? `<div><strong>Correction</strong>: use ${escapeHtml(correctedMove)}</div>` : ""}
       <div><strong>Learning priority</strong>: ${Number(node.learningPriority || 0)}${node.learningReason ? ` · ${escapeHtml(node.learningReason)}` : ""}</div>
@@ -7104,11 +7459,29 @@ function selectSmartTheoryNode(nodeId) {
   }
   if (el.smartTheoryExplanation) {
     el.smartTheoryExplanation.className = "stack";
+    const recommendedResponse = String(node.recommendedResponseSan || node.recommendedResponseUci || "").trim();
+    const threatSummary = String(node.threatSummary || "").trim();
+    const whySummary = String(node.whyMoveGoodOrBad || "").trim();
+    const followUpPlan = String(node.followUpPlan || "").trim();
+    const bestResponseSummary = String(node.bestResponseSummary || "").trim();
+    const userSideText = Boolean(node.isUserSide) ? "Your move" : "Opponent move";
+    const enginePressureText = Boolean(node.isBestEngineReply) ? "This is the strongest engine resource in this position." : "";
+    const situation = [
+      `${userSideText}: ${String(node.san || node.uci || "N/A").trim() || "N/A"}`,
+      `Classification: ${String(node.classification || "N/A").trim() || "N/A"}`,
+      `Eval swing (White POV): ${formatCp(node.evalSwing || 0)}`,
+    ].join(" · ");
+    const responseText = bestResponseSummary || recommendedResponse || String(node.bestMoveSan || node.bestMoveUci || "").trim();
+    const planText = followUpPlan || String(node.planForUser || "").trim();
     el.smartTheoryExplanation.innerHTML = `
-      <div><strong>Theory</strong>: ${escapeHtml(node.theoryExplanation || "No explanation available.")}</div>
-      <div><strong>Plan</strong>: ${escapeHtml(node.planForUser || "")}</div>
-      <div><strong>Opponent idea</strong>: ${escapeHtml(node.opponentIdea || "")}</div>
-      <div><strong>Best response</strong>: ${escapeHtml(node.bestMoveSan || node.bestMoveUci || "")}</div>
+      <div><strong>Situation</strong>: ${escapeHtml(situation)}</div>
+      ${enginePressureText ? `<div><strong>Engine pressure</strong>: ${escapeHtml(enginePressureText)}</div>` : ""}
+      ${threatSummary ? `<div><strong>Problem it creates</strong>: ${escapeHtml(threatSummary)}</div>` : ""}
+      ${whySummary ? `<div><strong>Why this move matters</strong>: ${escapeHtml(whySummary)}</div>` : ""}
+      <div><strong>Theory idea</strong>: ${escapeHtml(node.theoryExplanation || "No explanation available.")}</div>
+      ${node.opponentIdea ? `<div><strong>Opponent plan</strong>: ${escapeHtml(node.opponentIdea)}</div>` : ""}
+      ${responseText ? `<div><strong>Best response</strong>: ${escapeHtml(responseText)}</div>` : ""}
+      ${planText ? `<div><strong>Plan after response</strong>: ${escapeHtml(planText)}</div>` : ""}
     `;
   }
   el.smartTheoryTree?.querySelectorAll?.("[data-smart-node]")?.forEach?.((row) => {
@@ -7133,6 +7506,9 @@ function setSmartTheoryControlsRunning(running) {
     el.smartTheoryDepth,
     el.smartTheoryMoveTime,
     el.smartTheoryReplies,
+    el.smartTheoryExpectedMoveConfidenceCp,
+    el.smartTheoryStyleMoveConfidenceCp,
+    el.smartTheoryStyleMinWeight,
     el.smartTheoryMaxPly,
     el.smartTheoryMaxPositions,
     el.smartTheoryCustomFen,
@@ -7150,6 +7526,8 @@ function setSmartTheoryControlsRunning(running) {
     el.smartTheoryAvoidAbsurd,
     el.smartTheoryEcoOnly,
     el.smartTheoryCacheEvals,
+    el.smartTheoryTreeFocus,
+    el.smartTheoryTreeSearch,
     el.smartTheoryImport,
     el.smartTheoryClear,
     el.smartTheoryGenerate,
@@ -7158,14 +7536,17 @@ function setSmartTheoryControlsRunning(running) {
   });
   if (el.smartTheoryStop) el.smartTheoryStop.disabled = !disabled;
   if (el.smartTheoryExport) el.smartTheoryExport.disabled = disabled || !state.smartTheoryTree;
-  if (el.smartTheoryExportLichess) el.smartTheoryExportLichess.disabled = disabled || !state.smartTheoryTree;
+  if (el.smartTheoryPreviewChapters) el.smartTheoryPreviewChapters.disabled = disabled || !state.smartTheoryTree;
+  if (el.smartTheoryCheckStudy) el.smartTheoryCheckStudy.disabled = disabled;
+  if (el.smartTheoryExportLichess) el.smartTheoryExportLichess.disabled = disabled;
   if (el.smartTheoryFreshStudy) el.smartTheoryFreshStudy.disabled = disabled;
   el.smartTheoryPresetButtons?.forEach?.((button) => {
     button.disabled = disabled;
   });
+  updateSmartTheoryLichessHint();
 }
 
-function buildSmartTheoryPlaceholderRoot(startFen, startSource) {
+function buildSmartTheoryRootNode(startFen, startSource) {
   const fallbackFen = normalizeFen(startFen || START_FEN);
   const now = Math.floor(Date.now() / 1000);
   return {
@@ -7196,6 +7577,16 @@ function buildSmartTheoryPlaceholderRoot(startFen, startSource) {
     isCorrectedMove: false,
     originalUserMove: "",
     correctedMove: "",
+    stylePreferredMoveUci: "",
+    stylePreferredMoveWeight: 0,
+    styleMatchedMove: false,
+    recommendedResponseUci: "",
+    recommendedResponseSan: "",
+    isBestEngineReply: false,
+    threatSummary: "No immediate tactical threat in the prepared root position.",
+    whyMoveGoodOrBad: "Waiting for generated move evaluation.",
+    bestResponseSummary: "",
+    followUpPlan: "Generate a line to get a concrete follow-up plan.",
     theoryExplanation: "Starting position prepared. Waiting for first generated line.",
     planForUser: `Starting source: ${String(startSource || "current_board").replaceAll("_", " ")}.`,
     opponentIdea: "",
@@ -7213,13 +7604,6 @@ function normalizeSmartTheoryOpeningFocus(raw) {
   if (value === "kings_indian") return "kings_indian_defense";
   const allowed = new Set(["auto", "kings_indian_defense", "kings_indian_attack", "kings_indian_systems", "pirc_defense"]);
   return allowed.has(value) ? value : "auto";
-}
-
-function smartTheoryFocusForcedColor(openingFocus) {
-  const focus = normalizeSmartTheoryOpeningFocus(openingFocus);
-  if (focus === "kings_indian_defense" || focus === "pirc_defense") return "black";
-  if (focus === "kings_indian_attack") return "white";
-  return "";
 }
 
 function smartTheoryFocusLabel(openingFocus) {
@@ -7261,6 +7645,22 @@ function updateSmartTheoryRunSummary(summary = {}) {
   const learningQueueCount = Number(summary.learning_queue_count || state.smartTheoryTree?.learning_queue_count || 0);
   const correctedCount = Number(summary.corrected_nodes_count || state.smartTheoryTree?.corrected_nodes_count || 0);
   const weakCount = Number(summary.user_weak_nodes_count || state.smartTheoryTree?.user_weak_nodes_count || 0);
+  const stylePositions = Number(summary.user_style_positions_count || state.smartTheoryTree?.user_style_positions_count || 0);
+  const expectedConfidence = Number(
+    summary.expected_move_confidence_cp
+    || state.smartTheoryTree?.settings_used?.expected_move_confidence_cp
+    || 0,
+  );
+  const styleConfidence = Number(
+    summary.style_move_confidence_cp
+    || state.smartTheoryTree?.settings_used?.style_move_confidence_cp
+    || 0,
+  );
+  const styleMinWeight = Number(
+    summary.style_preferred_min_weight
+    || state.smartTheoryTree?.settings_used?.style_preferred_min_weight
+    || 0,
+  );
   const studySyncStatus = String(summary.study_sync_status || "").trim().toLowerCase();
   const studySyncText = String(summary.study_sync_text || "").trim();
   const source = String(summary.starting_source || "").trim();
@@ -7271,9 +7671,13 @@ function updateSmartTheoryRunSummary(summary = {}) {
   const appliedSeed = Array.isArray(summary.applied_start_line_uci)
     ? summary.applied_start_line_uci
     : (Array.isArray(state.smartTheoryTree?.applied_start_line_uci) ? state.smartTheoryTree.applied_start_line_uci : []);
+  const userBookLine = Array.isArray(summary.user_book_line_uci)
+    ? summary.user_book_line_uci
+    : (Array.isArray(state.smartTheoryTree?.user_book_line_uci) ? state.smartTheoryTree.user_book_line_uci : []);
+  const userBookLineSource = String(summary.user_book_line_source || state.smartTheoryTree?.user_book_line_source || "").trim();
   if (!status && !nodes && !done && !total && !source && !opening && !eco) {
     el.smartTheoryRunSummary.className = "stack empty";
-    el.smartTheoryRunSummary.textContent = "Run summary will show here.";
+    el.smartTheoryRunSummary.textContent = "Choose a source and generate a line to see run details.";
     return;
   }
   const rows = [];
@@ -7285,9 +7689,18 @@ function updateSmartTheoryRunSummary(summary = {}) {
   if (opening || eco) rows.push(`<div><strong>Opening</strong>: ${escapeHtml([opening, eco].filter(Boolean).join(" | "))}</div>`);
   if (openingFocus) rows.push(`<div><strong>Opening focus</strong>: ${escapeHtml(smartTheoryFocusLabel(openingFocus))}</div>`);
   if (appliedSeed.length) rows.push(`<div><strong>Applied seed line</strong>: ${escapeHtml(appliedSeed.join(" "))}</div>`);
+  if (userBookLine.length) {
+    const shownLine = userBookLine.slice(0, 14).join(" ");
+    rows.push(`<div><strong>Following your saved line</strong>: ${escapeHtml(shownLine)}${userBookLine.length > 14 ? " ..." : ""}</div>`);
+  }
+  if (userBookLineSource) rows.push(`<div><strong>User line source</strong>: ${escapeHtml(userBookLineSource)}</div>`);
   if (learningQueueCount) rows.push(`<div><strong>Learning queue</strong>: ${learningQueueCount}</div>`);
   if (correctedCount) rows.push(`<div><strong>Corrected lines</strong>: ${correctedCount}</div>`);
   if (weakCount) rows.push(`<div><strong>User weak lines</strong>: ${weakCount}</div>`);
+  if (stylePositions) rows.push(`<div><strong>Style positions</strong>: ${stylePositions}</div>`);
+  if (expectedConfidence) rows.push(`<div><strong>Follow confidence</strong>: ${expectedConfidence} cp</div>`);
+  if (styleConfidence) rows.push(`<div><strong>Style fallback confidence</strong>: ${styleConfidence} cp</div>`);
+  if (styleMinWeight) rows.push(`<div><strong>Style minimum weight</strong>: ${styleMinWeight.toFixed(1)}</div>`);
   if (studySyncStatus) {
     rows.push(`<div><strong>Study sync</strong>: ${escapeHtml(studySyncStatus)}${studySyncText ? ` · ${escapeHtml(studySyncText)}` : ""}</div>`);
   }
@@ -7304,21 +7717,21 @@ function applySmartTheoryPreset(presetName) {
     if (key === "fast") {
     setValue(el.smartTheoryDepth, 14);
     setValue(el.smartTheoryMoveTime, 0.4);
-    setValue(el.smartTheoryReplies, 2);
-    setValue(el.smartTheoryMaxPly, 12);
-    setValue(el.smartTheoryMaxPositions, 90);
+    setValue(el.smartTheoryReplies, 4);
+    setValue(el.smartTheoryMaxPly, 40);
+    setValue(el.smartTheoryMaxPositions, 500);
     setChecked(el.smartTheoryIncludeRare, false);
     setChecked(el.smartTheoryIncludeMistakes, true);
-    setChecked(el.smartTheoryIncludeBlunders, false);
+    setChecked(el.smartTheoryIncludeBlunders, true);
     setChecked(el.smartTheoryIncludeBestEngineReplies, true);
     setChecked(el.smartTheoryAvoidAbsurd, true);
     setChecked(el.smartTheoryEcoOnly, false);
   } else if (key === "deep") {
     setValue(el.smartTheoryDepth, 22);
     setValue(el.smartTheoryMoveTime, 2.5);
-    setValue(el.smartTheoryReplies, 3);
-    setValue(el.smartTheoryMaxPly, 26);
-    setValue(el.smartTheoryMaxPositions, 520);
+    setValue(el.smartTheoryReplies, 6);
+    setValue(el.smartTheoryMaxPly, 40);
+    setValue(el.smartTheoryMaxPositions, 1200);
     setChecked(el.smartTheoryIncludeRare, true);
     setChecked(el.smartTheoryIncludeMistakes, true);
     setChecked(el.smartTheoryIncludeBlunders, false);
@@ -7328,9 +7741,9 @@ function applySmartTheoryPreset(presetName) {
   } else if (key === "realistic") {
     setValue(el.smartTheoryDepth, 18);
     setValue(el.smartTheoryMoveTime, 1.1);
-    setValue(el.smartTheoryReplies, 4);
-    setValue(el.smartTheoryMaxPly, 20);
-    setValue(el.smartTheoryMaxPositions, 360);
+    setValue(el.smartTheoryReplies, 8);
+    setValue(el.smartTheoryMaxPly, 40);
+    setValue(el.smartTheoryMaxPositions, 1000);
     if (el.smartTheoryOpponentAccuracy) el.smartTheoryOpponentAccuracy.value = "mixed";
     setChecked(el.smartTheoryIncludeRare, true);
     setChecked(el.smartTheoryIncludeMistakes, true);
@@ -7342,12 +7755,12 @@ function applySmartTheoryPreset(presetName) {
     // balanced default
     setValue(el.smartTheoryDepth, 18);
     setValue(el.smartTheoryMoveTime, 1.0);
-    setValue(el.smartTheoryReplies, 3);
-    setValue(el.smartTheoryMaxPly, 20);
-    setValue(el.smartTheoryMaxPositions, 300);
+    setValue(el.smartTheoryReplies, 6);
+    setValue(el.smartTheoryMaxPly, 40);
+    setValue(el.smartTheoryMaxPositions, 900);
     setChecked(el.smartTheoryIncludeRare, true);
     setChecked(el.smartTheoryIncludeMistakes, true);
-    setChecked(el.smartTheoryIncludeBlunders, false);
+    setChecked(el.smartTheoryIncludeBlunders, true);
     setChecked(el.smartTheoryIncludeBestEngineReplies, true);
     setChecked(el.smartTheoryAvoidAbsurd, true);
     setChecked(el.smartTheoryEcoOnly, false);
@@ -7361,6 +7774,141 @@ function smartTheorySanitizeNumber(raw, fallback, minValue, maxValue) {
   const numeric = Number(raw);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.min(maxValue, Math.max(minValue, numeric));
+}
+
+function buildSmartTheoryUserStyleLines(myColor = "white") {
+  const side = String(myColor || "white").trim().toLowerCase() === "black" ? "black" : "white";
+  const lessonBuckets = [
+    ...(Array.isArray(state.queueDue) ? state.queueDue.slice(0, 180) : []),
+    ...(Array.isArray(state.queueNew) ? state.queueNew.slice(0, 140) : []),
+    ...(Array.isArray(state.lessons) ? state.lessons.slice(0, 260) : []),
+  ];
+  const byKey = new Map();
+  const uciPattern = /^[a-h][1-8][a-h][1-8][qrbn]?$/i;
+  const hasPrefix = (prefix, full) => {
+    if (!Array.isArray(prefix) || !Array.isArray(full) || prefix.length > full.length) return false;
+    for (let i = 0; i < prefix.length; i += 1) {
+      if (String(prefix[i] || "").trim().toLowerCase() !== String(full[i] || "").trim().toLowerCase()) return false;
+    }
+    return true;
+  };
+  const mergeLineSegments = (intro, main) => {
+    const introMoves = Array.isArray(intro) ? intro : [];
+    const mainMoves = Array.isArray(main) ? main : [];
+    if (!introMoves.length) return mainMoves.slice();
+    if (!mainMoves.length) return introMoves.slice();
+    if (hasPrefix(introMoves, mainMoves)) return mainMoves.slice();
+    return [...introMoves, ...mainMoves];
+  };
+  lessonBuckets.forEach((lesson, index) => {
+    if (!lesson || typeof lesson !== "object") return;
+    const lessonColor = String(lesson.player_color || lesson.color || "").trim().toLowerCase();
+    if ((lessonColor === "white" || lessonColor === "black") && lessonColor !== side) return;
+    const startFen = String(lesson.line_start_fen || lesson.position_fen || START_FEN).trim() || START_FEN;
+    const intro = Array.isArray(lesson.intro_line_uci) ? lesson.intro_line_uci : [];
+    const training = Array.isArray(lesson.training_line_uci) ? lesson.training_line_uci : [];
+    const continuation = Array.isArray(lesson.continuation_moves_uci) ? lesson.continuation_moves_uci : [];
+    const lineBody = training.length ? training : continuation;
+    const rawLine = mergeLineSegments(intro, lineBody)
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter((uci) => uciPattern.test(uci))
+      .slice(0, 64);
+    if (!rawLine.length) return;
+    const frequency = Number(lesson.frequency || 1);
+    const priority = Number(lesson.priority || 0);
+    const freshnessBoost = Math.max(0.1, 1.0 - (index / 480));
+    const sideBoost = lessonColor === side ? 1.18 : 1.0;
+    const weight = Number((Math.max(0.5, Math.min(8.0, ((1 + Math.log1p(Math.max(0, frequency))) + (priority * 0.35)) * freshnessBoost * sideBoost))).toFixed(3));
+    const key = `${startFen}|${rawLine.join(" ")}`;
+    const existing = byKey.get(key);
+    if (!existing || Number(existing.weight || 0) < weight) {
+      byKey.set(key, {
+        start_fen: startFen,
+        moves_uci: rawLine,
+        weight,
+        source: "bookup_lessons",
+        player_color: lessonColor || side,
+      });
+    }
+  });
+  const manualEntries = Object.entries(state.manualRepertoire || {}).slice(0, 320);
+  manualEntries.forEach(([positionKey, entry], index) => {
+    if (!entry || typeof entry !== "object") return;
+    const moveUci = String(entry.move_uci || "").trim().toLowerCase();
+    if (!uciPattern.test(moveUci)) return;
+    const candidateFen = String(
+      entry.position_fen
+      || entry.positionFen
+      || entry.start_fen
+      || entry.fen
+      || positionKey
+      || START_FEN
+    ).trim() || START_FEN;
+    const squares = parseFenBoard(candidateFen);
+    if (!Array.isArray(squares) || squares.length !== 64) return;
+    const startFen = candidateFen;
+    const recencyBoost = Math.max(0.82, 1.0 - (index / 420));
+    const explicitWeight = Number(entry.weight || 0);
+    const baseWeight = Number.isFinite(explicitWeight) && explicitWeight > 0 ? explicitWeight : 4.2;
+    const weight = Number(Math.max(1.2, Math.min(9.0, baseWeight * recencyBoost)).toFixed(3));
+    const key = `${startFen}|${moveUci}`;
+    const existing = byKey.get(key);
+    if (!existing || Number(existing.weight || 0) < weight) {
+      byKey.set(key, {
+        start_fen: startFen,
+        moves_uci: [moveUci],
+        weight,
+        source: "manual_repertoire",
+      });
+    }
+  });
+  return Array.from(byKey.values())
+    .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))
+    .slice(0, 320);
+}
+
+function smartTheoryLessonMatchesColor(lesson, myColor = "white") {
+  const side = String(myColor || "white").trim().toLowerCase() === "black" ? "black" : "white";
+  const lessonColor = String(lesson?.player_color || lesson?.color || "").trim().toLowerCase();
+  return !lessonColor || lessonColor === side;
+}
+
+function smartTheoryPreferredWhiteSystemFirstMove(openingFocus, myColor) {
+  const side = String(myColor || "white").trim().toLowerCase() === "black" ? "black" : "white";
+  const focus = normalizeSmartTheoryOpeningFocus(openingFocus);
+  if (side !== "white") return "";
+  if (focus === "kings_indian_attack" || focus === "kings_indian_systems") return "g1f3";
+  return "";
+}
+
+function pickSmartTheoryReferenceLine(startFen, userStyleLines, options = {}) {
+  const lines = Array.isArray(userStyleLines) ? userStyleLines : [];
+  if (!lines.length) return [];
+  const normalizedStart = normalizeFen(startFen || START_FEN);
+  const sameStartLines = lines.filter((item) => {
+    const itemStart = normalizeFen(String(item?.start_fen || START_FEN));
+    return itemStart === normalizedStart && Array.isArray(item?.moves_uci) && item.moves_uci.length;
+  });
+  const preferredFirstMove = smartTheoryPreferredWhiteSystemFirstMove(options.openingFocus, options.myColor);
+  if (preferredFirstMove) {
+    const preferred = sameStartLines.find((item) => {
+      const first = String(item?.moves_uci?.[0] || "").trim().toLowerCase();
+      return first === preferredFirstMove;
+    });
+    if (preferred && Array.isArray(preferred.moves_uci)) {
+      return preferred.moves_uci
+        .map((uci) => String(uci || "").trim())
+        .filter(Boolean)
+        .slice(0, 60);
+    }
+  }
+  const sameStart = sameStartLines[0];
+  const fallback = sameStart || lines.find((item) => Array.isArray(item?.moves_uci) && item.moves_uci.length);
+  if (!fallback || !Array.isArray(fallback.moves_uci)) return [];
+  return fallback.moves_uci
+    .map((uci) => String(uci || "").trim())
+    .filter(Boolean)
+    .slice(0, 60);
 }
 
 function resolveSmartTheoryStartContext(startSource) {
@@ -7431,19 +7979,28 @@ function clearSmartTheoryState() {
   state.smartTheoryJobId = "";
   state.smartTheoryTree = null;
   state.smartTheorySelectedNodeId = "";
+  state.smartTheoryChapterPreviewData = [];
   state.smartTheoryStatus = "idle";
+  state.smartTheoryTreeFocus = "all";
+  state.smartTheoryTreeSearch = "";
+  if (el.smartTheoryTreeFocus) el.smartTheoryTreeFocus.value = "all";
+  if (el.smartTheoryTreeSearch) el.smartTheoryTreeSearch.value = "";
   setSmartTheoryControlsRunning(false);
   if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Idle";
   if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "No generation in progress.";
   renderSmartTheoryStudySyncMeta(null);
+  if (el.smartTheoryChapterPreview) {
+    el.smartTheoryChapterPreview.className = "stack empty";
+    el.smartTheoryChapterPreview.textContent = "Preview chapters after a Smart Theory tree is generated.";
+  }
   if (el.smartTheoryCurrentMeta) { el.smartTheoryCurrentMeta.className = "stack empty"; el.smartTheoryCurrentMeta.textContent = "No node selected."; }
-  if (el.smartTheoryMoveList) { el.smartTheoryMoveList.className = "stack empty"; el.smartTheoryMoveList.textContent = "Move list will show here."; }
-  if (el.smartTheoryOpeningMeta) { el.smartTheoryOpeningMeta.className = "stack empty"; el.smartTheoryOpeningMeta.textContent = "Opening name, ECO, and current FEN will show here."; }
-  if (el.smartTheoryRecommendation) { el.smartTheoryRecommendation.className = "stack empty"; el.smartTheoryRecommendation.textContent = "Best response and continuation will show here."; }
-  if (el.smartTheoryLearningQueue) { el.smartTheoryLearningQueue.className = "stack empty"; el.smartTheoryLearningQueue.textContent = "Priority study queue will show here after generation."; }
-  if (el.smartTheoryOpponentReplies) { el.smartTheoryOpponentReplies.className = "stack empty"; el.smartTheoryOpponentReplies.textContent = "Opponent candidate replies will show here."; }
+  if (el.smartTheoryMoveList) { el.smartTheoryMoveList.className = "stack empty"; el.smartTheoryMoveList.textContent = "Select or generate a node to inspect its move path."; }
+  if (el.smartTheoryOpeningMeta) { el.smartTheoryOpeningMeta.className = "stack empty"; el.smartTheoryOpeningMeta.textContent = "Opening details appear after a generated node is selected."; }
+  if (el.smartTheoryRecommendation) { el.smartTheoryRecommendation.className = "stack empty"; el.smartTheoryRecommendation.textContent = "Generate a line to get the recommended continuation."; }
+  if (el.smartTheoryLearningQueue) { el.smartTheoryLearningQueue.className = "stack empty"; el.smartTheoryLearningQueue.textContent = "Generate a line to build the priority study queue."; }
+  if (el.smartTheoryOpponentReplies) { el.smartTheoryOpponentReplies.className = "stack empty"; el.smartTheoryOpponentReplies.textContent = "Generate a line to compare opponent replies."; }
   if (el.smartTheoryExplanation) { el.smartTheoryExplanation.className = "stack empty"; el.smartTheoryExplanation.textContent = "Click a generated move to see the explanation."; }
-  if (el.smartTheoryTree) { el.smartTheoryTree.className = "stack empty"; el.smartTheoryTree.textContent = "Generated moves will appear here."; }
+  if (el.smartTheoryTree) { el.smartTheoryTree.className = "stack empty"; el.smartTheoryTree.textContent = "Generate a Smart Theory tree to inspect moves."; }
   updateSmartTheoryRunSummary({});
   renderSmartTheoryMiniBoard(START_FEN);
 }
@@ -7501,21 +8058,38 @@ function renderSmartTheoryStudySyncMeta(syncPayload) {
   const payload = syncPayload && typeof syncPayload === "object" ? syncPayload : null;
   if (!payload) {
     el.smartTheoryStudySyncMeta.className = "stack empty";
-    el.smartTheoryStudySyncMeta.textContent = "Study sync status will show here.";
+    el.smartTheoryStudySyncMeta.textContent = "No study sync has run in this session.";
     return;
   }
   const status = String(payload.status || "").trim().toLowerCase();
   const chapters = Number(payload.chapters_created_count || 0);
+  const chapterCount = Number(payload.chapter_count || 0);
   const moves = Number(payload.moves_exported || 0);
   const studyUrl = String(payload.study_url || "").trim();
+  const studyName = String(payload.unified_study_name || "").trim();
+  const previousStudyId = String(payload.previous_study_id || "").trim();
+  const verifiedReachable = payload.verified_reachable === true;
   const reason = String(payload.error || payload.reason || "").trim();
   const humanStatus = status ? status.replaceAll("_", " ") : "unknown";
+  const listedChapters = Array.isArray(payload.chapters) ? payload.chapters.slice(0, 12) : [];
+  const chapterList = listedChapters
+    .map((chapter) => {
+      const name = String(chapter?.chapter_name || chapter?.event_name || "Untitled chapter").trim();
+      const plies = Number(chapter?.plies || 0);
+      return `<li>${escapeHtml(name)}${plies ? ` <span>${plies} plies</span>` : ""}</li>`;
+    })
+    .join("");
   el.smartTheoryStudySyncMeta.className = "stack smart-study-sync-meta";
   el.smartTheoryStudySyncMeta.innerHTML = `
     <div><strong>Study sync</strong>: ${escapeHtml(humanStatus)}</div>
+    ${studyName ? `<div><strong>Study title</strong>: ${escapeHtml(studyName)}</div>` : ""}
     ${studyUrl ? `<div><strong>Study</strong>: <a href="${escapeHtml(studyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(studyUrl)}</a></div>` : ""}
     ${chapters ? `<div><strong>Chapters</strong>: ${chapters}</div>` : ""}
+    ${chapterCount ? `<div><strong>Initial chapters</strong>: ${chapterCount}</div>` : ""}
     ${moves ? `<div><strong>Moves exported</strong>: ${moves}</div>` : ""}
+    ${verifiedReachable ? "<div><strong>Verified</strong>: reachable on Lichess</div>" : ""}
+    ${previousStudyId ? `<div><strong>Previous study</strong>: ${escapeHtml(previousStudyId)}</div>` : ""}
+    ${chapterList ? `<div><strong>Existing chapters</strong><ul class="smart-study-chapter-list">${chapterList}</ul></div>` : ""}
     ${reason ? `<div><strong>Detail</strong>: ${escapeHtml(reason.replaceAll("_", " "))}</div>` : ""}
   `;
 }
@@ -7608,9 +8182,15 @@ async function pollSmartTheoryJob() {
         eco_code: resultPayload.ecoCode || "",
         opening_focus: resultPayload.opening_focus || "",
         applied_start_line_uci: Array.isArray(resultPayload.applied_start_line_uci) ? resultPayload.applied_start_line_uci : [],
+        user_book_line_uci: Array.isArray(resultPayload.user_book_line_uci) ? resultPayload.user_book_line_uci : [],
+        user_book_line_source: resultPayload.user_book_line_source || "",
         learning_queue_count: resultPayload.learning_queue_count || 0,
         corrected_nodes_count: resultPayload.corrected_nodes_count || 0,
         user_weak_nodes_count: resultPayload.user_weak_nodes_count || 0,
+        user_style_positions_count: resultPayload.user_style_positions_count || 0,
+        expected_move_confidence_cp: Number(resultPayload?.settings_used?.expected_move_confidence_cp || 0),
+        style_move_confidence_cp: Number(resultPayload?.settings_used?.style_move_confidence_cp || 0),
+        style_preferred_min_weight: Number(resultPayload?.settings_used?.style_preferred_min_weight || 0),
         study_sync_status: String(resultPayload?.study_sync?.status || ""),
         study_sync_text: String(
           resultPayload?.study_sync?.error
@@ -7649,7 +8229,8 @@ async function pollSmartTheoryJob() {
         studySyncText = ` Background study sync skipped (${reason.replaceAll("_", " ")}).`;
       }
       if (el.smartTheoryProgress) {
-        el.smartTheoryProgress.textContent = `Analyzed ${Number(resultPayload.positions_done || 0)} of ${Number(resultPayload.positions_total || 0)} positions.${warnText}${studySyncText}`;
+        const generatedCount = Number(resultPayload.result?.nodes?.length || state.smartTheoryTree?.nodes?.length || resultPayload.positions_done || 0);
+        el.smartTheoryProgress.textContent = `Generated ${generatedCount} theory position${generatedCount === 1 ? "" : "s"}.${warnText}${studySyncText}`;
       }
       const backendSyncStatus = String(studySync?.status || "").toLowerCase();
       const backendSynced = backendSyncStatus === "success";
@@ -7700,24 +8281,32 @@ async function runSmartTheoryGeneration() {
   state.smartTheoryJobId = jobId;
   state.smartTheoryTree = null;
   state.smartTheorySelectedNodeId = "";
+  state.smartTheoryChapterPreviewData = [];
+  if (el.smartTheoryChapterPreview) {
+    el.smartTheoryChapterPreview.className = "stack empty";
+    el.smartTheoryChapterPreview.textContent = "Preview chapters after a Smart Theory tree is generated.";
+  }
   try {
     const startSource = String(el.smartTheoryStartingSource?.value || "current_board");
-    const { startFen, startPlayUci, contextNote } = resolveSmartTheoryStartContext(startSource);
+    const startContext = resolveSmartTheoryStartContext(startSource);
+    const startFen = startContext.startFen;
+    const startPlayUci = Array.isArray(startContext.startPlayUci) ? startContext.startPlayUci.slice(0, 60) : [];
+    let contextNote = String(startContext.contextNote || "Using current board position.");
     const depth = Math.round(smartTheorySanitizeNumber(el.smartTheoryDepth?.value, 18, 10, 28));
     const moveTime = Number(smartTheorySanitizeNumber(el.smartTheoryMoveTime?.value, 1.0, 0.2, 8.0).toFixed(1));
-    const replies = Math.round(smartTheorySanitizeNumber(el.smartTheoryReplies?.value, 3, 1, 8));
-    const maxPly = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxPly?.value, 20, 2, 40));
-    const maxPositions = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxPositions?.value, 300, 10, 1500));
+    const replies = Math.round(smartTheorySanitizeNumber(el.smartTheoryReplies?.value, 6, 1, 12));
+    const expectedMoveConfidenceCp = Math.round(smartTheorySanitizeNumber(el.smartTheoryExpectedMoveConfidenceCp?.value, 125, 20, 300));
+    const styleMoveConfidenceCp = Math.round(smartTheorySanitizeNumber(el.smartTheoryStyleMoveConfidenceCp?.value, 90, 20, 300));
+    const styleMinWeight = Number(smartTheorySanitizeNumber(el.smartTheoryStyleMinWeight?.value, 1.2, 0.2, 8.0).toFixed(1));
+    const maxPly = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxPly?.value, 40, 2, 40));
+    const maxPositions = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxPositions?.value, 900, 10, 1500));
     const openingFocus = normalizeSmartTheoryOpeningFocus(el.smartTheoryOpeningFocus?.value || "auto");
-    const selectedColor = String(el.smartTheoryMyColor?.value || "white").trim().toLowerCase() === "black" ? "black" : "white";
-    const forcedColor = smartTheoryFocusForcedColor(openingFocus);
-    const myColor = forcedColor || selectedColor;
-    if (forcedColor && selectedColor !== forcedColor && el.smartTheoryMyColor) {
-      el.smartTheoryMyColor.value = forcedColor;
-    }
+    const myColor = String(el.smartTheoryMyColor?.value || "white").trim().toLowerCase() === "black" ? "black" : "white";
+    const lessonMatchesColor = smartTheoryLessonMatchesColor(currentLesson(), myColor);
     const lichessTokenForGeneration = String(el.smartTheoryLichessToken?.value || currentLichessToken() || "").trim();
     const referenceUserMoveUci = (() => {
       const lesson = currentLesson();
+      if (!smartTheoryLessonMatchesColor(lesson, myColor)) return "";
       if (!lesson) return "";
       return String(
         lesson.your_top_move_uci
@@ -7726,10 +8315,13 @@ async function runSmartTheoryGeneration() {
         || ""
       ).trim();
     })();
-    const userBookLineUci = (() => {
+    let userBookLineUci = (() => {
       const lesson = currentLesson();
+      if (lesson && !smartTheoryLessonMatchesColor(lesson, myColor)) return [];
       const fromPlayed = currentPlayedLine().filter(Boolean).slice(0, 60);
       if (fromPlayed.length) return fromPlayed;
+      const fromActiveLine = lessonTrainingLine(lesson).filter(Boolean).slice(0, 60);
+      if (fromActiveLine.length) return fromActiveLine;
       if (Array.isArray(lesson?.training_line_uci) && lesson.training_line_uci.length) {
         return lesson.training_line_uci.filter(Boolean).slice(0, 60);
       }
@@ -7741,26 +8333,41 @@ async function runSmartTheoryGeneration() {
       }
       return [];
     })();
+    const userStyleLines = buildSmartTheoryUserStyleLines(myColor);
+    if (!userBookLineUci.length) {
+      const inferredLine = pickSmartTheoryReferenceLine(startFen, userStyleLines, { myColor, openingFocus });
+      if (inferredLine.length) {
+        userBookLineUci = inferredLine;
+        contextNote = `${contextNote} Auto-following your strongest known line from saved repertoire patterns.`;
+      }
+    }
     const followUserLineUntilOutOfBook = userBookLineUci.length > 0;
     const autoSyncStudy = Boolean(el.smartTheoryAutoSyncStudy?.checked);
     const studyIdRaw = String(el.smartTheoryLichessStudyId?.value || "").trim();
+    const unifiedStudyName = currentSmartTheoryStudyName();
     const chapterName = String(el.smartTheoryLichessChapterName?.value || "").trim() || `Bookup Smart Theory ${new Date().toISOString().slice(0, 10)}`;
     const orientation = String(el.smartTheoryLichessOrientation?.value || "white").toLowerCase() === "black" ? "black" : "white";
-    const chapterStrategy = String(el.smartTheoryChapterStrategy?.value || defaults.bookup_chapter_strategy || "first_move").trim().toLowerCase();
-    const payload = {
+    const chapterStrategy = String(el.smartTheoryChapterStrategy?.value || defaults.bookup_chapter_strategy || "deep_focus").trim().toLowerCase();
+    const maxChapters = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxChapters?.value, 62, 1, 80));
+    const minChapterMoves = Math.round(smartTheorySanitizeNumber(el.smartTheoryMinChapterMoves?.value, chapterStrategy === "deep_focus" ? 40 : 0, 0, 80));
+    const payload = withOptionalLichessToken({
       job_id: jobId,
       fen: startFen,
       starting_source: startSource,
       start_play_uci: startPlayUci,
       user_book_line_uci: userBookLineUci,
+      user_book_line_player_color: lessonMatchesColor ? String(currentLesson()?.player_color || myColor || "").trim().toLowerCase() : "",
+      user_style_lines: userStyleLines,
       follow_user_line_until_out_of_book: followUserLineUntilOutOfBook,
       opening_focus: openingFocus,
-      lichess_token: lichessTokenForGeneration,
       auto_sync_to_study: autoSyncStudy,
       study_id: studyIdRaw,
-      unified_study_name: "Bookup",
+      unified_study_name: unifiedStudyName,
       chapter_name: chapterName,
       chapter_strategy: chapterStrategy,
+      max_chapters: maxChapters,
+      min_chapter_moves: minChapterMoves,
+      replace_existing_chapters: Boolean(el.smartTheoryReplaceChapters?.checked ?? true),
       orientation,
       reference_user_move_uci: referenceUserMoveUci,
       my_color: myColor,
@@ -7768,6 +8375,9 @@ async function runSmartTheoryGeneration() {
       depth,
       engine_movetime_sec: moveTime,
       opponent_replies: replies,
+      expected_move_confidence_cp: expectedMoveConfidenceCp,
+      style_move_confidence_cp: styleMoveConfidenceCp,
+      style_preferred_min_weight: styleMinWeight,
       max_ply: maxPly,
       max_positions: maxPositions,
       include_rare_sidelines: Boolean(el.smartTheoryIncludeRare?.checked),
@@ -7777,16 +8387,20 @@ async function runSmartTheoryGeneration() {
       avoid_absurd_moves: Boolean(el.smartTheoryAvoidAbsurd?.checked),
       eco_only_mode: Boolean(el.smartTheoryEcoOnly?.checked),
       cache_evaluations: Boolean(el.smartTheoryCacheEvals?.checked),
-    };
-    state.smartTheoryTree = { nodes: [buildSmartTheoryPlaceholderRoot(startFen, startSource)] };
+    }, lichessTokenForGeneration);
+    state.smartTheoryTree = { nodes: [buildSmartTheoryRootNode(startFen, startSource)] };
     state.smartTheorySelectedNodeId = "root";
     renderSmartTheoryTree();
     ensureSmartTheorySelection();
     renderSmartTheoryMiniBoard(startFen);
     if (el.smartTheoryCurrentMeta) {
       el.smartTheoryCurrentMeta.className = "stack";
-      const colorNote = forcedColor && selectedColor !== forcedColor
-        ? ` ${smartTheoryFocusLabel(openingFocus)} uses ${forcedColor} repertoire perspective.`
+      const focusMismatch = (
+        (myColor === "white" && (openingFocus === "kings_indian_defense" || openingFocus === "pirc_defense"))
+        || (myColor === "black" && openingFocus === "kings_indian_attack")
+      );
+      const colorNote = focusMismatch
+        ? ` ${smartTheoryFocusLabel(openingFocus)} is a ${myColor === "white" ? "Black" : "White"}-side focus, so this run keeps your selected ${myColor} perspective and lets the backend auto-adjust.`
         : "";
       el.smartTheoryCurrentMeta.textContent = `Preparing root position and waiting for first generated move. ${contextNote}${colorNote}`;
     }
@@ -7850,27 +8464,115 @@ function exportSmartTheoryJson() {
   link.remove();
 }
 
+function renderSmartTheoryChapterPreview(payload) {
+  if (!el.smartTheoryChapterPreview) return;
+  const chapters = Array.isArray(payload?.chapters) ? payload.chapters : [];
+  state.smartTheoryChapterPreviewData = chapters;
+  if (!chapters.length) {
+    el.smartTheoryChapterPreview.className = "stack empty";
+    el.smartTheoryChapterPreview.textContent = "Preview chapters after a Smart Theory tree is generated.";
+    return;
+  }
+  el.smartTheoryChapterPreview.className = "stack";
+  el.smartTheoryChapterPreview.innerHTML = chapters.map((chapter, index) => {
+    const name = String(chapter?.name || `Chapter ${index + 1}`).trim() || `Chapter ${index + 1}`;
+    const moves = Number(chapter?.moves_exported || 0);
+    const warnings = Number(chapter?.warnings_count || 0);
+    const anchor = String(chapter?.anchor_classification || "").trim();
+    const excerpt = String(chapter?.pgn_excerpt || "").trim();
+    return `
+      <div class="smart-chapter-preview-row">
+        <strong>${index + 1}. ${escapeHtml(name)}</strong>
+        <div class="smart-chapter-preview-meta">
+          ${moves ? `${moves} moves` : "move count unavailable"}
+          ${anchor ? ` · ${escapeHtml(anchor)}` : ""}
+          ${warnings ? ` · ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}
+        </div>
+        ${excerpt ? `<div class="smart-chapter-preview-line mono-inline">${escapeHtml(excerpt)}</div>` : ""}
+        <div class="chip-row smart-chapter-preview-actions">
+          <button
+            class="ghost-btn"
+            type="button"
+            data-smart-export-chapter-index="${index}"
+          >Export This Chapter</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  el.smartTheoryChapterPreview.querySelectorAll("[data-smart-export-chapter-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const rawIndex = button.getAttribute("data-smart-export-chapter-index");
+      const chapterIndex = Number(rawIndex);
+      if (!Number.isFinite(chapterIndex) || chapterIndex < 0) return;
+      void exportSmartTheoryToLichessStudy({ chapterIndex });
+    });
+  });
+}
+
+async function previewSmartTheoryChapters() {
+  if (!state.smartTheoryTree) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Generate or import a Smart Theory tree before previewing chapters.";
+    return;
+  }
+  if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Building chapter preview...";
+  try {
+    const chapterName = String(el.smartTheoryLichessChapterName?.value || "").trim() || `Bookup Smart Theory ${new Date().toISOString().slice(0, 10)}`;
+    const chapterStrategy = String(el.smartTheoryChapterStrategy?.value || defaults.bookup_chapter_strategy || "deep_focus").trim().toLowerCase();
+    const maxChapters = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxChapters?.value, 62, 1, 80));
+    const minChapterMoves = Math.round(smartTheorySanitizeNumber(el.smartTheoryMinChapterMoves?.value, chapterStrategy === "deep_focus" ? 40 : 0, 0, 80));
+    const response = await fetch("/api/smart-theory/preview-chapters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapter_name: chapterName,
+        chapter_strategy: chapterStrategy,
+        max_chapters: maxChapters,
+        min_chapter_moves: minChapterMoves,
+        tree: state.smartTheoryTree,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not preview study chapters.");
+    renderSmartTheoryChapterPreview(payload);
+    const count = Number(payload?.chapters_count || 0);
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = `Prepared chapter preview for ${count} chapter${count === 1 ? "" : "s"}.`;
+  } catch (error) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error?.message || "Could not preview study chapters.");
+  }
+}
+
 async function saveSmartTheoryStudySettings() {
   try {
     const response = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        bookup_study_name: currentSmartTheoryStudyName(),
         bookup_study_id: String(el.smartTheoryLichessStudyId?.value || "").trim(),
-        bookup_chapter_strategy: String(el.smartTheoryChapterStrategy?.value || "first_move"),
+        bookup_chapter_strategy: String(el.smartTheoryChapterStrategy?.value || "deep_focus"),
         bookup_auto_study_sync: Boolean(el.smartTheoryAutoSyncStudy?.checked),
         bookup_opening_focus: normalizeSmartTheoryOpeningFocus(el.smartTheoryOpeningFocus?.value || "kings_indian_systems"),
         bookup_include_best_engine_replies: Boolean(el.smartTheoryIncludeBestEngineReplies?.checked),
+        bookup_expected_move_confidence_cp: Math.round(smartTheorySanitizeNumber(el.smartTheoryExpectedMoveConfidenceCp?.value, 125, 20, 300)),
+        bookup_style_move_confidence_cp: Math.round(smartTheorySanitizeNumber(el.smartTheoryStyleMoveConfidenceCp?.value, 90, 20, 300)),
+        bookup_style_min_weight: Number(smartTheorySanitizeNumber(el.smartTheoryStyleMinWeight?.value, 1.2, 0.2, 8.0).toFixed(1)),
       }),
     });
     if (!response.ok) return;
     const payload = await response.json();
     if (payload?.defaults) {
+      defaults.bookup_study_name = payload.defaults.bookup_study_name || "Bookup";
       defaults.bookup_study_id = payload.defaults.bookup_study_id || "";
-      defaults.bookup_chapter_strategy = payload.defaults.bookup_chapter_strategy || "first_move";
+      defaults.bookup_chapter_strategy = payload.defaults.bookup_chapter_strategy || "deep_focus";
       defaults.bookup_auto_study_sync = Boolean(payload.defaults.bookup_auto_study_sync);
       defaults.bookup_opening_focus = payload.defaults.bookup_opening_focus || "kings_indian_systems";
       defaults.bookup_include_best_engine_replies = Boolean(payload.defaults.bookup_include_best_engine_replies !== false);
+      defaults.bookup_expected_move_confidence_cp = Number(payload.defaults.bookup_expected_move_confidence_cp ?? 125);
+      defaults.bookup_style_move_confidence_cp = Number(payload.defaults.bookup_style_move_confidence_cp ?? 90);
+      defaults.bookup_style_min_weight = Number(payload.defaults.bookup_style_min_weight ?? 1.2);
+      if (el.smartTheoryLichessStudyName) {
+        el.smartTheoryLichessStudyName.value = defaults.bookup_study_name;
+      }
     }
   } catch (_error) {
     // Silent: this setting persistence should not interrupt Smart Theory work.
@@ -7884,29 +8586,54 @@ async function exportSmartTheoryToLichessStudy(options = {}) {
   }
   const studyIdRaw = String(el.smartTheoryLichessStudyId?.value || "").trim();
   const autoMode = Boolean(options?.autoMode);
+  const unifiedStudyName = currentSmartTheoryStudyName();
   const chapterName = String(el.smartTheoryLichessChapterName?.value || "").trim() || `Bookup Smart Theory ${new Date().toISOString().slice(0, 10)}`;
   const orientation = String(el.smartTheoryLichessOrientation?.value || "white").toLowerCase() === "black" ? "black" : "white";
-  const chapterStrategy = String(el.smartTheoryChapterStrategy?.value || defaults.bookup_chapter_strategy || "first_move").trim().toLowerCase();
+  const chapterStrategy = String(el.smartTheoryChapterStrategy?.value || defaults.bookup_chapter_strategy || "deep_focus").trim().toLowerCase();
+  const maxChapters = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxChapters?.value, 62, 1, 80));
+  const minChapterMoves = Math.round(smartTheorySanitizeNumber(el.smartTheoryMinChapterMoves?.value, chapterStrategy === "deep_focus" ? 40 : 0, 0, 80));
   const lichessToken = String(el.smartTheoryLichessToken?.value || currentLichessToken() || "").trim();
-  if (!lichessToken) {
+  const chapterIndex = Number(options?.chapterIndex);
+  const chapterPreview = Number.isFinite(chapterIndex) && chapterIndex >= 0
+    ? (Array.isArray(state.smartTheoryChapterPreviewData) ? state.smartTheoryChapterPreviewData[chapterIndex] : null)
+    : null;
+  const exportSinglePreviewChapter = Boolean(chapterPreview && typeof chapterPreview === "object");
+  const exportChapterName = exportSinglePreviewChapter
+    ? (String(chapterPreview?.name || chapterName).trim() || chapterName)
+    : chapterName;
+  const exportChapterStrategy = exportSinglePreviewChapter ? "single" : chapterStrategy;
+  const exportPgn = exportSinglePreviewChapter ? String(chapterPreview?.pgn_text || "").trim() : "";
+  if (exportSinglePreviewChapter && !exportPgn) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "This preview chapter has no PGN content to export.";
+    return;
+  }
+  if (!lichessToken && !defaults.lichess_token_configured) {
     if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Add a Lichess personal token with study:write scope to export.";
     return;
   }
-  if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Exporting Smart Theory to Lichess study...";
+  const replaceExistingChapters = Boolean(el.smartTheoryReplaceChapters?.checked ?? true);
+  if (el.smartTheoryProgress) {
+    el.smartTheoryProgress.textContent = replaceExistingChapters
+      ? "Replacing old Lichess chapters, then exporting Smart Theory..."
+      : "Exporting Smart Theory to Lichess study...";
+  }
   try {
     const response = await fetch("/api/smart-theory/export-lichess-study", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(withOptionalLichessToken({
         study_id: studyIdRaw,
-        chapter_name: chapterName,
-        chapter_strategy: chapterStrategy,
+        chapter_name: exportChapterName,
+        chapter_strategy: exportChapterStrategy,
+        max_chapters: maxChapters,
+        min_chapter_moves: minChapterMoves,
         orientation,
-        lichess_token: lichessToken,
         auto_create_unified_study: true,
-        unified_study_name: "Bookup",
+        unified_study_name: unifiedStudyName,
+        replace_existing_chapters: replaceExistingChapters,
+        pgn: exportPgn,
         tree: state.smartTheoryTree,
-      }),
+      }, lichessToken)),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Lichess export failed.");
@@ -7914,9 +8641,13 @@ async function exportSmartTheoryToLichessStudy(options = {}) {
       const moves = Number(payload?.export_meta?.moves_exported || 0);
       const warns = Array.isArray(payload?.export_meta?.warnings) ? payload.export_meta.warnings.length : 0;
       const chaptersCreated = Number(payload?.chapters_created_count || 0);
+      const deletedChapters = Number(payload?.cleanup?.deleted_count || 0);
       const createdStudy = Boolean(payload?.created_unified_study);
-      const createdText = createdStudy ? " Created unified Bookup study." : "";
-      el.smartTheoryProgress.textContent = `Exported to Lichess study.${createdText} Chapters created: ${chaptersCreated}. Moves exported: ${moves}.${warns ? ` Local export warnings: ${warns}.` : ""}`;
+      const unifiedStudyName = String(payload?.unified_study_name || currentSmartTheoryStudyName()).trim() || "Bookup";
+      const createdText = createdStudy ? ` Created unified study "${unifiedStudyName}".` : "";
+      const replaceText = deletedChapters ? ` Removed ${deletedChapters} old chapter${deletedChapters === 1 ? "" : "s"}.` : "";
+      const scopeText = exportSinglePreviewChapter ? "Exported selected preview chapter" : "Exported to Lichess study";
+      el.smartTheoryProgress.textContent = `${scopeText}.${createdText}${replaceText} Chapters created: ${chaptersCreated}. Moves exported: ${moves}.${warns ? ` Local export warnings: ${warns}.` : ""}`;
     }
     if (el.smartTheoryLichessStudyId && payload?.study_id) {
       el.smartTheoryLichessStudyId.value = String(payload.study_id);
@@ -7940,9 +8671,62 @@ async function exportSmartTheoryToLichessStudy(options = {}) {
   }
 }
 
+async function checkSmartTheoryLichessStudy() {
+  const lichessToken = String(el.smartTheoryLichessToken?.value || currentLichessToken() || "").trim();
+  const studyIdRaw = String(el.smartTheoryLichessStudyId?.value || "").trim();
+  const unifiedStudyName = currentSmartTheoryStudyName();
+  if (!lichessToken && !defaults.lichess_token_configured) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Add a Lichess token first, then Bookup can check the existing study.";
+    return;
+  }
+  if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = studyIdRaw
+    ? "Checking that Lichess study and loading its chapters..."
+    : "Checking the saved unified Bookup study...";
+  try {
+    const response = await fetch("/api/smart-theory/check-lichess-study", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(withOptionalLichessToken({
+        study_id: studyIdRaw,
+        unified_study_name: unifiedStudyName,
+      }, lichessToken)),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not check the Lichess study.");
+    const studyId = String(payload?.study_id || "").trim();
+    if (studyId && el.smartTheoryLichessStudyId) {
+      el.smartTheoryLichessStudyId.value = studyId;
+      await saveSmartTheoryStudySettings();
+    }
+    renderSmartTheoryStudySyncMeta({
+      status: "connected_existing_study",
+      ...payload,
+    });
+    const chapterCount = Number(payload?.chapter_count || 0);
+    const studyUrl = String(payload?.study_url || "").trim();
+    if (el.smartTheoryProgress) {
+      el.smartTheoryProgress.textContent = `Connected existing Lichess study${studyId ? ` ${studyId}` : ""}. Found ${chapterCount} chapter${chapterCount === 1 ? "" : "s"}.`;
+    }
+    if (el.smartTheoryOpeningMeta && studyUrl) {
+      const existing = String(el.smartTheoryOpeningMeta.innerHTML || "");
+      const studyRow = `<div><strong>Lichess study</strong>: <a href="${escapeHtml(studyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(studyUrl)}</a></div>`;
+      if (!existing.includes("Lichess study")) {
+        el.smartTheoryOpeningMeta.innerHTML = `${existing}${studyRow}`;
+      }
+    }
+  } catch (error) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error?.message || "Could not check the Lichess study.");
+    renderSmartTheoryStudySyncMeta({
+      status: "error",
+      error: String(error?.message || "Could not check the Lichess study."),
+    });
+  }
+}
+
 async function createFreshUnifiedBookupStudy() {
   const lichessToken = String(el.smartTheoryLichessToken?.value || currentLichessToken() || "").trim();
-  if (!lichessToken) {
+  const unifiedStudyName = currentSmartTheoryStudyName();
+  if (!lichessToken && !defaults.lichess_token_configured) {
     if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "Add a Lichess token first, then create a fresh unified Bookup study.";
     return;
   }
@@ -7951,10 +8735,9 @@ async function createFreshUnifiedBookupStudy() {
     const response = await fetch("/api/smart-theory/refresh-unified-study", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        lichess_token: lichessToken,
-        unified_study_name: "Bookup",
-      }),
+      body: JSON.stringify(withOptionalLichessToken({
+        unified_study_name: unifiedStudyName,
+      }, lichessToken)),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not create fresh unified Bookup study.");
@@ -7975,7 +8758,7 @@ async function createFreshUnifiedBookupStudy() {
     });
     const cleanupDeleted = Number(payload?.cleanup?.deleted_count || 0);
     if (el.smartTheoryProgress) {
-      el.smartTheoryProgress.textContent = `Created fresh unified Bookup study${studyId ? ` (${studyId})` : ""}.${cleanupDeleted ? ` Removed ${cleanupDeleted} empty default chapter${cleanupDeleted === 1 ? "" : "s"}.` : ""}`;
+      el.smartTheoryProgress.textContent = `Created fresh unified study "${unifiedStudyName}"${studyId ? ` (${studyId})` : ""}.${cleanupDeleted ? ` Removed ${cleanupDeleted} empty default chapter${cleanupDeleted === 1 ? "" : "s"}.` : ""}`;
     }
     if (el.smartTheoryOpeningMeta && studyUrl) {
       const existing = String(el.smartTheoryOpeningMeta.innerHTML || "");
@@ -7997,6 +8780,8 @@ async function importSmartTheoryJson(event) {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.nodes)) throw new Error("Invalid smart theory JSON.");
     state.smartTheoryTree = parsed;
+    state.smartTheoryChapterPreviewData = [];
+    renderSmartTheoryChapterPreview(null);
     renderSmartTheoryTree();
     ensureSmartTheorySelection();
     if (el.smartTheoryStatus) el.smartTheoryStatus.textContent = "Imported";
@@ -8029,18 +8814,25 @@ async function saveSmartTheoryCorrection() {
     return;
   }
   const positionKey = String(node.normalizedFen || node.fen || node.id);
+  const positionFen = String(node.fen || "").trim();
   state.manualRepertoire[positionKey] = {
     lesson_id: `smart:${node.id}`,
     move_uci: correctedMove,
     move_san: String(node.bestMoveSan || correctedMove),
     line_label: String(node.openingName || "Smart theory line"),
+    position_fen: positionFen || undefined,
+    opening_name: String(node.openingName || ""),
+    source: "manual_repertoire",
     saved_at: new Date().toISOString(),
   };
-  if (state.payload?.username) {
-    saveReviewStats(state.payload.username);
-    await persistReviewStats(state.payload.username);
+  const progressUser = state.payload?.username || resolveConfiguredUsername();
+  if (progressUser) {
+    saveReviewStats(progressUser);
+    await persistReviewStats(progressUser);
   }
-  if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = `Saved corrected move ${correctedMove} for this position.`;
+  if (el.smartTheoryProgress) {
+    el.smartTheoryProgress.textContent = `Saved corrected move ${correctedMove}. Future Smart Theory runs will treat this as part of your repertoire style.`;
+  }
 }
 
 init();

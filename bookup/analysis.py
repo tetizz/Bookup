@@ -1441,6 +1441,332 @@ def _move_motif_tags(
     return motifs[:7]
 
 
+def _piece_target_label(piece: chess.Piece | None, square: int) -> str:
+    name = chess.piece_name(piece.piece_type) if piece else "piece"
+    return f"{name} on {chess.square_name(square)}"
+
+
+def _attacked_enemy_piece_targets(board: chess.Board, attacker_color: bool, attacker_square: int) -> list[tuple[int, chess.Piece]]:
+    targets: list[tuple[int, chess.Piece]] = []
+    attacks = board.attacks(attacker_square)
+    for square in attacks:
+        piece = board.piece_at(square)
+        if piece is not None and piece.color != attacker_color:
+            targets.append((square, piece))
+    return targets
+
+
+def _fork_targets_after_move(after: chess.Board, move: chess.Move, mover: bool) -> list[tuple[int, chess.Piece]]:
+    targets = _attacked_enemy_piece_targets(after, mover, move.to_square)
+    king_square = after.king(not mover)
+    moved_piece = after.piece_at(move.to_square)
+    if king_square is not None and moved_piece is not None and king_square in after.attacks(move.to_square):
+        king_piece = after.piece_at(king_square)
+        if king_piece is not None and all(square != king_square for square, _piece in targets):
+            targets.append((king_square, king_piece))
+    return targets
+
+
+def _new_absolute_pins(before: chess.Board, after: chess.Board, pinned_color: bool) -> list[tuple[int, chess.Piece]]:
+    pins: list[tuple[int, chess.Piece]] = []
+    for square, piece in after.piece_map().items():
+        if piece.color != pinned_color or piece.piece_type == chess.KING:
+            continue
+        if after.is_pinned(pinned_color, square) and not before.is_pinned(pinned_color, square):
+            pins.append((square, piece))
+    return pins
+
+
+def _castling_rights_removed(before: chess.Board, after: chess.Board, color: bool) -> bool:
+    before_kingside = before.has_kingside_castling_rights(color)
+    before_queenside = before.has_queenside_castling_rights(color)
+    after_kingside = after.has_kingside_castling_rights(color)
+    after_queenside = after.has_queenside_castling_rights(color)
+    return (before_kingside and not after_kingside) or (before_queenside and not after_queenside)
+
+
+def _material_threats_from_square(board: chess.Board, attacker_color: bool, attacker_square: int, moving_piece: chess.Piece | None) -> list[tuple[int, chess.Piece]]:
+    if moving_piece is None:
+        return []
+    moved_value = PIECE_VALUES.get(moving_piece.piece_type, 0)
+    targets = []
+    for square, piece in _attacked_enemy_piece_targets(board, attacker_color, attacker_square):
+        target_value = PIECE_VALUES.get(piece.piece_type, 0)
+        defended = board.is_attacked_by(not attacker_color, square)
+        if target_value > moved_value or (target_value >= PIECE_VALUES[chess.ROOK] and not defended):
+            targets.append((square, piece))
+    return targets
+
+
+def _recapture_context(board: chess.Board, move: chess.Move, captured_piece: chess.Piece | None) -> str:
+    if captured_piece is None or not board.move_stack:
+        return ""
+    last_move = board.peek()
+    if last_move.to_square != move.to_square:
+        return ""
+    try:
+        return board.san(move)
+    except Exception:
+        return move.uci()
+
+
+def _moved_piece_escape_reason(board: chess.Board, move: chess.Move, after: chess.Board, moving_piece: chess.Piece | None, mover: bool) -> str:
+    if moving_piece is None or moving_piece.piece_type == chess.KING:
+        return ""
+    enemy = not mover
+    piece_value = PIECE_VALUES.get(moving_piece.piece_type, 0)
+    if piece_value < PIECE_VALUES[chess.KNIGHT]:
+        return ""
+    if not board.is_attacked_by(enemy, move.from_square):
+        return ""
+    if after.is_attacked_by(enemy, move.to_square):
+        return ""
+    return f"Moves the {chess.piece_name(moving_piece.piece_type)} out of danger."
+
+
+def _candidate_tactical_threat(board: chess.Board, candidate: chess.Move, attacker_color: bool) -> dict[str, Any] | None:
+    piece = board.piece_at(candidate.from_square)
+    if piece is None:
+        return None
+    try:
+        candidate_san = board.san(candidate)
+    except Exception:
+        candidate_san = candidate.uci()
+    candidate_after = board.copy(stack=False)
+    try:
+        candidate_after.push(candidate)
+    except Exception:
+        return None
+
+    if candidate_after.is_checkmate():
+        return {
+            "key": f"mate:{candidate.uci()}",
+            "motif": "mate threat",
+            "priority": 100,
+            "description": f"{candidate_san} checkmate",
+            "prevented": f"Prevents {candidate_san} checkmate.",
+        }
+
+    fork_targets = _fork_targets_after_move(candidate_after, candidate, attacker_color)
+    high_value_fork_targets = [
+        (square, target)
+        for square, target in fork_targets
+        if target.piece_type == chess.KING or PIECE_VALUES.get(target.piece_type, 0) >= PIECE_VALUES[chess.ROOK]
+    ]
+    if len(high_value_fork_targets) >= 2:
+        labels = ", ".join(_piece_target_label(target, square) for square, target in high_value_fork_targets[:2])
+        return {
+            "key": "fork:" + ",".join(f"{piece.piece_type}@{square}" for square, piece in high_value_fork_targets[:3]),
+            "motif": "fork threat",
+            "priority": 90,
+            "description": f"{candidate_san}, forking {labels}",
+            "prevented": f"Prevents the fork {candidate_san} on {labels}.",
+        }
+
+    captured_piece = _captured_piece_for_reaction(board, candidate)
+    if captured_piece and PIECE_VALUES.get(captured_piece.piece_type, 0) >= PIECE_VALUES[chess.ROOK]:
+        target_label = _piece_target_label(captured_piece, candidate.to_square)
+        return {
+            "key": f"material:{captured_piece.piece_type}@{candidate.to_square}",
+            "motif": "material threat",
+            "priority": 80,
+            "description": f"winning the {target_label} with {candidate_san}",
+            "prevented": f"Prevents {candidate_san}, which would win the {target_label}.",
+        }
+
+    new_pins = _new_absolute_pins(board, candidate_after, not attacker_color)
+    if new_pins:
+        square, pinned_piece = new_pins[0]
+        target_label = _piece_target_label(pinned_piece, square)
+        return {
+            "key": f"pin:{pinned_piece.piece_type}@{square}",
+            "motif": "pin threat",
+            "priority": 70,
+            "description": f"{candidate_san}, pinning the {target_label}",
+            "prevented": f"Prevents {candidate_san}, which would pin the {target_label}.",
+        }
+
+    if _castling_rights_removed(board, candidate_after, not attacker_color):
+        return {
+            "key": f"castle:{not attacker_color}",
+            "motif": "castling-rights threat",
+            "priority": 60,
+            "description": f"{candidate_san}, taking away castling rights",
+            "prevented": f"Prevents {candidate_san} from taking away castling rights.",
+        }
+
+    if candidate.promotion:
+        promoted_name = chess.piece_name(candidate.promotion)
+        return {
+            "key": f"promotion:{candidate.to_square}:{candidate.promotion}",
+            "motif": "promotion threat",
+            "priority": 55,
+            "description": f"{candidate_san}, promoting to a {promoted_name}",
+            "prevented": f"Prevents the promotion idea {candidate_san}.",
+        }
+
+    return None
+
+
+def _candidate_tactical_threats(board: chess.Board, attacker_color: bool, *, limit: int = 80) -> list[dict[str, Any]]:
+    probe = board.copy(stack=False)
+    probe.turn = attacker_color
+    threats: list[dict[str, Any]] = []
+    for candidate in list(probe.legal_moves)[:limit]:
+        threat = _candidate_tactical_threat(probe, candidate, attacker_color)
+        if threat is not None:
+            threats.append(threat)
+    threats.sort(key=lambda item: int(item.get("priority", 0)), reverse=True)
+    return threats
+
+
+def _prevented_enemy_tactical_threats(before: chess.Board, after: chess.Board, mover: bool) -> list[dict[str, Any]]:
+    if before.is_check():
+        return []
+    enemy = not mover
+    before_threats = _candidate_tactical_threats(before, enemy)
+    if not before_threats:
+        return []
+    after_threat_keys = {str(item.get("key", "")) for item in _candidate_tactical_threats(after, enemy)}
+    prevented: list[dict[str, Any]] = []
+    for threat in before_threats:
+        if str(threat.get("key", "")) not in after_threat_keys:
+            prevented.append(threat)
+        if len(prevented) >= 3:
+            break
+    return prevented
+
+
+def _ignored_reply_tactical_threats(after: chess.Board, mover: bool) -> list[str]:
+    if after.is_check():
+        return []
+    future = after.copy(stack=False)
+    future.turn = mover
+    threats: list[str] = []
+    for candidate in list(future.legal_moves)[:80]:
+        threat = _candidate_tactical_threat(future, candidate, mover)
+        if threat is not None:
+            _append_unique(threats, f"threatens {threat.get('description', candidate.uci())}")
+        if len(threats) >= 3:
+            break
+    return threats[:3]
+
+
+def _move_tactical_annotations(board: chess.Board, move: chess.Move, after: chess.Board | None) -> tuple[list[str], list[str]]:
+    if after is None:
+        return [], []
+    mover = not after.turn
+    enemy = after.turn
+    moving_piece = after.piece_at(move.to_square)
+    captured_piece = _captured_piece_for_reaction(board, move)
+    reasons: list[str] = []
+    motifs: list[str] = []
+
+    if board.is_check() and not after.is_check():
+        _append_unique(motifs, "check defense")
+        reasons.append("Answers the check safely.")
+
+    recapture_san = _recapture_context(board, move, captured_piece)
+    if recapture_san:
+        _append_unique(motifs, "recapture")
+        reasons.append(f"Recaptures on {chess.square_name(move.to_square)}, restoring material balance.")
+
+    escape_reason = _moved_piece_escape_reason(board, move, after, moving_piece, mover)
+    if escape_reason:
+        _append_unique(motifs, "escape")
+        reasons.append(escape_reason)
+
+    checkers = list(after.checkers()) if after.is_check() else []
+    if after.is_checkmate():
+        _append_unique(motifs, "checkmate")
+        reasons.append("Ends the line with checkmate.")
+    elif len(checkers) >= 2:
+        _append_unique(motifs, "double check")
+        reasons.append("Creates a double check, so the king has to move.")
+    elif checkers and move.to_square not in checkers:
+        _append_unique(motifs, "discovered check")
+        reasons.append("Moves out of the way to reveal a discovered check.")
+    elif after.is_check():
+        _append_unique(motifs, "check")
+
+    fork_targets = _fork_targets_after_move(after, move, mover)
+    valuable_fork_targets = [
+        (square, piece)
+        for square, piece in fork_targets
+        if piece.piece_type == chess.KING or PIECE_VALUES.get(piece.piece_type, 0) >= PIECE_VALUES[chess.ROOK]
+    ]
+    if len(valuable_fork_targets) >= 2:
+        fork_label = "royal fork" if any(piece.piece_type == chess.KING for _square, piece in valuable_fork_targets) else "fork"
+        labels = ", ".join(_piece_target_label(piece, square) for square, piece in valuable_fork_targets[:3])
+        _append_unique(motifs, fork_label)
+        reasons.append(f"Forks {labels}, so one of them is hard to save.")
+
+    new_pins = _new_absolute_pins(board, after, enemy)
+    if new_pins:
+        square, pinned_piece = new_pins[0]
+        _append_unique(motifs, "pin")
+        reasons.append(f"Pins the {_piece_target_label(pinned_piece, square)} to the king.")
+
+    if moving_piece and moving_piece.piece_type in {chess.BISHOP, chess.ROOK, chess.QUEEN} and after.is_check():
+        enemy_king = after.king(enemy)
+        if enemy_king is not None:
+            direction = chess.square_file(enemy_king) - chess.square_file(move.to_square), chess.square_rank(enemy_king) - chess.square_rank(move.to_square)
+            if direction != (0, 0):
+                _append_unique(motifs, "skewer pressure")
+
+    if captured_piece:
+        captured_value = PIECE_VALUES.get(captured_piece.piece_type, 0)
+        if captured_value >= PIECE_VALUES[chess.ROOK]:
+            _append_unique(motifs, "wins material")
+            reasons.append(f"Wins material by taking the {_piece_target_label(captured_piece, move.to_square)}.")
+        defended_by_capture = [
+            square
+            for square in board.attacks(move.to_square)
+            if (piece := board.piece_at(square)) is not None and piece.color == enemy and PIECE_VALUES.get(piece.piece_type, 0) >= PIECE_VALUES[chess.KNIGHT]
+        ]
+        if defended_by_capture:
+            _append_unique(motifs, "removes defender")
+            reasons.append("Removes a defender, so nearby pieces and squares become weaker.")
+        if after.is_check() and captured_value >= PIECE_VALUES[chess.KNIGHT]:
+            _append_unique(motifs, "zwischenzug")
+            reasons.append("Captures with check, which works like a forcing in-between move.")
+
+    material_threats = _material_threats_from_square(after, mover, move.to_square, moving_piece)
+    if material_threats:
+        square, target = material_threats[0]
+        _append_unique(motifs, "material threat")
+        reasons.append(f"Attacks the {_piece_target_label(target, square)}, creating a material threat.")
+
+    if _castling_rights_removed(board, after, enemy):
+        _append_unique(motifs, "castling rights")
+        reasons.append("Removes the opponent's castling rights.")
+    if _castling_rights_removed(board, after, mover) and not board.is_castling(move):
+        _append_unique(motifs, "king commitment")
+        reasons.append("Commits your king or rook, so your own castling rights are gone.")
+
+    if move.promotion:
+        promoted_name = chess.piece_name(move.promotion)
+        _append_unique(motifs, "promotion")
+        reasons.append(f"Promotes the pawn into a {promoted_name}.")
+    if board.is_en_passant(move):
+        _append_unique(motifs, "en passant")
+        reasons.append("Uses en passant to remove the advanced pawn.")
+
+    for threat in _prevented_enemy_tactical_threats(board, after, mover):
+        prevented = str(threat.get("prevented", "") or "").strip()
+        motif = str(threat.get("motif", "") or "").strip()
+        if motif:
+            _append_unique(motifs, motif.replace(" threat", " prevention"))
+        if prevented:
+            reasons.append(prevented)
+
+    for threat in _ignored_reply_tactical_threats(after, mover):
+        _append_unique(motifs, "threat")
+        reasons.append(threat.capitalize() + ".")
+
+    return reasons[:6], motifs[:8]
+
+
 def _move_momentum_summary(
     board: chess.Board,
     move: chess.Move,
@@ -1524,6 +1850,9 @@ def _move_reaction_for_board(
         book_active=book_active,
         best_line=best_line,
     )
+    tactical_reasons, tactical_motifs = _move_tactical_annotations(board, move, after)
+    for motif in tactical_motifs:
+        _append_unique(motifs, motif)
 
     if moving_piece:
         piece_name = chess.piece_name(moving_piece.piece_type)
@@ -1584,6 +1913,9 @@ def _move_reaction_for_board(
     if best_line and best_line.get("uci") == move.uci() and key not in {"book", "great", "brilliant"}:
         reasons.append("It starts the top Stockfish continuation.")
 
+    for reason in tactical_reasons:
+        _append_unique(reasons, reason)
+
     while len(reasons) < 2:
         reasons.append(_move_purpose(board, move).capitalize() + ".")
 
@@ -1605,9 +1937,9 @@ def _move_reaction_for_board(
             book_active=book_active,
         ),
         "next_step": _move_next_step(move, classification_key=key, best_line=best_line),
-        "reasons": reasons[:4],
+        "reasons": reasons[:6],
         "features": features[:6],
-        "motifs": motifs,
+        "motifs": motifs[:10],
         "side": "white" if mover == chess.WHITE else "black",
     }
 
@@ -1779,6 +2111,19 @@ def _build_coach_explanation(
     if best_line is None:
         return f"{best_move_san} is the best move here."
     purpose = best_line.get("purpose") or "improves the position"
+    tactic_note = ""
+    try:
+        best_move = chess.Move.from_uci(best_move_uci)
+    except ValueError:
+        best_move = None
+    if best_move is not None and best_move in board.legal_moves:
+        after = board.copy(stack=False)
+        after.push(best_move)
+        tactical_reasons, tactical_motifs = _move_tactical_annotations(board, best_move, after)
+        if tactical_reasons:
+            tactic_note = f" Tactically, {tactical_reasons[0][0].lower()}{tactical_reasons[0][1:]}"
+        elif tactical_motifs:
+            tactic_note = f" It also carries the motif: {', '.join(tactical_motifs[:3])}."
     database_note = ""
     if database_moves:
         top_reply = database_moves[0]
@@ -1797,11 +2142,11 @@ def _build_coach_explanation(
         return (
             f"{best_move_san} is best because it {purpose}."
             f"{habit_note} Compared with {your_move_san or your_move_uci}, it keeps a {_edge_label(score_delta)} for your side."
-            f" The main continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
+            f"{tactic_note} The main continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
         )
     return (
         f"{best_move_san} is best because it {purpose}."
-        f" The main continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
+        f"{tactic_note} The main continuation is {best_line.get('line_san', best_move_san)}.{database_note}"
     )
 
 
@@ -2059,6 +2404,10 @@ def _smart_rule_explanation(
     is_user_side: bool,
     classification: str,
     eval_swing: int,
+    is_engine_best_reply: bool = False,
+    recommended_user_reply_san: str = "",
+    recommended_user_reply_uci: str = "",
+    pv_preview: list[str] | None = None,
 ) -> tuple[str, str, str]:
     piece_name = {
         chess.PAWN: "pawn",
@@ -2085,17 +2434,123 @@ def _smart_rule_explanation(
         idea = "Punish loose development and keep pressure on key central squares."
         return theory, plan, idea
     quality = classification.lower()
+    reply_label = str(recommended_user_reply_san or recommended_user_reply_uci or "").strip()
+    pv = [str(item or "").strip() for item in (pv_preview or []) if str(item or "").strip()]
+    continuation = " ".join(pv[:6]) if pv else ""
     theory = (
         f"Opponent plays {san}. Classification: {classification}. "
         f"Eval swing is {eval_swing / 100:.2f} pawns from White's perspective."
     )
-    if quality in {"mistake", "blunder", "inaccuracy"}:
+    if is_engine_best_reply:
+        theory += " This is the strongest engine-backed defensive try in this position and it asks you a concrete question right away."
+    elif quality in {"mistake", "blunder", "inaccuracy"}:
         theory += " This creates targets you can challenge immediately."
     else:
         theory += " This is a practical reply that keeps the position sound."
-    plan = "Respond with principled development and concrete tactics if available."
-    idea = "Opponent is aiming for active piece play and central influence."
+    if reply_label:
+        theory += f" Best response for your side: {reply_label}."
+    if continuation:
+        theory += f" Critical continuation: {continuation}."
+    if is_engine_best_reply:
+        plan = (
+            f"Meet this move with {reply_label if reply_label else 'the engine-recommended reply'}, "
+            "finish development quickly, and avoid drifting into passive setups."
+        )
+        idea = "Opponent is trying to equalize with precise activity and force you to solve immediate coordination problems."
+    elif quality in {"mistake", "blunder", "inaccuracy"}:
+        plan = (
+            f"Use {reply_label if reply_label else 'the strongest practical reply'} to seize space or initiative, "
+            "then convert by improving piece activity before grabbing material."
+        )
+        idea = "Opponent's move loosens key squares and creates tactical or strategic targets."
+    else:
+        plan = (
+            f"Answer with {reply_label if reply_label else 'a principled engine-approved move'}, "
+            "then continue with healthy development and king safety."
+        )
+        idea = "Opponent is aiming for active piece play and central influence."
     return theory, plan, idea
+
+
+def _smart_explanation_blocks(
+    *,
+    san: str,
+    is_user_side: bool,
+    classification: str,
+    eval_swing: int,
+    is_engine_best_reply: bool,
+    recommended_user_reply_san: str,
+    recommended_user_reply_uci: str,
+    theory: str,
+    plan: str,
+    opponent_idea: str,
+) -> dict[str, str]:
+    response = str(recommended_user_reply_san or recommended_user_reply_uci or "").strip()
+    swing = f"{eval_swing / 100:.2f}"
+    if is_user_side:
+        return {
+            "threat": f"{san} strengthens your position and asks practical questions immediately.",
+            "why": f"Classification: {classification}. Eval swing from White perspective: {swing} pawns.",
+            "best_response": "Expect principled resistance; be ready to switch to the top engine continuation if the position sharpens.",
+            "follow_up": str(plan or "Continue development, king safety, and central control.").strip(),
+        }
+    if is_engine_best_reply:
+        threat = (
+            f"{san} is the strongest defensive resource here and can neutralize your initiative if answered inaccurately."
+        )
+    else:
+        threat = f"{san} creates a practical challenge you need to solve accurately."
+    return {
+        "threat": threat,
+        "why": f"Classification: {classification}. Eval swing from White perspective: {swing} pawns. {str(opponent_idea or '').strip()}".strip(),
+        "best_response": response or "Use the engine's top continuation from this node.",
+        "follow_up": str(plan or theory or "Consolidate and keep improving piece activity.").strip(),
+    }
+
+
+def _build_user_style_move_priors(
+    raw_style_lines: object,
+    *,
+    my_color: str,
+) -> dict[str, dict[str, float]]:
+    """Build per-position move priors from user repertoire lines."""
+    if not isinstance(raw_style_lines, list):
+        return {}
+    priors: dict[str, dict[str, float]] = defaultdict(dict)
+    for raw_line in raw_style_lines[:360]:
+        if not isinstance(raw_line, dict):
+            continue
+        line_player_color = str(raw_line.get("player_color") or raw_line.get("source_player_color") or "").strip().lower()
+        if line_player_color in {"white", "black"} and line_player_color != my_color:
+            continue
+        start_fen = str(raw_line.get("start_fen", "") or chess.STARTING_FEN).strip() or chess.STARTING_FEN
+        try:
+            board = chess.Board(start_fen)
+        except ValueError:
+            continue
+        moves_uci = [str(item or "").strip() for item in (raw_line.get("moves_uci") or []) if str(item or "").strip()]
+        if not moves_uci:
+            continue
+        try:
+            line_weight = float(raw_line.get("weight", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            line_weight = 1.0
+        line_weight = max(0.2, min(6.0, line_weight))
+        for ply_index, move_uci in enumerate(moves_uci[:80]):
+            try:
+                move = chess.Move.from_uci(move_uci)
+            except ValueError:
+                break
+            if move not in board.legal_moves:
+                break
+            mover = "white" if board.turn == chess.WHITE else "black"
+            if mover == my_color:
+                fen_key = _normalize_position_key(board)
+                existing = float(priors.get(fen_key, {}).get(move_uci, 0.0) or 0.0)
+                ply_weight = 1.18 if ply_index <= 14 else 1.0 if ply_index <= 28 else 0.88
+                priors.setdefault(fen_key, {})[move_uci] = existing + (line_weight * ply_weight)
+            board.push(move)
+    return {key: dict(value) for key, value in priors.items() if value}
 
 
 def generate_smart_theory_tree(
@@ -2112,16 +2567,33 @@ def generate_smart_theory_tree(
     request = payload or {}
     my_color = "black" if str(request.get("my_color", "white")).strip().lower() == "black" else "white"
     opponent_accuracy = str(request.get("opponent_accuracy", "mixed")).strip().lower() or "mixed"
-    max_ply = max(2, min(40, int(request.get("max_ply", 20) or 20)))
-    max_positions = max(10, min(1500, int(request.get("max_positions", 300) or 300)))
-    opponent_replies = max(1, min(8, int(request.get("opponent_replies", 3) or 3)))
+    # "Move 20" is 40 plies. Keep the default there so exported study lines do
+    # not collapse into the old 5-10 move samples.
+    max_ply = max(2, min(40, int(request.get("max_ply", 40) or 40)))
+    max_positions = max(10, min(1500, int(request.get("max_positions", 900) or 900)))
+    opponent_replies = max(1, min(12, int(request.get("opponent_replies", 6) or 6)))
     include_best_engine_replies = bool(request.get("include_best_engine_replies", True))
     include_rare_sidelines = bool(request.get("include_rare_sidelines", True))
     include_mistakes = bool(request.get("include_opponent_mistakes", True))
-    include_blunders = bool(request.get("include_opponent_blunders", False))
+    include_blunders = bool(request.get("include_opponent_blunders", True))
     avoid_absurd_moves = bool(request.get("avoid_absurd_moves", True))
     eco_only_mode = bool(request.get("eco_only_mode", False))
     cache_evals = bool(request.get("cache_evaluations", True))
+    try:
+        expected_move_confidence_cp = int(request.get("expected_move_confidence_cp", 125) or 125)
+    except (TypeError, ValueError):
+        expected_move_confidence_cp = 125
+    expected_move_confidence_cp = max(20, min(300, expected_move_confidence_cp))
+    try:
+        style_move_confidence_cp = int(request.get("style_move_confidence_cp", 90) or 90)
+    except (TypeError, ValueError):
+        style_move_confidence_cp = 90
+    style_move_confidence_cp = max(20, min(300, style_move_confidence_cp))
+    try:
+        style_preferred_min_weight = float(request.get("style_preferred_min_weight", 1.2) or 1.2)
+    except (TypeError, ValueError):
+        style_preferred_min_weight = 1.2
+    style_preferred_min_weight = max(0.2, min(8.0, style_preferred_min_weight))
     opening_focus = str(request.get("opening_focus", "auto") or "auto").strip().lower()
     if opening_focus == "kings_indian":
         # Backward compatibility for saved settings from the old single-mode
@@ -2130,15 +2602,25 @@ def generate_smart_theory_tree(
     if opening_focus not in {"auto", "kings_indian_defense", "kings_indian_attack", "kings_indian_systems", "pirc_defense"}:
         opening_focus = "auto"
     if opening_focus in {"kings_indian_defense", "pirc_defense"} and my_color != "black":
-        # Black-only repertoire focus modes force Black perspective so the
-        # generated user-turn choices stay coherent.
-        my_color = "black"
-    if opening_focus == "kings_indian_attack" and my_color != "white":
-        # White-only King's Indian Attack mode.
-        my_color = "white"
+        warnings_for_later = [
+            f"{opening_focus.replace('_', ' ')} is a Black-side focus, so it was treated as auto for your White repertoire."
+        ]
+        opening_focus = "auto"
+    elif opening_focus == "kings_indian_attack" and my_color != "white":
+        warnings_for_later = [
+            "King's Indian Attack is a White-side focus, so it was treated as auto for your Black repertoire."
+        ]
+        opening_focus = "auto"
+    else:
+        warnings_for_later = []
     follow_user_line_until_out_of_book = bool(request.get("follow_user_line_until_out_of_book", True))
     start_play_uci = [str(item) for item in (request.get("start_play_uci") or []) if str(item)]
     user_book_line_uci = [str(item) for item in (request.get("user_book_line_uci") or []) if str(item)]
+    user_book_line_player_color = str(request.get("user_book_line_player_color", "") or "").strip().lower()
+    if user_book_line_player_color in {"white", "black"} and user_book_line_player_color != my_color:
+        user_book_line_uci = []
+    user_style_lines = request.get("user_style_lines") or []
+    user_style_move_priors = _build_user_style_move_priors(user_style_lines, my_color=my_color)
     reference_user_move_uci = str(request.get("reference_user_move_uci", "") or "").strip()
     starting_source = str(request.get("starting_source", "current_board") or "current_board")
     time_sec = request.get("engine_movetime_sec")
@@ -2152,7 +2634,128 @@ def generate_smart_theory_tree(
     root_board = board.copy(stack=False)
     start_warnings: list[str] = []
 
+    def _trim_line_to_legal_continuation(
+        start_board: chess.Board,
+        raw_line_uci: list[str],
+        *,
+        min_plies: int = 1,
+    ) -> list[str]:
+        """Return the best legal suffix from raw_line_uci for start_board.
+
+        This keeps Smart Theory aligned with the user's real line even when
+        the provided sequence includes earlier prefix moves from a different
+        starting context.
+        """
+        cleaned = [str(item or "").strip() for item in raw_line_uci if str(item or "").strip()]
+        if not cleaned:
+            return []
+        best_line: list[str] = []
+        best_score = -1
+        for offset in range(len(cleaned)):
+            board_cursor = start_board.copy(stack=False)
+            legal_seq: list[str] = []
+            for move_uci in cleaned[offset:]:
+                try:
+                    move = chess.Move.from_uci(move_uci)
+                except ValueError:
+                    break
+                if move not in board_cursor.legal_moves:
+                    break
+                legal_seq.append(move_uci)
+                board_cursor.push(move)
+            # Favor longer legal continuations; small offset penalty breaks ties.
+            score = (len(legal_seq) * 12) - offset
+            if len(legal_seq) >= min_plies and score > best_score:
+                best_score = score
+                best_line = legal_seq
+        return best_line
+
+    def _infer_user_book_line_from_style_data(start_board: chess.Board) -> tuple[list[str], str]:
+        if not isinstance(user_style_lines, list):
+            return [], ""
+        ranked_lines: list[tuple[float, int, list[str], str]] = []
+        white_systems_prefer_nf3 = my_color == "white" and opening_focus in {"kings_indian_attack", "kings_indian_systems"}
+        for index, raw_line in enumerate(user_style_lines[:420]):
+            if not isinstance(raw_line, dict):
+                continue
+            line_player_color = str(raw_line.get("player_color") or raw_line.get("source_player_color") or "").strip().lower()
+            if line_player_color in {"white", "black"} and line_player_color != my_color:
+                continue
+            raw_moves = [str(item or "").strip() for item in (raw_line.get("moves_uci") or []) if str(item or "").strip()]
+            if not raw_moves:
+                continue
+            legal_line = _trim_line_to_legal_continuation(start_board, raw_moves, min_plies=1)
+            if not legal_line:
+                continue
+            try:
+                weight = float(raw_line.get("weight", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                weight = 1.0
+            # Prefer lines where the first move by our side appears quickly,
+            # then use saved-repertoire weight as the tie-breaker.
+            board_cursor = start_board.copy(stack=False)
+            first_my_ply = 999
+            my_move_count = 0
+            for ply_index, move_uci in enumerate(legal_line[:24]):
+                if ("white" if board_cursor.turn == chess.WHITE else "black") == my_color:
+                    first_my_ply = min(first_my_ply, ply_index)
+                    my_move_count += 1
+                try:
+                    board_cursor.push(chess.Move.from_uci(move_uci))
+                except Exception:
+                    break
+            if my_move_count <= 0:
+                continue
+            score = (weight * 100.0) + (my_move_count * 8.0) - first_my_ply - (index * 0.01)
+            if white_systems_prefer_nf3:
+                first_move = str(legal_line[0] if legal_line else "").strip().lower()
+                if first_move == "g1f3":
+                    score += 10000.0
+                elif first_move == "e2e4":
+                    score -= 1000.0
+            ranked_lines.append((score, index, legal_line, str(raw_line.get("source", "user_style_lines") or "user_style_lines")))
+        if not ranked_lines:
+            return [], ""
+        ranked_lines.sort(key=lambda item: item[0], reverse=True)
+        _score, _index, legal_line, source = ranked_lines[0]
+        return legal_line[:80], source
+
+    def _preferred_white_system_line_from_style_data(start_board: chess.Board) -> tuple[list[str], str]:
+        if my_color != "white" or opening_focus not in {"kings_indian_attack", "kings_indian_systems"}:
+            return [], ""
+        if not isinstance(user_style_lines, list):
+            return [], ""
+        ranked_lines: list[tuple[float, int, list[str], str]] = []
+        for index, raw_line in enumerate(user_style_lines[:420]):
+            if not isinstance(raw_line, dict):
+                continue
+            line_player_color = str(raw_line.get("player_color") or raw_line.get("source_player_color") or "").strip().lower()
+            if line_player_color in {"white", "black"} and line_player_color != "white":
+                continue
+            raw_moves = [str(item or "").strip() for item in (raw_line.get("moves_uci") or []) if str(item or "").strip()]
+            if not raw_moves:
+                continue
+            legal_line = _trim_line_to_legal_continuation(start_board, raw_moves, min_plies=1)
+            if not legal_line or str(legal_line[0]).strip().lower() != "g1f3":
+                continue
+            try:
+                weight = float(raw_line.get("weight", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                weight = 1.0
+            ranked_lines.append((weight * 100.0 - (index * 0.01), index, legal_line, str(raw_line.get("source", "user_style_lines") or "user_style_lines")))
+        if not ranked_lines:
+            return [], ""
+        ranked_lines.sort(key=lambda item: item[0], reverse=True)
+        _score, _index, legal_line, source = ranked_lines[0]
+        return legal_line[:80], source
+
     def _in_book(board_for_book: chess.Board, move_uci: str) -> bool | None:
+        # Treat strong local repertoire priors as "known book" even when online
+        # explorer data is sparse or missing for the exact position.
+        local_priors = user_style_move_priors.get(_normalize_position_key(board_for_book), {})
+        local_weight = float(local_priors.get(move_uci, 0.0) or 0.0)
+        if local_weight >= style_preferred_min_weight:
+            return True
         try:
             context = database_context_for_board(board_for_book, play_uci=[], limit=16)
             db_moves = context.get("database_moves", []) if isinstance(context, dict) else []
@@ -2167,7 +2770,12 @@ def generate_smart_theory_tree(
         return False
 
     applied_start_moves: list[str] = []
-    opening_seed_line = start_play_uci[:] if start_play_uci else user_book_line_uci[:]
+    # Only explicit setup/context moves should advance the starting board.
+    # A user repertoire line inferred from saved games is the line to generate,
+    # not a hidden prefix to skip over. Treating it as setup made Smart Theory
+    # appear to start from random middlegame-ish opening positions.
+    opening_seed_source = start_play_uci[:]
+    opening_seed_line = _trim_line_to_legal_continuation(root_board, opening_seed_source, min_plies=1)
     for move_uci in opening_seed_line:
         try:
             move = chess.Move.from_uci(move_uci)
@@ -2190,15 +2798,32 @@ def generate_smart_theory_tree(
         applied_start_moves.append(move_uci)
 
     # Keep a per-ply reference of the user's known line after the applied seed.
-    # This lets Smart Theory highlight "your move vs best move" not just at root.
-    user_line_reference = user_book_line_uci[:] if user_book_line_uci else start_play_uci[:]
-    remaining_user_line_uci: list[str] = []
-    if user_line_reference:
-        consumed = 0
-        max_match = min(len(user_line_reference), len(applied_start_moves))
-        while consumed < max_match and user_line_reference[consumed] == applied_start_moves[consumed]:
-            consumed += 1
-        remaining_user_line_uci = user_line_reference[consumed:]
+    # Align by legality against the post-seed board so we can follow user's real
+    # repertoire even when the input line includes earlier moves.
+    inferred_user_line_source = ""
+    if not user_book_line_uci:
+        user_book_line_uci, inferred_user_line_source = _infer_user_book_line_from_style_data(root_board)
+        if user_book_line_uci:
+            start_warnings.append(
+                f"Inferred your Smart Theory spine from {inferred_user_line_source}; first moves: {' '.join(user_book_line_uci[:8])}."
+            )
+    else:
+        preferred_white_system_line, preferred_white_system_source = _preferred_white_system_line_from_style_data(root_board)
+        if (
+            preferred_white_system_line
+            and str(user_book_line_uci[0] if user_book_line_uci else "").strip().lower() == "e2e4"
+        ):
+            user_book_line_uci = preferred_white_system_line
+            inferred_user_line_source = preferred_white_system_source
+            start_warnings.append(
+                f"Switched White systems spine to Nf3 from {preferred_white_system_source}; first moves: {' '.join(user_book_line_uci[:8])}."
+            )
+    user_line_source = user_book_line_uci[:] if user_book_line_uci else start_play_uci[:]
+    remaining_user_line_uci: list[str] = _trim_line_to_legal_continuation(
+        root_board,
+        user_line_source,
+        min_plies=1,
+    )
 
     eval_cache: dict[str, dict[str, Any]] = {}
     eval_cache_lock = threading.Lock()
@@ -2208,7 +2833,7 @@ def generate_smart_theory_tree(
     queue: deque[tuple[str, chess.Board, int, list[str]]] = deque()
     positions_done = 0
     positions_total_hint = max_positions
-    warnings: list[str] = list(start_warnings)
+    warnings: list[str] = [*warnings_for_later, *start_warnings]
 
     def cb(phase: str, message: str, extra: dict[str, Any] | None = None) -> None:
         if status_callback:
@@ -2254,7 +2879,7 @@ def generate_smart_theory_tree(
         score = line.get("score")
         if score is None:
             return 0
-        return int(_score_cp(score, turn))
+        return int(_score_cp(score, chess.WHITE))
 
     def opponent_category(*, delta: int, popularity: float) -> str:
         if delta <= 25 and popularity >= 12:
@@ -2270,7 +2895,7 @@ def generate_smart_theory_tree(
         return "Blunder"
 
     def user_category(delta: int) -> str:
-        loss = abs(int(delta))
+        loss = max(0, int(delta))
         if loss <= 10:
             return "Best"
         if loss <= 25:
@@ -2282,6 +2907,13 @@ def generate_smart_theory_tree(
         if loss <= 300:
             return "Mistake"
         return "Blunder"
+
+    def user_loss_cp(*, before_white_cp: int, after_white_cp: int, mover_color: chess.Color) -> int:
+        # Eval values are always White-perspective. Loss must be measured from
+        # the mover's perspective, otherwise good Black moves look like blunders.
+        if mover_color == chess.WHITE:
+            return max(0, int(before_white_cp) - int(after_white_cp))
+        return max(0, int(after_white_cp) - int(before_white_cp))
 
     def learning_priority_for_node(
         *,
@@ -2315,6 +2947,14 @@ def generate_smart_theory_tree(
             promo = mv.promotion
             if promo:
                 motifs.append("promotion")
+        except Exception:
+            pass
+        try:
+            after = b.copy(stack=False)
+            after.push(mv)
+            _tactical_reasons, tactical_motifs = _move_tactical_annotations(b, mv, after)
+            for motif in tactical_motifs:
+                _append_unique(motifs, motif)
         except Exception:
             pass
         return motifs
@@ -2419,6 +3059,10 @@ def generate_smart_theory_tree(
         "theoryExplanation": "Start position for smart theory generation.",
         "planForUser": "Build a stable opening structure and stay consistent with your repertoire themes.",
         "opponentIdea": "",
+        "threatSummary": "No immediate tactical threat at the root; establish your preferred setup.",
+        "whyMoveGoodOrBad": "Baseline starting node before move selection.",
+        "bestResponseSummary": "",
+        "followUpPlan": "Develop naturally and follow your repertoire until correction is needed.",
         "tacticalMotifs": [],
         "importantSquares": ["d4", "d5", "e4", "e5"],
         "pawnBreaks": [],
@@ -2471,6 +3115,8 @@ def generate_smart_theory_tree(
             top_line = lines[0]
             top_pv = top_line.get("pv") or []
             top_best_uci = top_pv[0].uci() if top_pv else ""
+            style_preferred_uci = ""
+            style_prior_map: dict[str, float] = {}
 
             candidate_moves: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
             db = database_context_for_board(current_board, play_uci=path, limit=max(10, opponent_replies + 4))
@@ -2483,30 +3129,71 @@ def generate_smart_theory_tree(
                 expected_user_move_from_line = ""
                 if remaining_user_line_uci and len(path) < len(remaining_user_line_uci):
                     expected_user_move_from_line = str(remaining_user_line_uci[len(path)] or "").strip()
-                preferred_uci = ""
-                if effective_opening_focus == "kings_indian_defense" and my_color == "black":
-                    preferred_uci = _kings_indian_defense_preferred_move_uci(current_board)
-                elif effective_opening_focus == "kings_indian_attack" and my_color == "white":
-                    preferred_uci = _kings_indian_attack_preferred_move_uci(current_board)
-                elif effective_opening_focus == "pirc_defense" and my_color == "black":
-                    preferred_uci = _pirc_defense_preferred_move_uci(current_board)
-                elif effective_opening_focus == "kings_indian_systems":
-                    preferred_uci = _kings_indian_systems_preferred_move_uci(current_board)
-                if preferred_uci:
-                    preferred_move = chess.Move.from_uci(preferred_uci)
-                    matching_line = next((line for line in lines if (line.get("pv") or [None])[0] and (line.get("pv") or [None])[0].uci() == preferred_uci), None)
-                    line_for_preferred = matching_line or top_line
-                    cp = score_white_cp(line_for_preferred, current_board.turn)
-                    san = current_board.san(preferred_move)
-                    category = user_category(cp - eval_before) if matching_line else "Good"
-                    candidate_moves.append((preferred_move, san, cp, line_for_preferred, 100.0, 0, category, db_moves))
-                else:
-                    mv = top_pv[0]
-                    if mv not in current_board.legal_moves:
-                        continue
-                    san = current_board.san(mv)
-                    cp = score_white_cp(top_line, current_board.turn)
-                    candidate_moves.append((mv, san, cp, top_line, 100.0, 0, "Best", db_moves))
+                def user_line_for_uci(move_uci: str) -> dict[str, Any] | None:
+                    if not move_uci:
+                        return None
+                    cached_line = next(
+                        (
+                            line
+                            for line in lines
+                            if (line.get("pv") or [None])[0]
+                            and (line.get("pv") or [None])[0].uci() == move_uci
+                        ),
+                        None,
+                    )
+                    if cached_line is not None:
+                        return cached_line
+                    try:
+                        forced_move = chess.Move.from_uci(move_uci)
+                    except ValueError:
+                        return None
+                    if forced_move not in current_board.legal_moves:
+                        return None
+                    forced_board = current_board.copy(stack=False)
+                    forced_board.push(forced_move)
+                    forced_lines = eval_lines(forced_board, 1)
+                    if not forced_lines:
+                        return None
+                    forced_top = dict(forced_lines[0])
+                    continuation = [mv for mv in (forced_top.get("pv") or []) if isinstance(mv, chess.Move)]
+                    forced_top["pv"] = [forced_move, *continuation]
+                    return forced_top
+                style_prior_map = user_style_move_priors.get(normalized_fen(current_board), {})
+                if isinstance(style_prior_map, dict) and style_prior_map:
+                    legal_style_moves: list[str] = []
+                    for uci in style_prior_map.keys():
+                        try:
+                            move = chess.Move.from_uci(uci)
+                        except ValueError:
+                            continue
+                        if move in current_board.legal_moves:
+                            legal_style_moves.append(uci)
+                    if legal_style_moves:
+                        strongest = max(legal_style_moves, key=lambda uci: float(style_prior_map.get(uci, 0.0) or 0.0))
+                        strongest_weight = float(style_prior_map.get(strongest, 0.0) or 0.0)
+                        if strongest_weight >= style_preferred_min_weight:
+                            style_preferred_uci = strongest
+                mv = top_pv[0]
+                if mv not in current_board.legal_moves:
+                    continue
+                san = current_board.san(mv)
+                cp = score_white_cp(top_line, current_board.turn)
+                candidate_moves.append((mv, san, cp, top_line, 100.0, 0, "Best", db_moves))
+                if style_preferred_uci and all(item[0].uci() != style_preferred_uci for item in candidate_moves):
+                    try:
+                        style_move = chess.Move.from_uci(style_preferred_uci)
+                    except ValueError:
+                        style_move = None
+                    if style_move and style_move in current_board.legal_moves:
+                        style_line = user_line_for_uci(style_preferred_uci)
+                        if style_line is not None:
+                            style_cp = score_white_cp(style_line, current_board.turn)
+                            style_san = current_board.san(style_move)
+                            style_category = user_category(
+                                user_loss_cp(before_white_cp=eval_before, after_white_cp=style_cp, mover_color=current_board.turn)
+                            )
+                            style_strength = float(style_prior_map.get(style_preferred_uci, 0.0) or 0.0)
+                            candidate_moves.append((style_move, style_san, style_cp, style_line, min(95.0, 80.0 + style_strength), 0, style_category, db_moves))
                 # Surface "unknown line" learning at the root by also including
                 # the user's frequently played move when it differs from the best.
                 if ply == 0 and reference_user_move_uci:
@@ -2515,19 +3202,13 @@ def generate_smart_theory_tree(
                     except ValueError:
                         user_move = None
                     if user_move and user_move in current_board.legal_moves and all(item[0].uci() != reference_user_move_uci for item in candidate_moves):
-                        user_line = next(
-                            (
-                                line
-                                for line in lines
-                                if (line.get("pv") or [None])[0]
-                                and (line.get("pv") or [None])[0].uci() == reference_user_move_uci
-                            ),
-                            None,
-                        )
+                        user_line = user_line_for_uci(reference_user_move_uci)
                         if user_line is not None:
                             user_cp = score_white_cp(user_line, current_board.turn)
                             user_san = current_board.san(user_move)
-                            user_category_label = user_category(user_cp - eval_before)
+                            user_category_label = user_category(
+                                user_loss_cp(before_white_cp=eval_before, after_white_cp=user_cp, mover_color=current_board.turn)
+                            )
                             candidate_moves.append((user_move, user_san, user_cp, user_line, 80.0, 0, user_category_label, db_moves))
                 if expected_user_move_from_line:
                     try:
@@ -2537,19 +3218,13 @@ def generate_smart_theory_tree(
                     if expected_user_move and expected_user_move in current_board.legal_moves and all(
                         item[0].uci() != expected_user_move_from_line for item in candidate_moves
                     ):
-                        expected_line = next(
-                            (
-                                line
-                                for line in lines
-                                if (line.get("pv") or [None])[0]
-                                and (line.get("pv") or [None])[0].uci() == expected_user_move_from_line
-                            ),
-                            None,
-                        )
+                        expected_line = user_line_for_uci(expected_user_move_from_line)
                         if expected_line is not None:
                             expected_cp = score_white_cp(expected_line, current_board.turn)
                             expected_san = current_board.san(expected_user_move)
-                            expected_category_label = user_category(expected_cp - eval_before)
+                            expected_category_label = user_category(
+                                user_loss_cp(before_white_cp=eval_before, after_white_cp=expected_cp, mover_color=current_board.turn)
+                            )
                             candidate_moves.append(
                                 (
                                     expected_user_move,
@@ -2562,6 +3237,30 @@ def generate_smart_theory_tree(
                                     db_moves,
                                 )
                             )
+                preferred_uci = ""
+                if not expected_user_move_from_line and not style_preferred_uci:
+                    if effective_opening_focus == "kings_indian_defense" and my_color == "black":
+                        preferred_uci = _kings_indian_defense_preferred_move_uci(current_board)
+                    elif effective_opening_focus == "kings_indian_attack" and my_color == "white":
+                        preferred_uci = _kings_indian_attack_preferred_move_uci(current_board)
+                    elif effective_opening_focus == "pirc_defense" and my_color == "black":
+                        preferred_uci = _pirc_defense_preferred_move_uci(current_board)
+                    elif effective_opening_focus == "kings_indian_systems":
+                        preferred_uci = _kings_indian_systems_preferred_move_uci(current_board)
+                if preferred_uci and all(item[0].uci() != preferred_uci for item in candidate_moves):
+                    try:
+                        preferred_move = chess.Move.from_uci(preferred_uci)
+                    except ValueError:
+                        preferred_move = None
+                    if preferred_move and preferred_move in current_board.legal_moves:
+                        matching_line = user_line_for_uci(preferred_uci)
+                        line_for_preferred = matching_line or top_line
+                        cp = score_white_cp(line_for_preferred, current_board.turn)
+                        san = current_board.san(preferred_move)
+                        category = user_category(
+                            user_loss_cp(before_white_cp=eval_before, after_white_cp=cp, mover_color=current_board.turn)
+                        ) if matching_line else "Good"
+                        candidate_moves.append((preferred_move, san, cp, line_for_preferred, 92.0, 0, category, db_moves))
                 # Play like the user when the known move is still sound; switch
                 # to the strongest correction only when the known move is too weak.
                 if candidate_moves:
@@ -2572,22 +3271,43 @@ def generate_smart_theory_tree(
                             (item for item in candidate_moves if item[0].uci() == expected_user_move_from_line),
                             None,
                         )
+                    style_candidate = None
+                    if style_preferred_uci:
+                        style_candidate = next(
+                            (item for item in candidate_moves if item[0].uci() == style_preferred_uci),
+                            None,
+                        )
+                    preferred_candidate = None
+                    if preferred_uci:
+                        preferred_candidate = next(
+                            (item for item in candidate_moves if item[0].uci() == preferred_uci),
+                            None,
+                        )
                     if expected_candidate is not None:
+                        best_score_known = best_candidate[3].get("score") is not None if isinstance(best_candidate[3], dict) else False
+                        expected_score_known = expected_candidate[3].get("score") is not None if isinstance(expected_candidate[3], dict) else False
                         cp_gap = abs(int(best_candidate[2]) - int(expected_candidate[2]))
-                        if cp_gap <= 75:
+                        if best_score_known and expected_score_known and cp_gap <= expected_move_confidence_cp:
                             candidate_moves = [expected_candidate]
                         else:
-                            # Keep a compact "best + your move" set for clarity.
-                            ordered = [best_candidate, expected_candidate]
-                            seen_user_uci: set[str] = set()
-                            deduped_user: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
-                            for item in ordered:
-                                item_uci = item[0].uci()
-                                if item_uci in seen_user_uci:
-                                    continue
-                                seen_user_uci.add(item_uci)
-                                deduped_user.append(item)
-                            candidate_moves = deduped_user
+                            # Grandmaster-version mode: do not export the user's
+                            # bad move as "my" playable branch. Keep the best
+                            # correction and store the played move as context.
+                            candidate_moves = [best_candidate]
+                    elif style_candidate is not None:
+                        # Mubassar-style confidence gate: keep the familiar move
+                        # when it is close enough, otherwise keep best+style for
+                        # clear correction context.
+                        cp_gap = abs(int(best_candidate[2]) - int(style_candidate[2]))
+                        if cp_gap <= style_move_confidence_cp:
+                            candidate_moves = [style_candidate]
+                        else:
+                            # If the style move is too weak, annotate the
+                            # correction but keep the exported repertoire line
+                            # on the engine-approved move.
+                            candidate_moves = [best_candidate]
+                    elif preferred_candidate is not None:
+                        candidate_moves = [preferred_candidate]
                     else:
                         candidate_moves = [best_candidate]
             else:
@@ -2635,23 +3355,66 @@ def generate_smart_theory_tree(
 
                 ranked = sorted(candidate_moves, key=_opp_weight, reverse=True)[: max(2, opponent_replies * 3)]
                 selected: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]] = []
+
+                def _add_opponent_candidate(
+                    bucket: list[tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]]],
+                    item: tuple[chess.Move, str, int, dict[str, Any], float, int, str, list[dict[str, Any]]] | None,
+                ) -> None:
+                    if item is None or len(bucket) >= opponent_replies:
+                        return
+                    _, _, cp, _, _, _, category, _ = item
+                    delta = abs(cp - eval_before)
+                    if eco_only_mode and category not in {"Mainline", "Popular"}:
+                        return
+                    if category == "Sideline" and not include_rare_sidelines:
+                        return
+                    if category == "Blunder" and not include_blunders:
+                        return
+                    if category in {"Inaccuracy", "Mistake"} and not include_mistakes:
+                        return
+                    if avoid_absurd_moves and delta >= 450:
+                        return
+                    key = item[0].uci()
+                    if any(existing[0].uci() == key for existing in bucket):
+                        return
+                    bucket.append(item)
+
+                # Deliberately cover the opponent buckets the study should teach:
+                # engine best, database most-played, and realistic inaccuracies.
+                if include_best_engine_replies and top_best_uci:
+                    _add_opponent_candidate(
+                        selected,
+                        next((item for item in ranked if item[0].uci() == top_best_uci), None),
+                    )
+                _add_opponent_candidate(
+                    selected,
+                    next(
+                        (
+                            item
+                            for item in sorted(
+                                candidate_moves,
+                                key=lambda item: (float(item[4]), int(item[5])),
+                                reverse=True,
+                            )
+                        ),
+                        None,
+                    ),
+                )
+                if include_mistakes:
+                    for weak_category in ("Inaccuracy", "Mistake"):
+                        _add_opponent_candidate(
+                            selected,
+                            next((item for item in ranked if item[6] == weak_category), None),
+                        )
+                if include_blunders:
+                    _add_opponent_candidate(
+                        selected,
+                        next((item for item in ranked if item[6] == "Blunder"), None),
+                    )
                 for item in ranked:
                     if len(selected) >= opponent_replies:
                         break
-                    _, _, cp, _, _, _, category, _ = item
-                    delta = abs(cp - eval_before)
-                    if eco_only_mode:
-                        if category not in {"Mainline", "Popular"}:
-                            continue
-                    if category == "Sideline" and not include_rare_sidelines:
-                        continue
-                    if category == "Blunder" and not include_blunders:
-                        continue
-                    if category in {"Inaccuracy", "Mistake"} and not include_mistakes:
-                        continue
-                    if avoid_absurd_moves and delta >= 450:
-                        continue
-                    selected.append(item)
+                    _add_opponent_candidate(selected, item)
                 candidate_moves = selected or ranked[:opponent_replies]
                 # Keep one engine-top defensive resource available when enabled,
                 # even if weighting/filtering picked only weaker human-like lines.
@@ -2710,7 +3473,20 @@ def generate_smart_theory_tree(
                     continue
                 line_pv = line_meta.get("pv") or []
                 pv_san, pv_uci = _pv_sans(current_board, line_pv)
-                move_class = user_category(eval_swing) if user_to_move else category
+                recommended_user_reply_uci = ""
+                recommended_user_reply_san = ""
+                if not user_to_move:
+                    if len(pv_uci) >= 2:
+                        recommended_user_reply_uci = str(pv_uci[1] or "").strip()
+                    if len(pv_san) >= 2:
+                        recommended_user_reply_san = str(pv_san[1] or "").strip()
+                is_engine_best_reply = bool((not user_to_move) and top_best_uci and move.uci() == top_best_uci)
+                user_loss = user_loss_cp(
+                    before_white_cp=eval_before,
+                    after_white_cp=eval_after,
+                    mover_color=current_board.turn,
+                ) if user_to_move else 0
+                move_class = user_category(user_loss) if user_to_move else category
                 original_user_move = ""
                 corrected_move = ""
                 correction_note = ""
@@ -2732,13 +3508,25 @@ def generate_smart_theory_tree(
                             ),
                             None,
                         )
-                        ref_cp = score_white_cp(candidate, current_board.turn) if candidate else eval_before
-                        ref_delta = abs(eval_before - ref_cp)
-                        ref_class = user_category(ref_delta)
-                        correction_note = (
-                            f" Correction: your played-line move {expected_user_move_uci} is classified as {ref_class}. "
-                            f"Use {move.uci()} instead."
-                        )
+                        if candidate is None:
+                            candidate = user_line_for_uci(expected_user_move_uci)
+                        if candidate is not None:
+                            ref_cp = score_white_cp(candidate, current_board.turn)
+                            ref_loss = user_loss_cp(
+                                before_white_cp=eval_before,
+                                after_white_cp=ref_cp,
+                                mover_color=current_board.turn,
+                            )
+                            ref_class = user_category(ref_loss)
+                            correction_note = (
+                                f" Correction: your played-line move {expected_user_move_uci} is classified as {ref_class}. "
+                                f"Use {move.uci()} instead."
+                            )
+                        else:
+                            correction_note = (
+                                f" Correction: your played-line move {expected_user_move_uci} was outside the legal/engine candidate set here. "
+                                f"Use {move.uci()} instead."
+                            )
                 theory, plan, opp_idea = _smart_rule_explanation(
                     current_board,
                     move,
@@ -2747,9 +3535,28 @@ def generate_smart_theory_tree(
                     is_user_side=user_to_move,
                     classification=move_class,
                     eval_swing=eval_swing,
+                    is_engine_best_reply=is_engine_best_reply,
+                    recommended_user_reply_san=recommended_user_reply_san,
+                    recommended_user_reply_uci=recommended_user_reply_uci,
+                    pv_preview=pv_san[:6],
                 )
                 if correction_note:
                     theory = f"{theory}{correction_note}"
+                tactical_reasons, tactical_motifs = _move_tactical_annotations(current_board, move, next_board)
+                if tactical_reasons:
+                    theory = f"{theory} Tactical note: {' '.join(tactical_reasons[:2])}"
+                explanation_blocks = _smart_explanation_blocks(
+                    san=san,
+                    is_user_side=bool(user_to_move),
+                    classification=str(move_class or ""),
+                    eval_swing=int(eval_swing or 0),
+                    is_engine_best_reply=bool(is_engine_best_reply),
+                    recommended_user_reply_san=recommended_user_reply_san,
+                    recommended_user_reply_uci=recommended_user_reply_uci,
+                    theory=theory,
+                    plan=plan,
+                    opponent_idea=opp_idea,
+                )
                 learning_priority, learning_reason = learning_priority_for_node(
                     is_user_side=bool(user_to_move),
                     is_corrected_move=bool(corrected_move),
@@ -2772,26 +3579,39 @@ def generate_smart_theory_tree(
                     "evalBefore": eval_before,
                     "evalAfter": eval_after,
                     "evalSwing": eval_swing,
+                    "userLossCp": int(user_loss) if user_to_move else 0,
                     "bestMoveUci": top_best_uci or (pv_uci[0] if pv_uci else ""),
                     "bestMoveSan": pv_san[0] if pv_san else "",
-                    "principalVariation": pv_san[:8],
+                    "principalVariation": pv_san[:16],
+                    "principalVariationUci": pv_uci[:40],
+                    "continuationAfterMoveUci": pv_uci[1:40],
                     "engineDepth": int(engine.settings.depth),
                     "databaseMoves": db_moves[:8],
                     "popularity": round(float(popularity), 2),
                     "gameCount": int(game_count),
                     "classification": move_class,
+                    "isBestEngineReply": bool(is_engine_best_reply),
                     "opponentAccuracy": opponent_accuracy,
                     "isUserSide": bool(user_to_move),
                     "isOpponentSide": bool(not user_to_move),
                     "isCorrectedMove": bool(corrected_move),
                     "originalUserMove": original_user_move,
                     "correctedMove": corrected_move,
+                    "stylePreferredMoveUci": style_preferred_uci if user_to_move else "",
+                    "stylePreferredMoveWeight": float(style_prior_map.get(style_preferred_uci, 0.0) or 0.0) if (user_to_move and style_preferred_uci) else 0.0,
+                    "styleMatchedMove": bool(user_to_move and style_preferred_uci and move.uci() == style_preferred_uci),
+                    "recommendedResponseUci": recommended_user_reply_uci if not user_to_move else "",
+                    "recommendedResponseSan": recommended_user_reply_san if not user_to_move else "",
                     "learningPriority": int(learning_priority),
                     "learningReason": learning_reason,
                     "theoryExplanation": theory,
                     "planForUser": plan,
                     "opponentIdea": opp_idea if not user_to_move else "",
-                    "tacticalMotifs": motifs_for_move(current_board, move),
+                    "threatSummary": str(explanation_blocks.get("threat", "") or ""),
+                    "whyMoveGoodOrBad": str(explanation_blocks.get("why", "") or ""),
+                    "bestResponseSummary": str(explanation_blocks.get("best_response", "") or ""),
+                    "followUpPlan": str(explanation_blocks.get("follow_up", "") or ""),
+                    "tacticalMotifs": tactical_motifs or motifs_for_move(current_board, move),
                     "importantSquares": ["d4", "d5", "e4", "e5"],
                     "pawnBreaks": ["c4", "d4", "e4"] if my_color == "white" else ["c5", "d5", "e5"],
                     "children": [],
@@ -2850,6 +3670,9 @@ def generate_smart_theory_tree(
         "starting_source": starting_source,
         "opening_focus": effective_opening_focus,
         "applied_start_line_uci": applied_start_moves,
+        "user_book_line_uci": remaining_user_line_uci,
+        "user_book_line_source": inferred_user_line_source or ("payload" if user_book_line_uci else ""),
+        "user_style_positions_count": len(user_style_move_priors),
         "learning_queue_count": len(learning_queue),
         "corrected_nodes_count": len(corrected_nodes),
         "user_weak_nodes_count": len(user_weak_nodes),
@@ -2881,6 +3704,9 @@ def generate_smart_theory_tree(
             "avoid_absurd_moves": avoid_absurd_moves,
             "eco_only_mode": eco_only_mode,
             "cache_evaluations": cache_evals,
+            "expected_move_confidence_cp": expected_move_confidence_cp,
+            "style_move_confidence_cp": style_move_confidence_cp,
+            "style_preferred_min_weight": style_preferred_min_weight,
             "worker_count": worker_count,
         },
     }

@@ -168,6 +168,216 @@ h1 {
   gap: 28px;
 }
 
+.progress-cockpit-section {
+  border-color: rgba(101, 195, 106, 0.24);
+  background:
+    linear-gradient(145deg, rgba(101, 195, 106, 0.10), rgba(8, 12, 10, 0.02) 34%),
+    rgba(10, 15, 12, 0.45);
+}
+
+.progress-cockpit-head,
+.progress-cockpit-actions,
+.progress-projection-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.progress-cockpit-actions {
+  justify-content: flex-end;
+}
+
+.progress-mode-tabs {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid rgba(101, 195, 106, 0.22);
+  border-radius: 999px;
+  background: rgba(5, 10, 7, 0.65);
+}
+
+.progress-mode-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.progress-mode-btn.active {
+  background: var(--accent);
+  color: #061008;
+}
+
+.progress-metric-grid-v2 {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.progress-stat-card,
+.progress-phase-row,
+.progress-goal-card,
+.progress-projection-card,
+.progress-time-row,
+.progress-session-item,
+.progress-recommendation-card {
+  min-width: 0;
+  border: 1px solid rgba(101, 195, 106, 0.16);
+  border-radius: 14px;
+  background: rgba(3, 8, 5, 0.45);
+  padding: 14px;
+}
+
+.progress-stat-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: clamp(1.45rem, 2.4vw, 2.4rem);
+  line-height: 1;
+  color: var(--text-strong);
+}
+
+.progress-stat-card span,
+.progress-stat-card small {
+  color: var(--muted);
+}
+
+.progress-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.progress-dashboard-grid.lower {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.85fr);
+}
+
+.progress-chart-card {
+  min-width: 0;
+}
+
+.progress-chart-card .progress-canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+}
+
+.progress-phase-row,
+.progress-goal-top {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-bar {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.progress-bar span {
+  display: block;
+  width: var(--progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), #d8ec74);
+}
+
+.progress-goal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.progress-goal-card {
+  display: grid;
+  gap: 10px;
+}
+
+.progress-goal-top {
+  grid-template-columns: minmax(0, 1fr) auto;
+  font-size: 0.9rem;
+}
+
+.progress-session-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.85fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.progress-session-form {
+  display: grid;
+  gap: 12px;
+}
+
+.progress-session-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.progress-time-row,
+.progress-projection-card {
+  display: grid;
+  grid-template-columns: 112px repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.progress-projection-card {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.progress-projection-card > div {
+  min-width: 0;
+}
+
+.progress-projection-card > div:first-child {
+  grid-column: 1 / -1;
+}
+
+.progress-projection-card span,
+.progress-projection-card b,
+.progress-projection-card small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.progress-recommendation-card strong {
+  color: var(--accent);
+}
+
+@media (max-width: 1100px) {
+  .progress-metric-grid-v2,
+  .progress-dashboard-grid,
+  .progress-dashboard-grid.lower,
+  .progress-session-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-session-grid,
+  .progress-goal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .progress-metric-grid-v2,
+  .progress-session-grid,
+  .progress-goal-grid,
+  .progress-time-row,
+  .progress-projection-card {
+    grid-template-columns: 1fr;
+  }
+}
+
 .setup-layout,
 .split-grid,
 .study-layout {
@@ -260,34 +470,61 @@ h1 {
 
 .smart-theory-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.smart-theory-lab-card,
+.smart-theory-result-card {
+  overflow: hidden;
 }
 
 .smart-theory-guidance {
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(125, 162, 255, 0.22);
-  background: linear-gradient(120deg, rgba(29, 41, 63, 0.46), rgba(14, 20, 31, 0.72));
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 14px;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(125, 162, 255, 0.24);
+  background:
+    radial-gradient(circle at top left, rgba(125, 162, 255, 0.2), transparent 34%),
+    linear-gradient(135deg, rgba(26, 40, 63, 0.82), rgba(8, 13, 20, 0.88));
+}
+
+.smart-eyebrow {
+  margin: 0 0 4px;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .smart-theory-guidance p {
   margin: 0;
   color: var(--muted);
   line-height: 1.6;
+  max-width: 68ch;
 }
 
 .smart-theory-presets {
   margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
+  align-items: center;
 }
 
 .smart-preset-btn {
-  min-width: 112px;
+  width: auto;
+  min-width: 116px;
+  min-height: 42px;
+  padding: 9px 14px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .smart-theory-controls {
@@ -296,28 +533,150 @@ h1 {
   gap: 12px;
 }
 
-.mini-board-wrap {
+.smart-quick-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.smart-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.smart-action-row .ghost-btn,
+.smart-action-row .launch-btn,
+.smart-action-row label.ghost-btn {
+  width: auto;
+  min-width: 104px;
+  min-height: 44px;
+  padding: 10px 15px;
+  margin-top: 0;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.smart-action-row #smartTheoryPreviewChaptersBtn,
+.smart-action-row #smartTheoryCheckStudyBtn,
+.smart-action-row #smartTheoryFreshStudyBtn {
+  min-width: 176px;
+}
+
+.smart-action-row #smartTheoryExportLichessBtn {
+  min-width: 204px;
+}
+
+.smart-theory-lab-card > .stack.empty {
+  display: none;
+}
+
+.smart-theory-lab-card > .stack:not(.empty) {
+  display: block;
   margin-top: 12px;
 }
 
-.mini-board-grid {
+.smart-status-panel {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  overflow: hidden;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
 }
 
-.mini-board-square {
-  min-height: 34px;
+.smart-status-panel > div {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(6, 12, 19, 0.62);
+}
+
+.smart-status-panel span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.smart-status-panel strong {
+  display: block;
+  color: var(--text-strong);
+  line-height: 1.35;
+}
+
+.smart-advanced-settings {
+  margin: 14px 0;
+  border: 1px solid rgba(125, 162, 255, 0.18);
+  border-radius: 18px;
+  background: rgba(5, 11, 18, 0.46);
+}
+
+.smart-advanced-settings summary {
   display: flex;
+  justify-content: space-between;
+  gap: 14px;
   align-items: center;
-  justify-content: center;
-  font-size: 18px;
+  padding: 14px 16px;
+  color: var(--text-strong);
+  cursor: pointer;
+  font-weight: 700;
 }
 
-.mini-board-square.light { background: #e6d2b0; color: #1d1d1d; }
-.mini-board-square.dark { background: #b48767; color: #1d1d1d; }
+.smart-advanced-settings summary span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.smart-advanced-grid {
+  padding: 0 16px 16px;
+}
+
+.smart-field-note {
+  grid-column: 1 / -1;
+}
+
+.mini-board-wrap {
+  display: grid;
+  place-items: center;
+  margin-top: 16px;
+}
+
+.smart-theory-mini-board {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(125, 162, 255, 0.08), rgba(91, 220, 166, 0.03)),
+    rgba(9, 14, 20, 0.84);
+}
+
+.smart-theory-mini-board .mini-board {
+  width: min(100%, 360px);
+  max-width: 360px;
+}
+
+.smart-theory-mini-board.empty {
+  min-height: 72px;
+  align-items: center;
+  text-align: center;
+  color: var(--muted);
+}
+
+#smartTheoryLichessHint {
+  margin-top: 8px;
+}
 
 .smart-tree-row {
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -389,17 +748,86 @@ h1 {
   background: linear-gradient(145deg, rgba(59, 30, 36, 0.72), rgba(14, 20, 29, 0.82));
 }
 
+.smart-chapter-preview-row {
+  border: 1px solid rgba(125, 162, 255, 0.28);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(13, 20, 31, 0.76);
+}
+
+.smart-chapter-preview-row strong {
+  color: var(--text-strong);
+}
+
+.smart-chapter-preview-meta {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.smart-chapter-preview-line {
+  margin-top: 6px;
+  color: var(--text);
+}
+
+.smart-chapter-preview-actions {
+  margin-top: 8px;
+}
+
+.smart-tree-toolbar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.smart-tree-section {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.smart-tree-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(125, 162, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(15, 23, 36, 0.72);
+}
+
+.smart-tree-section-head strong {
+  color: var(--text-strong);
+}
+
+.smart-tree-section-count {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
 @media (max-width: 1200px) {
   .smart-theory-layout {
     grid-template-columns: 1fr;
   }
 
   .smart-theory-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .smart-tree-toolbar {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 760px) {
+  .smart-theory-controls {
+    grid-template-columns: 1fr;
+  }
+
   .smart-theory-presets {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -907,7 +1335,6 @@ select:focus {
 .stats-summary-panel.empty,
 .brilliant-tracker-panel.empty,
 .brilliant-progress-panel.empty,
-.rating-progress-panel.empty,
 .stockfish-stats-panel.empty,
 .heatmap-panel.empty,
 .timeline-panel.empty {
@@ -1465,11 +1892,6 @@ select:focus {
 .schedule-row:hover {
   border-color: rgba(115, 158, 255, 0.58);
   transform: translateY(-1px);
-}
-
-.rating-progress-panel {
-  display: grid;
-  gap: 16px;
 }
 
 .rating-progress-head {
@@ -4735,4 +5157,69 @@ button.retry-card {
   :root[data-bookup-ui="compact-redesign-v8"] .compact-work-card .queue-factor-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Smart Theory must always render as a real square board, even in compact UI mode. */
+.smart-theory-mini-board:not(.empty) {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .smart-theory-mini-board .mini-board,
+.smart-theory-mini-board .mini-board {
+  width: min(72vw, 420px);
+  max-width: 420px;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
+}
+
+:root[data-bookup-ui="compact-redesign-v8"] .smart-theory-mini-board .mini-square img,
+.smart-theory-mini-board .mini-square img {
+  width: 88%;
+  height: 88%;
+  max-width: 88%;
+  max-height: 88%;
+}
+
+@media (max-width: 980px) {
+  .smart-quick-grid,
+  .smart-status-panel {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .smart-quick-grid,
+  .smart-status-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .smart-theory-guidance {
+    grid-template-columns: 1fr;
+  }
+
+  :root[data-bookup-ui="compact-redesign-v8"] .smart-theory-mini-board .mini-board,
+  .smart-theory-mini-board .mini-board {
+    width: min(86vw, 360px);
+  }
+}
+
+.smart-study-chapter-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.smart-study-chapter-list li {
+  margin: 4px 0;
+  line-height: 1.45;
+}
+
+.smart-study-chapter-list span {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }

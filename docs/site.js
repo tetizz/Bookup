@@ -114,6 +114,122 @@ const ratingDemoProfiles = {
   },
 };
 
+function formatCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString("en-US") : "0";
+}
+
+function readChessComMode(stats, key) {
+  const mode = stats?.[`chess_${key}`];
+  if (!mode?.last) {
+    return { available: false };
+  }
+  const record = mode.record || {};
+  const wins = Number(record.win || 0);
+  const draws = Number(record.draw || 0);
+  const losses = Number(record.loss || 0);
+  const games = wins + draws + losses;
+  return {
+    available: true,
+    rating: Number(mode.last.rating || 0),
+    wins,
+    draws,
+    losses,
+    games,
+  };
+}
+
+function renderLiveMode(key, mode) {
+  const ratingNode = document.querySelector(`[data-live-rating="${key}"]`);
+  const recordNode = document.querySelector(`[data-live-record="${key}"]`);
+  if (!ratingNode || !recordNode) return;
+
+  if (!mode.available) {
+    ratingNode.textContent = "-";
+    recordNode.textContent = "No public games found";
+    return;
+  }
+
+  ratingNode.textContent = String(mode.rating || "-");
+  recordNode.textContent = `${formatCount(mode.games)} games · ${formatCount(mode.wins)}W ${formatCount(mode.draws)}D ${formatCount(mode.losses)}L`;
+}
+
+function setLiveLookupStatus(message, isError = false) {
+  const card = document.querySelector(".live-lookup-card");
+  const status = document.getElementById("liveLookupStatus");
+  if (card) card.classList.toggle("error", isError);
+  if (status) status.textContent = message;
+}
+
+async function fetchChessComStats(username) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(username)}/stats`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (response.status === 404) {
+      throw new Error(`Chess.com user "${username}" was not found.`);
+    }
+    if (response.status === 429) {
+      throw new Error("Chess.com is rate limiting public requests right now. Try again in a bit.");
+    }
+    if (!response.ok) {
+      throw new Error(`Chess.com returned HTTP ${response.status}.`);
+    }
+    return await response.json();
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function refreshLiveLookup(username) {
+  const cleanUsername = String(username || "").trim();
+  const form = document.getElementById("liveLookupForm");
+  const button = form?.querySelector("button");
+  if (!cleanUsername) {
+    setLiveLookupStatus("Enter a Chess.com username to refresh public stats.", true);
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Loading";
+  }
+  setLiveLookupStatus(`Fetching real public stats for ${cleanUsername}...`);
+
+  try {
+    const stats = await fetchChessComStats(cleanUsername);
+    ["rapid", "blitz", "bullet"].forEach((key) => renderLiveMode(key, readChessComMode(stats, key)));
+    setLiveLookupStatus(`Showing live Chess.com public stats for ${cleanUsername}.`);
+  } catch (error) {
+    ["rapid", "blitz", "bullet"].forEach((key) => renderLiveMode(key, { available: false }));
+    const message = error?.name === "AbortError"
+      ? "Chess.com took too long to respond. Check your connection and try again."
+      : error?.message || "Could not load Chess.com public stats.";
+    setLiveLookupStatus(message, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Refresh";
+    }
+  }
+}
+
+function bindLiveLookup() {
+  const form = document.getElementById("liveLookupForm");
+  const input = document.getElementById("liveUsername");
+  if (!form || !input) return;
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void refreshLiveLookup(input.value);
+  });
+
+  void refreshLiveLookup(input.value);
+}
+
 function squareCenter(square) {
   const file = square[0];
   const rank = Number(square[1]);
@@ -432,3 +548,4 @@ updateStudy("book");
 bindTabs();
 bindChoices();
 bindRatingDemo();
+bindLiveLookup();

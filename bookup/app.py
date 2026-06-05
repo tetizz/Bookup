@@ -40,6 +40,13 @@ from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_clas
 from .classifications import book_classification_payload
 from .engine import EnginePool, EngineSettings, default_engine_path
 from .opening_names import lookup_by_board
+from .progress_tracker import (
+    ProgressError,
+    build_progress_payload,
+    refresh_progress,
+    save_progress_settings,
+    save_session,
+)
 from .realign import START_FEN as REALIGN_START_FEN, build_realign_plan
 from .storage import LocalStore, deserialize_games, serialize_games
 
@@ -536,6 +543,207 @@ def _smart_tree_children(nodes: list[dict[str, Any]]) -> tuple[str, dict[str, li
     return root_id, children, by_id
 
 
+def _same_export_position(left: chess.Board, right: chess.Board) -> bool:
+    """Compare only the fields that determine legal continuation from a PGN node."""
+    return (
+        left.board_fen() == right.board_fen()
+        and left.turn == right.turn
+        and left.castling_rights == right.castling_rights
+        and left.ep_square == right.ep_square
+    )
+
+
+def _smart_tree_export_context(
+    tree_payload: dict[str, Any],
+    root_node: dict[str, Any],
+    warnings: list[str],
+) -> tuple[chess.Board, list[chess.Move]]:
+    """Return the PGN start board plus setup moves that reach the generated root.
+
+    Smart Theory generation may start from an already-applied repertoire setup.
+    For Lichess studies, exporting that setup as a FEN hides how the position was
+    reached. Prefer the original start FEN plus the applied setup moves whenever
+    they legally replay into the generated root position.
+    """
+    effective_fen = (
+        str(tree_payload.get("effective_start_fen", "") or "").strip()
+        or str(root_node.get("fen", "") or "").strip()
+        or chess.STARTING_FEN
+    )
+    original_fen = (
+        str(tree_payload.get("start_fen", "") or "").strip()
+        or effective_fen
+        or chess.STARTING_FEN
+    )
+    raw_setup = [
+        str(item or "").strip()
+        for item in (tree_payload.get("applied_start_line_uci") or [])
+        if str(item or "").strip()
+    ]
+
+    try:
+        fallback_board = chess.Board(effective_fen)
+    except ValueError:
+        fallback_board = chess.Board(chess.STARTING_FEN)
+        warnings.append("Smart Theory effective root FEN was invalid; used the standard start position.")
+
+    try:
+        start_board = chess.Board(original_fen)
+    except ValueError as exc:
+        warnings.append(f"Smart Theory original start FEN was invalid; exported from generated root instead: {exc}")
+        return fallback_board, []
+
+    if not raw_setup:
+        return start_board, []
+
+    replay = start_board.copy(stack=False)
+    setup_moves: list[chess.Move] = []
+    for move_uci in raw_setup:
+        try:
+            move = chess.Move.from_uci(move_uci)
+        except ValueError:
+            warnings.append(f"Skipped setup path because {move_uci} is not valid UCI; exported from generated root instead.")
+            return fallback_board, []
+        if move not in replay.legal_moves:
+            warnings.append(f"Skipped setup path because {move_uci} is illegal from the exported start position.")
+            return fallback_board, []
+        setup_moves.append(move)
+        replay.push(move)
+
+    if not _same_export_position(replay, fallback_board):
+        warnings.append("Skipped setup path because it did not reach the generated Smart Theory root position.")
+        return fallback_board, []
+    return start_board, setup_moves
+
+
+def _append_smart_setup_moves(
+    *,
+    game: chess.pgn.Game,
+    board: chess.Board,
+    setup_moves: list[chess.Move],
+) -> tuple[chess.pgn.GameNode, chess.Board, int, list[str]]:
+    parent_pgn_node: chess.pgn.GameNode = game
+    parent_board = board
+    setup_san: list[str] = []
+    for move in setup_moves:
+        san = parent_board.san(move)
+        next_board = parent_board.copy(stack=False)
+        next_board.push(move)
+        setup_san.append(san)
+        parent_pgn_node = parent_pgn_node.add_variation(move)
+        parent_board = next_board
+    if setup_san:
+        parent_pgn_node.comment = "Setup from your repertoire; generated line starts here."
+    return parent_pgn_node, parent_board, len(setup_moves), setup_san
+
+
+def _smart_comment_fragment(raw: object, *, limit: int = 72) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    if not text:
+        return ""
+    text = re.sub(r"^(theory|plan|why|threat|best response)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[: max(0, limit - 1)].rsplit(" ", 1)[0].strip()
+    return f"{cut or text[: max(0, limit - 1)].strip()}…"
+
+
+def _smart_node_comment(node: dict[str, Any]) -> str:
+    """Compact PGN comments for Lichess studies.
+
+    The in-app tree keeps the full coaching text. Lichess should stay scannable,
+    so each move gets only classification, eval, correction/response, and one
+    short idea instead of the complete explanation block.
+    """
+    parts: list[str] = []
+    classification = str(node.get("classification", "") or "").strip()
+    is_opponent = bool(node.get("isOpponentSide"))
+    is_user = bool(node.get("isUserSide"))
+    san = str(node.get("san", "") or node.get("uci", "") or "").strip()
+    best = str(node.get("bestMoveSan", "") or node.get("bestMoveUci", "") or "").strip()
+    pv = [str(item or "").strip() for item in (node.get("principalVariation") or []) if str(item or "").strip()]
+    if is_opponent:
+        if bool(node.get("isBestEngineReply")):
+            parts.append("Opponent: best engine move")
+        elif classification:
+            parts.append(f"Opponent: {classification}")
+    elif is_user and classification:
+        parts.append(f"You: {classification}")
+    elif classification:
+        parts.append(f"Class: {classification}")
+
+    eval_after = node.get("evalAfter")
+    if isinstance(eval_after, (int, float)):
+        parts.append(f"Eval {float(eval_after) / 100:.2f}")
+
+    original = str(node.get("originalUserMove", "") or "").strip()
+    corrected = str(node.get("correctedMove", "") or "").strip()
+    if original and corrected:
+        parts.append(f"Correction: your line had {original}; play {corrected}")
+    if best:
+        if best == san:
+            parts.append(f"Best move: {best}")
+        else:
+            parts.append(f"Best move here: {best}")
+
+    recommended_response = str(node.get("recommendedResponseSan", "") or node.get("recommendedResponseUci", "") or "").strip()
+    if recommended_response:
+        parts.append(f"Your reply: {recommended_response}")
+    if pv:
+        parts.append(f"PV: {' '.join(pv[:10])}")
+
+    threat = _smart_comment_fragment(node.get("threatSummary"), limit=68)
+    if threat:
+        parts.append(f"Threat: {threat}")
+    else:
+        idea = _smart_comment_fragment(node.get("opponentIdea") or node.get("whyMoveGoodOrBad") or node.get("planForUser"), limit=68)
+        if idea:
+            parts.append(f"Idea: {idea}")
+
+    return _smart_comment_fragment(" | ".join(part for part in parts if part), limit=360)
+
+
+SMART_THEORY_EXPORT_TARGET_PLIES = 40
+
+
+def _append_smart_pv_tail(
+    *,
+    parent_pgn_node: chess.pgn.GameNode,
+    parent_board: chess.Board,
+    node_payload: dict[str, Any],
+    depth: int,
+    warnings: list[str],
+    target_depth: int = SMART_THEORY_EXPORT_TARGET_PLIES,
+) -> int:
+    """Extend a short leaf with its engine PV so chapters still reach move 20."""
+    if depth >= target_depth:
+        return 0
+    raw_tail = node_payload.get("continuationAfterMoveUci") or []
+    if not isinstance(raw_tail, list) or not raw_tail:
+        return 0
+    cursor_node = parent_pgn_node
+    cursor_board = parent_board.copy(stack=False)
+    added = 0
+    for raw_uci in raw_tail:
+        if depth + added >= target_depth:
+            break
+        uci = str(raw_uci or "").strip()
+        if not uci:
+            continue
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            warnings.append(f"Skipped PV tail move; invalid UCI: {uci}.")
+            break
+        if move not in cursor_board.legal_moves:
+            warnings.append(f"Stopped PV tail; move {uci} is illegal in this branch.")
+            break
+        cursor_node = cursor_node.add_variation(move)
+        cursor_board.push(move)
+        added += 1
+    return added
+
+
 def _smart_tree_to_pgn(tree_payload: dict[str, Any], *, chapter_name: str = "Bookup Smart Theory") -> tuple[str, dict[str, Any]]:
     nodes = tree_payload.get("nodes", [])
     if not isinstance(nodes, list) or not nodes:
@@ -545,16 +753,8 @@ def _smart_tree_to_pgn(tree_payload: dict[str, Any], *, chapter_name: str = "Boo
     if not isinstance(root_node, dict):
         raise ValueError("Smart theory root node is missing.")
 
-    start_fen = (
-        str(tree_payload.get("effective_start_fen", "") or "").strip()
-        or str(tree_payload.get("start_fen", "") or "").strip()
-        or str(root_node.get("fen", "") or "").strip()
-        or chess.STARTING_FEN
-    )
-    try:
-        board = chess.Board(start_fen)
-    except ValueError as exc:
-        raise ValueError(f"Could not build PGN from Smart Theory root FEN: {exc}") from exc
+    warnings: list[str] = []
+    board, setup_moves = _smart_tree_export_context(tree_payload, root_node, warnings)
 
     game = chess.pgn.Game()
     game.headers["Event"] = chapter_name
@@ -574,38 +774,20 @@ def _smart_tree_to_pgn(tree_payload: dict[str, Any], *, chapter_name: str = "Boo
         game.headers["SetUp"] = "1"
         game.headers["FEN"] = board.fen()
 
-    warnings: list[str] = []
-    move_count = 0
+    setup_node, setup_board, setup_count, setup_san = _append_smart_setup_moves(
+        game=game,
+        board=board,
+        setup_moves=setup_moves,
+    )
+    move_count = setup_count
     edge_seen: set[tuple[str, str]] = set()
-
-    def _comment_for(node: dict[str, Any]) -> str:
-        parts: list[str] = []
-        classification = str(node.get("classification", "") or "").strip()
-        if classification:
-            parts.append(f"Class: {classification}")
-        eval_after = node.get("evalAfter")
-        if isinstance(eval_after, (int, float)):
-            parts.append(f"Eval: {float(eval_after) / 100:.2f}")
-        best = str(node.get("bestMoveSan", "") or node.get("bestMoveUci", "") or "").strip()
-        if best:
-            parts.append(f"Best: {best}")
-        original = str(node.get("originalUserMove", "") or "").strip()
-        corrected = str(node.get("correctedMove", "") or "").strip()
-        if original and corrected:
-            parts.append(f"Correction: played {original}, best is {corrected}")
-        theory = str(node.get("theoryExplanation", "") or "").strip()
-        if theory:
-            parts.append(theory)
-        plan = str(node.get("planForUser", "") or "").strip()
-        if plan:
-            parts.append(f"Plan: {plan}")
-        return " | ".join(parts).strip()
 
     def _walk(parent_id: str, parent_pgn_node: chess.pgn.GameNode, parent_board: chess.Board, depth: int) -> None:
         nonlocal move_count
         if depth > 60:
             return
         branch_children = children.get(parent_id, [])
+        legal_children_added = 0
         for child in branch_children:
             child_id = str(child.get("id", "") or "")
             if not child_id:
@@ -629,13 +811,24 @@ def _smart_tree_to_pgn(tree_payload: dict[str, Any], *, chapter_name: str = "Boo
             child_board = parent_board.copy(stack=False)
             child_board.push(move)
             move_count += 1
+            legal_children_added += 1
             child_pgn_node = parent_pgn_node.add_variation(move)
-            comment = _comment_for(child)
+            comment = _smart_node_comment(child)
             if comment:
                 child_pgn_node.comment = comment
             _walk(child_id, child_pgn_node, child_board, depth + 1)
+        if legal_children_added == 0 and parent_id != root_id:
+            current_node = by_id.get(parent_id, {})
+            if isinstance(current_node, dict):
+                move_count += _append_smart_pv_tail(
+                    parent_pgn_node=parent_pgn_node,
+                    parent_board=parent_board,
+                    node_payload=current_node,
+                    depth=depth,
+                    warnings=warnings,
+                )
 
-    _walk(root_id, game, board, 0)
+    _walk(root_id, setup_node, setup_board, setup_count)
     if move_count <= 0:
         raise ValueError("Smart theory tree did not contain any legal moves to export.")
 
@@ -644,6 +837,8 @@ def _smart_tree_to_pgn(tree_payload: dict[str, Any], *, chapter_name: str = "Boo
     metadata = {
         "root_id": root_id,
         "moves_exported": move_count,
+        "setup_moves_exported": setup_count,
+        "setup_san": setup_san,
         "warnings": warnings[:50],
         "start_fen": board.fen(),
     }
@@ -666,16 +861,8 @@ def _smart_subtree_to_pgn(
     if not isinstance(root_node, dict) or not isinstance(anchor, dict):
         raise ValueError("Could not find a valid anchor node in the Smart Theory tree.")
 
-    start_fen = (
-        str(tree_payload.get("effective_start_fen", "") or "").strip()
-        or str(tree_payload.get("start_fen", "") or "").strip()
-        or str(root_node.get("fen", "") or "").strip()
-        or chess.STARTING_FEN
-    )
-    try:
-        board = chess.Board(start_fen)
-    except ValueError as exc:
-        raise ValueError(f"Could not build PGN from Smart Theory root FEN: {exc}") from exc
+    warnings: list[str] = []
+    board, setup_moves = _smart_tree_export_context(tree_payload, root_node, warnings)
 
     game = chess.pgn.Game()
     game.headers["Event"] = chapter_name
@@ -689,38 +876,20 @@ def _smart_subtree_to_pgn(
         game.headers["SetUp"] = "1"
         game.headers["FEN"] = board.fen()
 
-    warnings: list[str] = []
-    move_count = 0
+    setup_node, setup_board, setup_count, setup_san = _append_smart_setup_moves(
+        game=game,
+        board=board,
+        setup_moves=setup_moves,
+    )
+    move_count = setup_count
     edge_seen: set[tuple[str, str]] = set()
-
-    def _comment_for(node: dict[str, Any]) -> str:
-        parts: list[str] = []
-        classification = str(node.get("classification", "") or "").strip()
-        if classification:
-            parts.append(f"Class: {classification}")
-        eval_after = node.get("evalAfter")
-        if isinstance(eval_after, (int, float)):
-            parts.append(f"Eval: {float(eval_after) / 100:.2f}")
-        best = str(node.get("bestMoveSan", "") or node.get("bestMoveUci", "") or "").strip()
-        if best:
-            parts.append(f"Best: {best}")
-        original = str(node.get("originalUserMove", "") or "").strip()
-        corrected = str(node.get("correctedMove", "") or "").strip()
-        if original and corrected:
-            parts.append(f"Correction: played {original}, best is {corrected}")
-        theory = str(node.get("theoryExplanation", "") or "").strip()
-        if theory:
-            parts.append(theory)
-        plan = str(node.get("planForUser", "") or "").strip()
-        if plan:
-            parts.append(f"Plan: {plan}")
-        return " | ".join(parts).strip()
 
     def _walk(parent_id: str, parent_pgn_node: chess.pgn.GameNode, parent_board: chess.Board, depth: int) -> None:
         nonlocal move_count
         if depth > 60:
             return
         branch_children = children.get(parent_id, [])
+        legal_children_added = 0
         for child in branch_children:
             child_id = str(child.get("id", "") or "")
             if not child_id:
@@ -744,15 +913,26 @@ def _smart_subtree_to_pgn(
             child_board = parent_board.copy(stack=False)
             child_board.push(move)
             move_count += 1
+            legal_children_added += 1
             child_pgn_node = parent_pgn_node.add_variation(move)
-            comment = _comment_for(child)
+            comment = _smart_node_comment(child)
             if comment:
                 child_pgn_node.comment = comment
             _walk(child_id, child_pgn_node, child_board, depth + 1)
+        if legal_children_added == 0 and parent_id != root_id:
+            current_node = by_id.get(parent_id, {})
+            if isinstance(current_node, dict):
+                move_count += _append_smart_pv_tail(
+                    parent_pgn_node=parent_pgn_node,
+                    parent_board=parent_board,
+                    node_payload=current_node,
+                    depth=depth,
+                    warnings=warnings,
+                )
 
     anchor_parent = str(anchor.get("parentId", "") or "")
     if include_root_siblings and anchor_parent == root_id:
-        _walk(root_id, game, board, 0)
+        _walk(root_id, setup_node, setup_board, setup_count)
     else:
         # Build the path from root to anchor so chapter starts with familiar line.
         chain: list[dict[str, Any]] = []
@@ -763,8 +943,8 @@ def _smart_subtree_to_pgn(
             cursor = by_id.get(str(cursor.get("parentId", "") or ""))
             safety += 1
         chain.reverse()
-        parent_pgn_node: chess.pgn.GameNode = game
-        parent_board = board
+        parent_pgn_node = setup_node
+        parent_board = setup_board
         for step in chain:
             step_id = str(step.get("id", "") or "")
             uci = str(step.get("uci", "") or "").strip()
@@ -782,19 +962,243 @@ def _smart_subtree_to_pgn(
             next_board.push(move)
             move_count += 1
             node = parent_pgn_node.add_variation(move)
-            comment = _comment_for(step)
+            comment = _smart_node_comment(step)
             if comment:
                 node.comment = comment
             parent_pgn_node = node
             parent_board = next_board
-        _walk(str(anchor.get("id", "") or ""), parent_pgn_node, parent_board, len(chain))
+        _walk(str(anchor.get("id", "") or ""), parent_pgn_node, parent_board, setup_count + len(chain))
 
     if move_count <= 0:
         raise ValueError("Smart theory subtree did not contain any legal moves to export.")
 
     exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
     pgn_text = game.accept(exporter).strip()
-    return pgn_text, {"moves_exported": move_count, "warnings": warnings[:50]}
+    return pgn_text, {
+        "moves_exported": move_count,
+        "setup_moves_exported": setup_count,
+        "setup_san": setup_san,
+        "warnings": warnings[:50],
+    }
+
+
+def _smart_focused_line_to_pgn(
+    tree_payload: dict[str, Any],
+    *,
+    anchor_node_id: str,
+    chapter_name: str,
+    target_plies: int = SMART_THEORY_EXPORT_TARGET_PLIES,
+    tail_engine: Any | None = None,
+    tail_depth: int = 12,
+    tail_time_sec: float = 0.05,
+) -> tuple[str, dict[str, Any]]:
+    """Export one clean chapter line instead of a giant recursive variation tree."""
+    nodes = tree_payload.get("nodes", [])
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("Smart theory tree has no nodes to export.")
+    root_id, children, by_id = _smart_tree_children(nodes)
+    root_node = by_id.get(root_id)
+    anchor = by_id.get(str(anchor_node_id or "").strip())
+    if not isinstance(root_node, dict) or not isinstance(anchor, dict):
+        raise ValueError("Could not find a valid anchor node in the Smart Theory tree.")
+
+    warnings: list[str] = []
+    board, setup_moves = _smart_tree_export_context(tree_payload, root_node, warnings)
+    game = chess.pgn.Game()
+    game.headers["Event"] = chapter_name
+    game.headers["Site"] = "Bookup Smart Theory"
+    game.headers["Date"] = time.strftime("%Y.%m.%d")
+    game.headers["Round"] = "-"
+    game.headers["White"] = "Bookup"
+    game.headers["Black"] = "Lichess Study"
+    game.headers["Result"] = "*"
+    opening_name = str(tree_payload.get("openingName", "") or root_node.get("openingName", "") or "").strip()
+    eco_code = str(tree_payload.get("ecoCode", "") or root_node.get("ecoCode", "") or "").strip()
+    if opening_name:
+        game.headers["Opening"] = opening_name
+    if eco_code:
+        game.headers["ECO"] = eco_code
+    if board.fen() != chess.STARTING_FEN:
+        game.headers["SetUp"] = "1"
+        game.headers["FEN"] = board.fen()
+
+    parent_pgn_node, parent_board, setup_count, setup_san = _append_smart_setup_moves(
+        game=game,
+        board=board,
+        setup_moves=setup_moves,
+    )
+    move_count = setup_count
+    parent_by_id: dict[str, str] = {
+        str(node.get("id", "") or ""): str(node.get("parentId", "") or "")
+        for node in nodes
+        if isinstance(node, dict)
+    }
+
+    chain: list[dict[str, Any]] = []
+    cursor = anchor
+    safety = 0
+    while isinstance(cursor, dict) and str(cursor.get("id", "") or "") != root_id and safety < 256:
+        chain.append(cursor)
+        cursor = by_id.get(parent_by_id.get(str(cursor.get("id", "") or ""), ""))
+        safety += 1
+    chain.reverse()
+
+    def _append_node_move(step: dict[str, Any]) -> bool:
+        nonlocal parent_pgn_node, parent_board, move_count
+        step_id = str(step.get("id", "") or "")
+        uci = str(step.get("uci", "") or "").strip()
+        if not uci:
+            return False
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            warnings.append(f"Skipped focused path move for node {step_id}; invalid UCI: {uci}.")
+            return False
+        if move not in parent_board.legal_moves:
+            warnings.append(f"Skipped focused path move for node {step_id}; illegal UCI: {uci}.")
+            return False
+        next_board = parent_board.copy(stack=False)
+        next_board.push(move)
+        parent_pgn_node = parent_pgn_node.add_variation(move)
+        comment = _smart_node_comment(step)
+        if comment:
+            parent_pgn_node.comment = comment
+        parent_board = next_board
+        move_count += 1
+        return True
+
+    def _append_uci_tail(raw_tail: object) -> int:
+        nonlocal parent_pgn_node, parent_board, move_count
+        if move_count >= target_plies or not isinstance(raw_tail, list):
+            return 0
+        added = 0
+        for raw_uci in raw_tail:
+            if move_count >= target_plies:
+                break
+            uci = str(raw_uci or "").strip()
+            if not uci:
+                continue
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                warnings.append(f"Skipped focused PV tail move; invalid UCI: {uci}.")
+                break
+            if move not in parent_board.legal_moves:
+                warnings.append(f"Stopped focused PV tail; move {uci} is illegal in this branch.")
+                break
+            parent_pgn_node = parent_pgn_node.add_variation(move)
+            parent_board.push(move)
+            move_count += 1
+            added += 1
+        return added
+
+    def _append_engine_tail() -> int:
+        nonlocal parent_pgn_node, parent_board, move_count
+        if tail_engine is None or move_count >= target_plies:
+            return 0
+        added = 0
+        while move_count < target_plies and not parent_board.is_game_over(claim_draw=True):
+            try:
+                lines = tail_engine.analyse(
+                    parent_board,
+                    depth=max(6, min(18, int(tail_depth or 12))),
+                    multipv=1,
+                    time_sec=max(0.01, min(0.5, float(tail_time_sec or 0.05))),
+                )
+            except Exception as exc:
+                warnings.append(f"Stopped engine tail; Stockfish failed: {exc}")
+                break
+            pv = (lines[0].get("pv") if lines else []) or []
+            move = pv[0] if pv else None
+            if not isinstance(move, chess.Move) or move not in parent_board.legal_moves:
+                warnings.append("Stopped engine tail; no legal best move returned.")
+                break
+            san = parent_board.san(move)
+            parent_pgn_node = parent_pgn_node.add_variation(move)
+            if added == 0:
+                parent_pgn_node.comment = f"Engine tail: Stockfish best move {san} continues the chapter to move 20."
+            parent_board.push(move)
+            move_count += 1
+            added += 1
+        return added
+
+    for step in chain:
+        if not _append_node_move(step):
+            break
+
+    seen_node_ids = {str(step.get("id", "") or "") for step in chain}
+    current_id = str(anchor.get("id", "") or "")
+
+    def _focused_child_score(child: dict[str, Any]) -> tuple[int, int, int, int]:
+        classification = str(child.get("classification", "") or "").strip().lower()
+        is_user = bool(child.get("isUserSide"))
+        is_opponent = bool(child.get("isOpponentSide"))
+        priority = 0
+        if is_user:
+            priority += 500
+            if classification in {"best", "good", "mainline"}:
+                priority += 220
+            if bool(child.get("styleMatchedMove")):
+                priority += 120
+        if is_opponent:
+            if bool(child.get("isBestEngineReply")):
+                priority += 460
+            if classification in {"mainline", "popular"}:
+                priority += 170
+            if classification in {"sideline", "inaccuracy", "mistake", "blunder"}:
+                priority += 80
+        if child.get("principalVariationUci"):
+            priority += 40
+        return (
+            priority,
+            int(child.get("gameCount", 0) or 0),
+            int(child.get("learningPriority", 0) or 0),
+            -int(child.get("ply", 0) or 0),
+        )
+
+    while current_id and move_count < target_plies:
+        candidates = [
+            child
+            for child in children.get(current_id, [])
+            if isinstance(child, dict) and str(child.get("id", "") or "") not in seen_node_ids
+        ]
+        legal_candidates: list[dict[str, Any]] = []
+        for child in candidates:
+            try:
+                move = chess.Move.from_uci(str(child.get("uci", "") or ""))
+            except ValueError:
+                continue
+            if move in parent_board.legal_moves:
+                legal_candidates.append(child)
+        if not legal_candidates:
+            node_payload = by_id.get(current_id, {})
+            if isinstance(node_payload, dict):
+                _append_uci_tail(node_payload.get("continuationAfterMoveUci") or [])
+                _append_engine_tail()
+            break
+        next_child = max(legal_candidates, key=_focused_child_score)
+        if not _append_node_move(next_child):
+            break
+        current_id = str(next_child.get("id", "") or "")
+        seen_node_ids.add(current_id)
+
+    if move_count < target_plies and current_id:
+        node_payload = by_id.get(current_id, {})
+        if isinstance(node_payload, dict):
+            _append_uci_tail(node_payload.get("continuationAfterMoveUci") or [])
+            _append_engine_tail()
+
+    if move_count <= 0:
+        raise ValueError("Smart theory focused line did not contain any legal moves to export.")
+
+    exporter = chess.pgn.StringExporter(headers=True, variations=False, comments=True)
+    pgn_text = game.accept(exporter).strip()
+    return pgn_text, {
+        "moves_exported": move_count,
+        "setup_moves_exported": setup_count,
+        "setup_san": setup_san,
+        "warnings": warnings[:50],
+    }
 
 
 def _smart_tree_chapter_exports(
@@ -802,10 +1206,17 @@ def _smart_tree_chapter_exports(
     *,
     strategy: str,
     chapter_name_base: str,
+    max_chapters: int = 62,
+    min_chapter_moves: int = 0,
+    tail_engine: Any | None = None,
+    tail_depth: int = 12,
+    tail_time_sec: float = 0.05,
 ) -> list[dict[str, Any]]:
     normalized_strategy = str(strategy or "").strip().lower()
-    if normalized_strategy not in {"single", "first_move", "unknown_focus"}:
+    if normalized_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
         normalized_strategy = "first_move"
+    max_chapters = max(1, min(80, int(max_chapters or 62)))
+    min_chapter_moves = max(0, min(80, int(min_chapter_moves or 0)))
 
     if normalized_strategy == "single":
         pgn_text, meta = _smart_tree_to_pgn(tree_payload, chapter_name=chapter_name_base)
@@ -815,12 +1226,24 @@ def _smart_tree_chapter_exports(
     if not isinstance(nodes, list) or not nodes:
         raise ValueError("Smart theory tree has no nodes for chapter export.")
     root_id, children, by_id = _smart_tree_children(nodes)
+    root_node = by_id.get(root_id, {})
     first_moves = children.get(root_id, [])
     if not first_moves:
         pgn_text, meta = _smart_tree_to_pgn(tree_payload, chapter_name=chapter_name_base)
         return [{"name": chapter_name_base, "pgn": pgn_text, "meta": meta}]
 
     chapters: list[dict[str, Any]] = []
+    setup_san_for_titles: list[str] = []
+    if isinstance(root_node, dict):
+        try:
+            setup_warnings: list[str] = []
+            setup_board, setup_moves = _smart_tree_export_context(tree_payload, root_node, setup_warnings)
+            replay = setup_board.copy(stack=False)
+            for setup_move in setup_moves:
+                setup_san_for_titles.append(replay.san(setup_move))
+                replay.push(setup_move)
+        except Exception:
+            setup_san_for_titles = []
     parent_by_id: dict[str, str] = {
         str(node.get("id", "") or ""): str(node.get("parentId", "") or "")
         for node in nodes
@@ -844,7 +1267,7 @@ def _smart_tree_chapter_exports(
 
     def _path_caption(node: dict[str, Any]) -> str:
         chain = _node_chain_to_root(node)
-        sans = [str(step.get("san", "") or step.get("uci", "")).strip() for step in chain]
+        sans = [*setup_san_for_titles, *[str(step.get("san", "") or step.get("uci", "")).strip() for step in chain]]
         sans = [item for item in sans if item]
         if not sans:
             return ""
@@ -856,6 +1279,45 @@ def _smart_tree_chapter_exports(
         if not title:
             title = "Smart Theory Line"
         return title[:100]
+
+    def _opening_family_title(opening_name: str, path_caption: str) -> str:
+        opening_lower = str(opening_name or "").lower()
+        path_lower = f" {str(path_caption or '').lower()} "
+        has_e4 = bool(re.search(r"\be4\b", path_lower))
+        has_d4 = bool(re.search(r"\bd4\b", path_lower))
+        has_c4 = bool(re.search(r"\bc4\b", path_lower))
+        has_c5 = bool(re.search(r"\bc5\b", path_lower))
+        has_d5 = bool(re.search(r"\bd5\b", path_lower))
+        has_e5 = bool(re.search(r"\be5\b", path_lower))
+        has_n_f3 = bool(re.search(r"\bnf3\b", path_lower))
+        has_g3 = bool(re.search(r"\bg3\b", path_lower))
+        has_bg2 = bool(re.search(r"\bbg2\b", path_lower))
+        has_nf6 = bool(re.search(r"\bnf6\b", path_lower))
+        has_g6 = bool(re.search(r"\bg6\b", path_lower))
+        has_bg7 = bool(re.search(r"\bbg7\b", path_lower))
+        has_bf4 = bool(re.search(r"\bbf4\b", path_lower))
+
+        if "pirc" in opening_lower or (has_e4 and (has_nf6 or has_g6) and "d6" in path_lower):
+            if has_e5:
+                return "Pirc when Black plays ...e5"
+            return "Pirc vs e4"
+        if "king" in opening_lower and "indian" in opening_lower and "attack" in opening_lower or (has_n_f3 and has_g3 and has_bg2):
+            if has_c5:
+                return "KIA vs Sicilian Setup"
+            if has_d5:
+                return "King's Indian Attack vs ...d5"
+            if has_e5:
+                return "King's Indian Attack vs ...e5"
+            return "King's Indian Attack Main Setup"
+        if (
+            "king" in opening_lower
+            and "indian" in opening_lower
+            and "defense" in opening_lower
+        ) or ((has_d4 or has_c4) and has_nf6 and (has_g6 or has_bg7)):
+            if has_bf4:
+                return "KID vs London Setup"
+            return "King's Indian Defense Main Setup"
+        return str(opening_name or "").strip()
 
     def _unknown_focus_anchors() -> list[dict[str, Any]]:
         weak_class_order = {"blunder": 0, "mistake": 1, "inaccuracy": 2}
@@ -894,7 +1356,7 @@ def _smart_tree_chapter_exports(
                 continue
             seen_keys.add(fen_key)
             unique.append(node)
-            if len(unique) >= 16:
+            if len(unique) >= max_chapters:
                 break
         return unique
 
@@ -905,69 +1367,154 @@ def _smart_tree_chapter_exports(
         if classification:
             classification = classification.lower().replace("_", " ")
         path_caption = _path_caption(node)
-        path_lower = path_caption.lower()
-        opening_lower = opening_name.lower()
+        family_title = _opening_family_title(opening_name, path_caption)
+        try:
+            ply = max(1, int(node.get("ply", 1) or 1))
+        except (TypeError, ValueError):
+            ply = 1
+        move_number = (ply + 1) // 2
+        numbered_move = f"{move_number}.{move_name}" if ply % 2 == 1 else f"{move_number}...{move_name}"
+        compact_path = path_caption
+        if compact_path:
+            compact_path = " ".join(compact_path.split()[-8:])
 
         if normalized_strategy == "unknown_focus":
-            focus_bits = [move_name]
-            if classification:
-                focus_bits.append(classification)
-            if path_caption:
-                focus_bits.append(f"after {path_caption}")
+            if bool(node.get("isCorrectedMove")):
+                focus_kind = "Fix this line"
+            elif classification and classification not in {"mainline", "best"}:
+                focus_kind = classification.title()
+            elif bool(node.get("isBestEngineReply")):
+                focus_kind = "Best opponent reply"
+            else:
+                focus_kind = "Study this line"
+            focus_bits = [f"{numbered_move} {focus_kind}"]
+            if compact_path and move_name.lower() not in compact_path.lower().split()[-2:]:
+                focus_bits.append(f"after {compact_path}")
             focus_label = " | ".join(focus_bits)
-            if opening_name:
-                return _chapter_title(f"{opening_name} | {focus_label}")
+            if family_title:
+                return _chapter_title(f"{family_title} | {focus_label}")
             return _chapter_title(focus_label)
 
-        # Generate human chapter titles for common practical setups before
-        # falling back to generic move/path labels.
-        if "king" in opening_lower and "indian" in opening_lower and "attack" in opening_lower:
-            if re.search(r"\bc5\b", path_lower):
-                return _chapter_title("KIA vs Sicilian Setup")
-            if re.search(r"\bd5\b", path_lower):
-                return _chapter_title("King's Indian Attack vs ...d5")
-            if re.search(r"\be5\b", path_lower):
-                return _chapter_title("King's Indian Attack vs ...e5")
-            return _chapter_title("King's Indian Attack Main Setup")
-        if "king" in opening_lower and "indian" in opening_lower and "defense" in opening_lower:
-            if re.search(r"\bbf4\b", path_lower):
-                return _chapter_title("KID vs London Setup")
-            return _chapter_title("King's Indian Defense Main Setup")
-        if "pirc" in opening_lower:
-            if re.search(r"\be5\b", path_lower):
-                return _chapter_title("Pirc when Black plays ...e5")
-            if re.search(r"\be4\b", path_lower):
-                return _chapter_title("Pirc vs e4")
-            return _chapter_title("Pirc Main Setup")
+        original = str(node.get("originalUserMove", "") or "").strip()
+        corrected = str(node.get("correctedMove", "") or "").strip()
+        if original and corrected:
+            branch_label = f"{numbered_move} correction"
+        elif bool(node.get("isBestEngineReply")):
+            branch_label = f"{numbered_move} best opponent move"
+        elif classification and classification not in {"mainline", "best"}:
+            branch_label = f"{numbered_move} {classification}"
+        else:
+            branch_label = f"{numbered_move} main line"
+        if compact_path and move_name.lower() not in compact_path.lower().split()[-2:]:
+            branch_label = f"{branch_label} after {compact_path}"
+        if family_title:
+            return _chapter_title(f"{family_title} | {branch_label}")
+        return _chapter_title(branch_label or "Smart Theory Line")
 
-        style_tokens: list[str] = [move_name]
-        if path_caption:
-            style_tokens.append(f"after {path_caption}")
-        if classification:
-            style_tokens.append(classification)
-        style_name = " | ".join(style_tokens)
-        if opening_name:
-            return _chapter_title(f"{opening_name} | {style_name}")
-        return _chapter_title(style_name)
+    def _chapter_anchor_score(node: dict[str, Any]) -> tuple[int, int, int, int]:
+        node_id = str(node.get("id", "") or "")
+        parent_id = str(node.get("parentId", "") or "")
+        classification = str(node.get("classification", "") or "").strip().lower()
+        ply = int(node.get("ply", 0) or 0)
+        is_root_child = parent_id == root_id
+        is_corrected = bool(node.get("isCorrectedMove"))
+        is_best_engine = bool(node.get("isBestEngineReply"))
+        is_weak = classification in {"inaccuracy", "mistake", "blunder"}
+        priority = 0
+        if is_root_child:
+            priority += 900
+        if is_corrected:
+            priority += 520
+        if is_best_engine:
+            priority += 220
+        if is_weak:
+            priority += 180
+        priority += max(0, 16 - min(16, ply))
+        return (-priority, ply, -int(node.get("gameCount", 0) or 0), hash(node_id) % 997)
 
     anchor_nodes = first_moves[:16]
     if normalized_strategy == "unknown_focus":
         focus_nodes = _unknown_focus_anchors()
         if focus_nodes:
             anchor_nodes = focus_nodes
+    elif normalized_strategy == "deep_focus":
+        anchor_pool = [
+            node
+            for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("id", "") or "") != root_id
+            and str(node.get("uci", "") or "").strip()
+            and int(node.get("ply", 0) or 0) <= 28
+        ]
+        ranked_pool = sorted(anchor_pool, key=_chapter_anchor_score)
+        anchor_nodes = []
+        seen_anchor_keys: set[str] = set()
+        for node in ranked_pool:
+            node_id = str(node.get("id", "") or "")
+            key = str(node.get("normalizedFen", "") or node.get("fen", "") or node_id)
+            if not node_id or key in seen_anchor_keys:
+                continue
+            seen_anchor_keys.add(key)
+            anchor_nodes.append(node)
+            if len(anchor_nodes) >= max_chapters * 4:
+                break
+    else:
+        anchor_pool: list[dict[str, Any]] = [
+            node
+            for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("id", "") or "") != root_id
+            and (
+                str(node.get("parentId", "") or "") == root_id
+                or bool(node.get("isCorrectedMove"))
+                or bool(node.get("isBestEngineReply"))
+                or str(node.get("classification", "") or "").strip().lower() in {"inaccuracy", "mistake", "blunder"}
+            )
+        ]
+        ranked_pool = sorted(anchor_pool, key=_chapter_anchor_score)
+        anchor_nodes = []
+        seen_anchor_keys: set[str] = set()
+        for node in ranked_pool:
+            node_id = str(node.get("id", "") or "")
+            key = str(node.get("normalizedFen", "") or node.get("fen", "") or node_id)
+            if not node_id or key in seen_anchor_keys:
+                continue
+            seen_anchor_keys.add(key)
+            anchor_nodes.append(node)
+            if len(anchor_nodes) >= max_chapters:
+                break
 
+    seen_titles: dict[str, int] = {}
     for index, node in enumerate(anchor_nodes, start=1):
         label = _chapter_label_for(node, index)
-        pgn_text, meta = _smart_subtree_to_pgn(
-            tree_payload,
-            anchor_node_id=str(node.get("id", "") or ""),
-            chapter_name=label,
-            include_root_siblings=False,
-        )
+        title_count = seen_titles.get(label, 0) + 1
+        seen_titles[label] = title_count
+        if title_count > 1:
+            label = _chapter_title(f"{label} #{title_count}")
+        if normalized_strategy == "deep_focus":
+            pgn_text, meta = _smart_focused_line_to_pgn(
+                tree_payload,
+                anchor_node_id=str(node.get("id", "") or ""),
+                chapter_name=label,
+                tail_engine=tail_engine,
+                tail_depth=tail_depth,
+                tail_time_sec=tail_time_sec,
+            )
+        else:
+            pgn_text, meta = _smart_subtree_to_pgn(
+                tree_payload,
+                anchor_node_id=str(node.get("id", "") or ""),
+                chapter_name=label,
+                include_root_siblings=False,
+            )
+        if min_chapter_moves and int((meta or {}).get("moves_exported", 0) or 0) < min_chapter_moves:
+            continue
         chapter_meta = dict(meta or {})
         chapter_meta["anchor_node_id"] = str(node.get("id", "") or "")
         chapter_meta["anchor_classification"] = str(node.get("classification", "") or "")
         chapters.append({"name": _chapter_title(label), "pgn": pgn_text, "meta": chapter_meta})
+        if len(chapters) >= max_chapters:
+            break
     return chapters
 
 
@@ -1093,6 +1640,10 @@ def _list_lichess_study_chapters(*, study_id: str, token: str) -> list[dict[str,
         if game is None:
             break
         chapter_name = str(game.headers.get("ChapterName", "") or "").strip()
+        event_name = str(game.headers.get("Event", "") or "").strip()
+        if not chapter_name and event_name:
+            # Some study exports omit ChapterName but keep the chapter title in Event.
+            chapter_name = event_name
         chapter_url = str(game.headers.get("ChapterURL", "") or "").strip()
         chapter_id = chapter_url.rstrip("/").split("/")[-1] if chapter_url else ""
         plies = sum(1 for _ in game.mainline_moves())
@@ -1100,6 +1651,7 @@ def _list_lichess_study_chapters(*, study_id: str, token: str) -> list[dict[str,
             {
                 "chapter_id": chapter_id,
                 "chapter_name": chapter_name,
+                "event_name": event_name,
                 "plies": int(plies),
             }
         )
@@ -1149,13 +1701,21 @@ def _cleanup_default_placeholder_chapters(*, study_id: str, token: str) -> dict[
     chapters = _list_lichess_study_chapters(study_id=study_id, token=token)
     deleted: list[str] = []
     errors: list[str] = []
+    placeholder_pattern = re.compile(r"^chapter\s+\d+$")
     for chapter in chapters:
         chapter_id = str(chapter.get("chapter_id", "") or "").strip()
         chapter_name = str(chapter.get("chapter_name", "") or "").strip().lower()
+        event_name = str(chapter.get("event_name", "") or "").strip().lower()
+        effective_name = chapter_name or event_name
         plies = int(chapter.get("plies", 0) or 0)
         # Lichess creates an empty starter chapter for a new study. Remove it so
         # Bookup sync produces a clean chapter list.
-        if chapter_name == "chapter 1" and plies == 0 and chapter_id:
+        is_placeholder = (
+            not effective_name
+            or effective_name in {"chapter 1", "default"}
+            or bool(placeholder_pattern.match(effective_name))
+        )
+        if is_placeholder and plies == 0 and chapter_id:
             try:
                 _delete_lichess_study_chapter(study_id=study_id, chapter_id=chapter_id, token=token)
                 deleted.append(chapter_id)
@@ -1164,6 +1724,28 @@ def _cleanup_default_placeholder_chapters(*, study_id: str, token: str) -> dict[
     return {
         "deleted_count": len(deleted),
         "deleted_chapter_ids": deleted,
+        "errors": errors[:10],
+    }
+
+
+def _cleanup_all_study_chapters(*, study_id: str, token: str) -> dict[str, Any]:
+    """Delete all existing chapters before posting a fresh Smart Theory export."""
+    chapters = _list_lichess_study_chapters(study_id=study_id, token=token)
+    deleted: list[str] = []
+    errors: list[str] = []
+    for chapter in chapters:
+        chapter_id = str(chapter.get("chapter_id", "") or "").strip()
+        if not chapter_id:
+            continue
+        try:
+            _delete_lichess_study_chapter(study_id=study_id, chapter_id=chapter_id, token=token)
+            deleted.append(chapter_id)
+        except Exception as exc:
+            errors.append(str(exc))
+    return {
+        "deleted_count": len(deleted),
+        "deleted_chapter_ids": deleted,
+        "chapters_seen": len(chapters),
         "errors": errors[:10],
     }
 
@@ -1197,6 +1779,56 @@ def _normalize_bool(raw: object, fallback: bool = True) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return fallback
+
+
+def _normalize_int_range(raw: object, *, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(fallback)
+    return max(minimum, min(maximum, value))
+
+
+def _normalize_float_range(raw: object, *, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(fallback)
+    return max(minimum, min(maximum, value))
+
+
+def _normalize_study_history(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        values = [str(item or "").strip() for item in raw]
+    else:
+        values = [str(raw or "").strip()]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        study_id = _extract_study_id(item)
+        if not study_id or study_id in seen:
+            continue
+        seen.add(study_id)
+        cleaned.append(study_id)
+    return cleaned[:24]
+
+
+def _append_study_history(config: dict[str, Any], previous_study_id: str) -> None:
+    prev = _extract_study_id(previous_study_id)
+    if not prev:
+        return
+    history = _normalize_study_history(config.get("bookup_study_id_history", []))
+    if prev in history:
+        history = [item for item in history if item != prev]
+    history.insert(0, prev)
+    config["bookup_study_id_history"] = history[:24]
+
+
+def _normalize_unified_study_name(raw: object, *, fallback: str = "Bookup") -> str:
+    text = " ".join(str(raw or "").strip().split())
+    if not text:
+        text = " ".join(str(fallback or "Bookup").strip().split()) or "Bookup"
+    return text[:120]
 
 
 def _smart_theory_state_name(raw_status: str) -> str:
@@ -1298,29 +1930,73 @@ def _run_smart_theory_job(
             return {"status": "skipped", "reason": "missing_lichess_token"}
         config = migrate_engine_defaults(load_config())
         study_id = _extract_study_id(str(payload.get("study_id", "") or "")) or _extract_study_id(str(config.get("bookup_study_id", "") or ""))
-        unified_name = str(payload.get("unified_study_name", "Bookup") or "Bookup").strip() or "Bookup"
+        configured_unified_name = _normalize_unified_study_name(config.get("bookup_study_name", "Bookup"), fallback="Bookup")
+        unified_name = _normalize_unified_study_name(
+            payload.get("unified_study_name", configured_unified_name),
+            fallback=configured_unified_name,
+        )
         created_unified_study = False
+        previous_study_id = _extract_study_id(str(config.get("bookup_study_id", "") or ""))
         if not study_id:
             created = _create_lichess_study(token=token, study_name=unified_name, visibility="unlisted")
             study_id = str(created.get("study_id", "") or "")
             if study_id:
                 created_unified_study = True
+                # Verify study is reachable before switching local config.
+                _list_lichess_study_chapters(study_id=study_id, token=token)
+                if previous_study_id and previous_study_id != study_id:
+                    _append_study_history(config, previous_study_id)
                 config["bookup_study_id"] = study_id
+                config["bookup_study_name"] = unified_name
                 save_config(config)
         if not study_id:
             return {"status": "error", "error": "No study ID available for background sync."}
         chapter_name = str(payload.get("chapter_name", "") or "").strip() or "Bookup Smart Theory"
         orientation = "black" if str(payload.get("orientation", "white") or "white").strip().lower() == "black" else "white"
         chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "first_move")) or "first_move").strip().lower()
-        if chapter_strategy not in {"single", "first_move", "unknown_focus"}:
+        if chapter_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
             chapter_strategy = "first_move"
+        max_chapters = _normalize_int_range(payload.get("max_chapters", 62), fallback=62, minimum=1, maximum=80)
+        min_chapter_moves = _normalize_int_range(payload.get("min_chapter_moves", 40 if chapter_strategy == "deep_focus" else 0), fallback=40 if chapter_strategy == "deep_focus" else 0, minimum=0, maximum=80)
+        extend_with_engine_tail = _normalize_bool(payload.get("extend_with_engine_tail", True), fallback=True)
+        tail_depth = _normalize_int_range(payload.get("tail_depth", 12), fallback=12, minimum=6, maximum=18)
+        tail_time_sec = _normalize_float_range(payload.get("tail_time_sec", 0.05), fallback=0.05, minimum=0.01, maximum=0.5)
+        replace_existing_chapters = bool(payload.get("replace_existing_chapters", True))
+        tail_engine = None
+        if chapter_strategy == "deep_focus" and extend_with_engine_tail:
+            tail_settings = request_engine_settings(payload, config)
+            tail_settings = EngineSettings(
+                path=tail_settings.path,
+                depth=tail_depth,
+                threads=max(1, min(4, int(tail_settings.threads))),
+                hash_mb=max(256, min(2048, int(tail_settings.hash_mb))),
+                multipv=1,
+                think_time_sec=tail_time_sec,
+                parallel_workers=1,
+            )
+            tail_engine = shared_engine_for(tail_settings)
         chapters_payload = _smart_tree_chapter_exports(
             result_payload,
             strategy=chapter_strategy,
             chapter_name_base=chapter_name,
+            max_chapters=max_chapters,
+            min_chapter_moves=min_chapter_moves,
+            tail_engine=tail_engine,
+            tail_depth=tail_depth,
+            tail_time_sec=tail_time_sec,
         )
+        cleanup_result = {"deleted_count": 0, "deleted_chapter_ids": [], "errors": []}
+        if replace_existing_chapters:
+            try:
+                cleanup_result = _cleanup_all_study_chapters(study_id=study_id, token=token)
+            except Exception as cleanup_exc:
+                cleanup_result = {
+                    "deleted_count": 0,
+                    "deleted_chapter_ids": [],
+                    "errors": [str(cleanup_exc)],
+                }
         created_chapters: list[dict[str, Any]] = []
-        for chapter in chapters_payload[:24]:
+        for chapter in chapters_payload[:max_chapters]:
             response = _post_pgn_to_lichess_study(
                 study_id=study_id,
                 token=token,
@@ -1335,8 +2011,7 @@ def _run_smart_theory_job(
                     "lichess_response": response.get("response", {}),
                 }
             )
-        cleanup_result = {"deleted_count": 0, "deleted_chapter_ids": [], "errors": []}
-        if created_unified_study:
+        if created_unified_study and not replace_existing_chapters:
             try:
                 cleanup_result = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
             except Exception as cleanup_exc:
@@ -1345,12 +2020,32 @@ def _run_smart_theory_job(
                     "deleted_chapter_ids": [],
                     "errors": [str(cleanup_exc)],
                 }
+        elif replace_existing_chapters:
+            try:
+                placeholder_cleanup = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
+                cleanup_result["deleted_count"] = int(cleanup_result.get("deleted_count", 0) or 0) + int(placeholder_cleanup.get("deleted_count", 0) or 0)
+                cleanup_result["deleted_chapter_ids"] = [
+                    *list(cleanup_result.get("deleted_chapter_ids", []) or []),
+                    *list(placeholder_cleanup.get("deleted_chapter_ids", []) or []),
+                ]
+                cleanup_result["errors"] = [
+                    *list(cleanup_result.get("errors", []) or []),
+                    *list(placeholder_cleanup.get("errors", []) or []),
+                ][:10]
+            except Exception as cleanup_exc:
+                cleanup_result["errors"] = [*list(cleanup_result.get("errors", []) or []), str(cleanup_exc)][:10]
         return {
             "status": "success",
             "study_id": study_id,
             "study_url": f"https://lichess.org/study/{study_id}",
             "created_unified_study": created_unified_study,
+            "unified_study_name": unified_name,
+            "previous_study_id": previous_study_id or "",
             "chapter_strategy": chapter_strategy,
+            "max_chapters": max_chapters,
+            "min_chapter_moves": min_chapter_moves,
+            "extend_with_engine_tail": extend_with_engine_tail,
+            "replace_existing_chapters": replace_existing_chapters,
             "chapters_created_count": len(created_chapters),
             "chapters_created": created_chapters,
             "moves_exported": sum(
@@ -1508,31 +2203,30 @@ def recommended_engine_defaults() -> dict:
 
 
 def migrate_engine_defaults(config: dict) -> dict:
-    if int(config.get("engine_defaults_version", 0) or 0) >= ENGINE_DEFAULTS_VERSION:
-        return config
     migrated = dict(config)
-    defaults = recommended_engine_defaults()
-    for key, value in defaults.items():
-        current = migrated.get(key)
-        if current in (None, ""):
-            migrated[key] = value
-            continue
-        if key in {"parallel_workers", "hash_mb", "threads"}:
-            try:
-                migrated[key] = max(int(current), int(value))
-            except (TypeError, ValueError):
+    if int(config.get("engine_defaults_version", 0) or 0) < ENGINE_DEFAULTS_VERSION:
+        defaults = recommended_engine_defaults()
+        for key, value in defaults.items():
+            current = migrated.get(key)
+            if current in (None, ""):
                 migrated[key] = value
-    try:
-        migrated["parallel_workers"] = max(1, min(MAX_SAFE_PARALLEL_WORKERS, int(migrated.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"])))
-    except (TypeError, ValueError):
-        migrated["parallel_workers"] = defaults["parallel_workers"]
-    migrated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
+                continue
+            if key in {"parallel_workers", "hash_mb", "threads"}:
+                try:
+                    migrated[key] = max(int(current), int(value))
+                except (TypeError, ValueError):
+                    migrated[key] = value
+        try:
+            migrated["parallel_workers"] = max(1, min(MAX_SAFE_PARALLEL_WORKERS, int(migrated.get("parallel_workers", defaults["parallel_workers"]) or defaults["parallel_workers"])))
+        except (TypeError, ValueError):
+            migrated["parallel_workers"] = defaults["parallel_workers"]
+        migrated["engine_defaults_version"] = ENGINE_DEFAULTS_VERSION
     if not str(migrated.get("engine_path", "")).strip():
         migrated["engine_path"] = default_engine_path()
     if "bookup_auto_study_sync" not in migrated:
         migrated["bookup_auto_study_sync"] = True
     if not str(migrated.get("bookup_chapter_strategy", "")).strip():
-        migrated["bookup_chapter_strategy"] = "first_move"
+        migrated["bookup_chapter_strategy"] = "deep_focus"
     migrated["bookup_opening_focus"] = _normalize_opening_focus(
         migrated.get("bookup_opening_focus", ""),
         fallback="kings_indian_systems",
@@ -1541,6 +2235,29 @@ def migrate_engine_defaults(config: dict) -> dict:
         migrated.get("bookup_include_best_engine_replies", True),
         fallback=True,
     )
+    migrated["bookup_expected_move_confidence_cp"] = _normalize_int_range(
+        migrated.get("bookup_expected_move_confidence_cp", 125),
+        fallback=125,
+        minimum=20,
+        maximum=300,
+    )
+    migrated["bookup_style_move_confidence_cp"] = _normalize_int_range(
+        migrated.get("bookup_style_move_confidence_cp", 90),
+        fallback=90,
+        minimum=20,
+        maximum=300,
+    )
+    migrated["bookup_style_min_weight"] = _normalize_float_range(
+        migrated.get("bookup_style_min_weight", 1.2),
+        fallback=1.2,
+        minimum=0.2,
+        maximum=8.0,
+    )
+    migrated["bookup_study_name"] = _normalize_unified_study_name(
+        migrated.get("bookup_study_name", "Bookup"),
+        fallback="Bookup",
+    )
+    migrated["bookup_study_id_history"] = _normalize_study_history(migrated.get("bookup_study_id_history", []))
     return migrated
 
 
@@ -1586,6 +2303,23 @@ def request_engine_settings(payload: dict, config: dict) -> EngineSettings:
         if key in payload and payload.get(key) not in (None, "")
     }
     return build_engine_settings({**config, **overrides})
+
+
+def import_engine_settings(settings: EngineSettings, payload: dict | None = None) -> EngineSettings:
+    """Keep game imports responsive even when deep prep settings are saved."""
+    payload = payload or {}
+    deep_import = _normalize_bool(payload.get("deep_import", False), fallback=False)
+    if deep_import:
+        return settings
+    return EngineSettings(
+        path=settings.path,
+        depth=max(10, min(16, int(settings.depth))),
+        threads=max(1, min(8, int(settings.threads))),
+        hash_mb=max(256, min(4096, int(settings.hash_mb))),
+        multipv=max(1, min(4, int(settings.multipv))),
+        think_time_sec=max(0.05, min(1.0, float(settings.think_time_sec))),
+        parallel_workers=max(1, min(MAX_SAFE_PARALLEL_WORKERS, int(settings.parallel_workers))),
+    )
 
 
 def engine_session_key(settings: EngineSettings) -> str:
@@ -1648,6 +2382,7 @@ def apply_engine_settings_to_config(config: dict, settings: EngineSettings) -> d
 def build_defaults_payload(config: dict) -> dict:
     migrated = migrate_engine_defaults(config)
     settings = build_engine_settings(migrated)
+    configured_lichess_token = local_lichess_token(migrated)
     return {
         "username": migrated.get("username", ""),
         "main_platform": str(migrated.get("main_platform", "chesscom") or "chesscom").strip().lower() or "chesscom",
@@ -1658,7 +2393,8 @@ def build_defaults_payload(config: dict) -> dict:
         "auto_import_on_startup": bool(migrated.get("auto_import_on_startup", True)),
         "chessnut_db_path": str(migrated.get("chessnut_db_path", "") or default_chessnut_db_path()).strip(),
         "chessnut_player_color": "black" if str(migrated.get("chessnut_player_color", "white")).strip().lower() == "black" else "white",
-        "lichess_token": local_lichess_token(migrated),
+        "lichess_token": "",
+        "lichess_token_configured": bool(configured_lichess_token),
         "engine_path": settings.path,
         "depth": settings.depth,
         "threads": settings.threads,
@@ -1666,9 +2402,14 @@ def build_defaults_payload(config: dict) -> dict:
         "multipv": settings.multipv,
         "think_time_sec": settings.think_time_sec,
         "parallel_workers": settings.parallel_workers,
+        "bookup_study_name": _normalize_unified_study_name(
+            migrated.get("bookup_study_name", "Bookup"),
+            fallback="Bookup",
+        ),
         "bookup_study_id": str(migrated.get("bookup_study_id", "") or "").strip(),
+        "bookup_study_id_history": _normalize_study_history(migrated.get("bookup_study_id_history", [])),
         "bookup_auto_study_sync": bool(migrated.get("bookup_auto_study_sync", True)),
-        "bookup_chapter_strategy": str(migrated.get("bookup_chapter_strategy", "first_move") or "first_move").strip().lower(),
+        "bookup_chapter_strategy": str(migrated.get("bookup_chapter_strategy", "deep_focus") or "deep_focus").strip().lower(),
         "bookup_opening_focus": _normalize_opening_focus(
             migrated.get("bookup_opening_focus", "kings_indian_systems"),
             fallback="kings_indian_systems",
@@ -1676,6 +2417,24 @@ def build_defaults_payload(config: dict) -> dict:
         "bookup_include_best_engine_replies": _normalize_bool(
             migrated.get("bookup_include_best_engine_replies", True),
             fallback=True,
+        ),
+        "bookup_expected_move_confidence_cp": _normalize_int_range(
+            migrated.get("bookup_expected_move_confidence_cp", 125),
+            fallback=125,
+            minimum=20,
+            maximum=300,
+        ),
+        "bookup_style_move_confidence_cp": _normalize_int_range(
+            migrated.get("bookup_style_move_confidence_cp", 90),
+            fallback=90,
+            minimum=20,
+            maximum=300,
+        ),
+        "bookup_style_min_weight": _normalize_float_range(
+            migrated.get("bookup_style_min_weight", 1.2),
+            fallback=1.2,
+            minimum=0.2,
+            maximum=8.0,
         ),
         "web_mode": WEB_MODE,
         "enable_brilliant_tracker": ENABLE_BRILLIANT_TRACKER,
@@ -2090,6 +2849,14 @@ def save_settings() -> tuple:
         config["main_username"] = str(payload.get("main_username", "") or "").strip()
     if "lichess_username" in payload:
         config["lichess_username"] = str(payload.get("lichess_username", "") or "").strip()
+    if "time_classes" in payload:
+        raw_time_classes = str(payload.get("time_classes", "all") or "all").strip()
+        config["time_classes"] = raw_time_classes or "all"
+    if "max_games" in payload:
+        try:
+            config["max_games"] = max(0, min(20000, int(payload.get("max_games", 0) or 0)))
+        except (TypeError, ValueError):
+            config["max_games"] = 0
     if "chessnut_db_path" in payload:
         config["chessnut_db_path"] = str(payload.get("chessnut_db_path", "") or "").strip()
     if "chessnut_player_color" in payload:
@@ -2132,13 +2899,22 @@ def save_settings() -> tuple:
     if "auto_import_on_startup" in payload:
         config["auto_import_on_startup"] = bool(payload.get("auto_import_on_startup"))
     if "bookup_study_id" in payload:
-        config["bookup_study_id"] = _extract_study_id(str(payload.get("bookup_study_id", "") or ""))
+        new_study_id = _extract_study_id(str(payload.get("bookup_study_id", "") or ""))
+        prev_study_id = _extract_study_id(str(config.get("bookup_study_id", "") or ""))
+        if prev_study_id and prev_study_id != new_study_id:
+            _append_study_history(config, prev_study_id)
+        config["bookup_study_id"] = new_study_id
+    if "bookup_study_name" in payload:
+        config["bookup_study_name"] = _normalize_unified_study_name(
+            payload.get("bookup_study_name", "Bookup"),
+            fallback="Bookup",
+        )
     if "bookup_auto_study_sync" in payload:
         config["bookup_auto_study_sync"] = bool(payload.get("bookup_auto_study_sync"))
     if "bookup_chapter_strategy" in payload:
-        strategy = str(payload.get("bookup_chapter_strategy", "first_move") or "first_move").strip().lower()
-        if strategy not in {"single", "first_move", "unknown_focus"}:
-            strategy = "first_move"
+        strategy = str(payload.get("bookup_chapter_strategy", "deep_focus") or "deep_focus").strip().lower()
+        if strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
+            strategy = "deep_focus"
         config["bookup_chapter_strategy"] = strategy
     if "bookup_opening_focus" in payload:
         config["bookup_opening_focus"] = _normalize_opening_focus(
@@ -2149,6 +2925,27 @@ def save_settings() -> tuple:
         config["bookup_include_best_engine_replies"] = _normalize_bool(
             payload.get("bookup_include_best_engine_replies", True),
             fallback=True,
+        )
+    if "bookup_expected_move_confidence_cp" in payload:
+        config["bookup_expected_move_confidence_cp"] = _normalize_int_range(
+            payload.get("bookup_expected_move_confidence_cp", 125),
+            fallback=125,
+            minimum=20,
+            maximum=300,
+        )
+    if "bookup_style_move_confidence_cp" in payload:
+        config["bookup_style_move_confidence_cp"] = _normalize_int_range(
+            payload.get("bookup_style_move_confidence_cp", 90),
+            fallback=90,
+            minimum=20,
+            maximum=300,
+        )
+    if "bookup_style_min_weight" in payload:
+        config["bookup_style_min_weight"] = _normalize_float_range(
+            payload.get("bookup_style_min_weight", 1.2),
+            fallback=1.2,
+            minimum=0.2,
+            maximum=8.0,
         )
 
     settings = request_engine_settings(payload, config)
@@ -2270,6 +3067,53 @@ def cache_stats() -> tuple:
     return jsonify(STORE.cache_stats(username))
 
 
+@app.get("/api/progress")
+def progress_state() -> tuple:
+    config = migrate_engine_defaults(load_config())
+    username = resolve_username(request.args.get("username", ""), config)
+    if not username:
+        return jsonify({"error": "Save a Chess.com username before loading progress."}), 400
+    mode = str(request.args.get("mode", "") or "").strip().lower()
+    return jsonify(build_progress_payload(DATA_DIR, username, mode=mode))
+
+
+@app.post("/api/progress/refresh")
+def progress_refresh() -> tuple:
+    payload = request.get_json(force=True)
+    config = migrate_engine_defaults(load_config())
+    username = resolve_username(payload.get("username", ""), config)
+    if not username:
+        return jsonify({"error": "Save a Chess.com username before refreshing progress."}), 400
+    mode = str(payload.get("mode", "") or "").strip().lower()
+    try:
+        return jsonify({"ok": True, "progress": refresh_progress(DATA_DIR, username, mode=mode)})
+    except ProgressError as exc:
+        return jsonify({"ok": False, "error": str(exc), "kind": exc.kind, "progress": build_progress_payload(DATA_DIR, username, mode=mode)}), 400
+
+
+@app.post("/api/progress/settings")
+def progress_settings() -> tuple:
+    payload = request.get_json(force=True)
+    config = migrate_engine_defaults(load_config())
+    username = resolve_username(payload.get("username", ""), config)
+    if not username:
+        return jsonify({"error": "Save a Chess.com username before saving progress settings."}), 400
+    return jsonify({"ok": True, "progress": save_progress_settings(DATA_DIR, username, payload)})
+
+
+@app.post("/api/progress/session")
+def progress_session() -> tuple:
+    payload = request.get_json(force=True)
+    config = migrate_engine_defaults(load_config())
+    username = resolve_username(payload.get("username", ""), config)
+    if not username:
+        return jsonify({"error": "Save a Chess.com username before saving a session."}), 400
+    try:
+        return jsonify({"ok": True, "progress": save_session(DATA_DIR, username, payload)})
+    except ProgressError as exc:
+        return jsonify({"ok": False, "error": str(exc), "kind": exc.kind}), 400
+
+
 @app.get("/api/analysis-status")
 def analysis_status() -> tuple:
     return jsonify(analysis_status_payload())
@@ -2329,7 +3173,8 @@ def profile() -> tuple:
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
 
-    settings = build_engine_settings(payload)
+    requested_settings = build_engine_settings(payload)
+    settings = import_engine_settings(requested_settings, payload)
     force_refresh = bool(payload.get("force_refresh"))
     configure_lichess(lichess_token)
     request_key = profile_request_key(
@@ -2351,7 +3196,7 @@ def profile() -> tuple:
                 "engine_path": engine_path,
                 "auto_import_on_startup": bool(payload.get("auto_import_on_startup", config.get("auto_import_on_startup", True))),
             },
-            settings,
+            requested_settings,
         )
     )
 
@@ -2574,7 +3419,8 @@ def import_pgn() -> tuple:
 
     config = migrate_engine_defaults(load_config())
     lichess_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
-    settings = build_engine_settings(payload)
+    requested_settings = build_engine_settings(payload)
+    settings = import_engine_settings(requested_settings, payload)
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
@@ -2589,7 +3435,7 @@ def import_pgn() -> tuple:
                 "lichess_token": lichess_token,
                 "engine_path": engine_path,
             },
-            settings,
+            requested_settings,
         )
     )
 
@@ -2675,7 +3521,8 @@ def import_chessnut() -> tuple:
 
     config = migrate_engine_defaults(load_config())
     lichess_token = str(payload.get("lichess_token", local_lichess_token(config))).strip()
-    settings = build_engine_settings(payload)
+    requested_settings = build_engine_settings(payload)
+    settings = import_engine_settings(requested_settings, payload)
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
@@ -2693,7 +3540,7 @@ def import_chessnut() -> tuple:
                 "chessnut_db_path": bundle.db_path,
                 "chessnut_player_color": player_color,
             },
-            settings,
+            requested_settings,
         )
     )
 
@@ -2909,6 +3756,27 @@ def generate_smart_theory() -> tuple:
             config.get("bookup_include_best_engine_replies", True),
             fallback=True,
         )
+    if "expected_move_confidence_cp" not in payload:
+        payload["expected_move_confidence_cp"] = _normalize_int_range(
+            config.get("bookup_expected_move_confidence_cp", 125),
+            fallback=125,
+            minimum=20,
+            maximum=300,
+        )
+    if "style_move_confidence_cp" not in payload:
+        payload["style_move_confidence_cp"] = _normalize_int_range(
+            config.get("bookup_style_move_confidence_cp", 90),
+            fallback=90,
+            minimum=20,
+            maximum=300,
+        )
+    if "style_preferred_min_weight" not in payload:
+        payload["style_preferred_min_weight"] = _normalize_float_range(
+            config.get("bookup_style_min_weight", 1.2),
+            fallback=1.2,
+            minimum=0.2,
+            maximum=8.0,
+        )
     settings = request_engine_settings(payload, config)
     # Smart Theory is tree-based, so we allow multiple workers, but clamp to
     # safe interactive limits so status polling and UI controls stay responsive.
@@ -3015,25 +3883,118 @@ def stop_smart_theory() -> tuple:
     return jsonify({"ok": True, "job_id": job_id, "status": "stopping"}), 200
 
 
+@app.post("/api/smart-theory/preview-chapters")
+def preview_smart_theory_chapters() -> tuple:
+    payload = request.get_json(force=True) or {}
+    config = migrate_engine_defaults(load_config())
+    chapter_name = str(payload.get("chapter_name", "") or "").strip() or "Bookup Smart Theory"
+    chapter_strategy = str(payload.get("chapter_strategy", "first_move") or "first_move").strip().lower()
+    if chapter_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
+        chapter_strategy = "first_move"
+    max_chapters = _normalize_int_range(payload.get("max_chapters", 62), fallback=62, minimum=1, maximum=80)
+    min_chapter_moves = _normalize_int_range(payload.get("min_chapter_moves", 40 if chapter_strategy == "deep_focus" else 0), fallback=40 if chapter_strategy == "deep_focus" else 0, minimum=0, maximum=80)
+    extend_with_engine_tail = _normalize_bool(payload.get("extend_with_engine_tail", True), fallback=True)
+    tail_depth = _normalize_int_range(payload.get("tail_depth", 12), fallback=12, minimum=6, maximum=18)
+    tail_time_sec = _normalize_float_range(payload.get("tail_time_sec", 0.05), fallback=0.05, minimum=0.01, maximum=0.5)
+    tree_payload = payload.get("tree")
+    if not isinstance(tree_payload, dict):
+        return jsonify({"error": "Smart theory tree payload is required for chapter preview."}), 400
+    try:
+        tail_engine = None
+        if chapter_strategy == "deep_focus" and extend_with_engine_tail:
+            tail_settings = request_engine_settings(payload, config)
+            tail_settings = EngineSettings(
+                path=tail_settings.path,
+                depth=tail_depth,
+                threads=max(1, min(4, int(tail_settings.threads))),
+                hash_mb=max(256, min(2048, int(tail_settings.hash_mb))),
+                multipv=1,
+                think_time_sec=tail_time_sec,
+                parallel_workers=1,
+            )
+            tail_engine = shared_engine_for(tail_settings)
+        chapters_payload = _smart_tree_chapter_exports(
+            tree_payload,
+            strategy=chapter_strategy,
+            chapter_name_base=chapter_name,
+            max_chapters=max_chapters,
+            min_chapter_moves=min_chapter_moves,
+            tail_engine=tail_engine,
+            tail_depth=tail_depth,
+            tail_time_sec=tail_time_sec,
+        )
+        if not chapters_payload:
+            return jsonify({"error": "No chapters were generated for preview."}), 400
+        chapters_preview: list[dict[str, Any]] = []
+        for chapter in chapters_payload[:max_chapters]:
+            pgn_text = str(chapter.get("pgn", "") or "")
+            meta = chapter.get("meta", {}) if isinstance(chapter.get("meta"), dict) else {}
+            move_text = " ".join(
+                line.strip()
+                for line in pgn_text.splitlines()
+                if line.strip() and not line.strip().startswith("[")
+            ).strip()
+            move_text = re.sub(r"\{[^}]*\}", "", move_text)
+            move_text = re.sub(r"\s+", " ", move_text).strip()
+            if len(move_text) > 220:
+                move_text = f"{move_text[:220].rstrip()}..."
+            chapters_preview.append(
+                {
+                    "name": str(chapter.get("name", chapter_name) or chapter_name).strip(),
+                    "moves_exported": int(meta.get("moves_exported", 0) or 0),
+                    "warnings_count": len(meta.get("warnings", [])) if isinstance(meta.get("warnings"), list) else 0,
+                    "anchor_node_id": str(meta.get("anchor_node_id", "") or ""),
+                    "anchor_classification": str(meta.get("anchor_classification", "") or ""),
+                    "pgn_excerpt": move_text,
+                    "pgn_text": pgn_text,
+                }
+            )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Could not build chapter preview: {exc}"}), 500
+    return jsonify(
+        {
+            "ok": True,
+            "chapter_name": chapter_name,
+            "chapter_strategy": chapter_strategy,
+            "max_chapters": max_chapters,
+            "min_chapter_moves": min_chapter_moves,
+            "extend_with_engine_tail": extend_with_engine_tail,
+            "chapters_count": len(chapters_preview),
+            "chapters": chapters_preview,
+        }
+    ), 200
+
+
 @app.post("/api/smart-theory/export-lichess-study")
 def export_smart_theory_to_lichess_study() -> tuple:
     payload = request.get_json(force=True) or {}
-    config = load_config()
+    config = migrate_engine_defaults(load_config())
+    previous_study_id = _extract_study_id(str(config.get("bookup_study_id", "") or ""))
     study_id = _extract_study_id(str(payload.get("study_id", "") or "")) or _extract_study_id(str(config.get("bookup_study_id", "") or ""))
     token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
     if not token:
         return jsonify({"error": "A Lichess token with study:write scope is required."}), 400
     auto_create_unified = bool(payload.get("auto_create_unified_study", True))
-    unified_study_name = str(payload.get("unified_study_name", "Bookup") or "Bookup").strip() or "Bookup"
+    configured_unified_name = _normalize_unified_study_name(config.get("bookup_study_name", "Bookup"), fallback="Bookup")
+    unified_study_name = _normalize_unified_study_name(
+        payload.get("unified_study_name", configured_unified_name),
+        fallback=configured_unified_name,
+    )
     created_unified_study = False
     if not study_id and auto_create_unified:
         try:
             created = _create_lichess_study(token=token, study_name=unified_study_name, visibility="unlisted")
             study_id = str(created.get("study_id", "") or "")
             created_unified_study = bool(study_id)
-            config = migrate_engine_defaults(config)
-            config["bookup_study_id"] = study_id
-            save_config(config)
+            if created_unified_study:
+                _list_lichess_study_chapters(study_id=study_id, token=token)
+                if previous_study_id and previous_study_id != study_id:
+                    _append_study_history(config, previous_study_id)
+                config["bookup_study_id"] = study_id
+                config["bookup_study_name"] = unified_study_name
+                save_config(config)
         except Exception as exc:
             return jsonify({"error": f"Could not auto-create unified Bookup study: {exc}"}), 502
     if not study_id:
@@ -3043,8 +4004,15 @@ def export_smart_theory_to_lichess_study() -> tuple:
     if orientation not in {"white", "black"}:
         orientation = "white"
     chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "first_move")) or "first_move").strip().lower()
-    if chapter_strategy not in {"single", "first_move", "unknown_focus"}:
+    if chapter_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
         chapter_strategy = "first_move"
+    max_chapters = _normalize_int_range(payload.get("max_chapters", 62), fallback=62, minimum=1, maximum=80)
+    min_chapter_moves = _normalize_int_range(payload.get("min_chapter_moves", 40 if chapter_strategy == "deep_focus" else 0), fallback=40 if chapter_strategy == "deep_focus" else 0, minimum=0, maximum=80)
+    extend_with_engine_tail = _normalize_bool(payload.get("extend_with_engine_tail", True), fallback=True)
+    tail_depth = _normalize_int_range(payload.get("tail_depth", 12), fallback=12, minimum=6, maximum=18)
+    tail_time_sec = _normalize_float_range(payload.get("tail_time_sec", 0.05), fallback=0.05, minimum=0.01, maximum=0.5)
+    replace_existing_chapters = bool(payload.get("replace_existing_chapters", True))
+    cleanup_default_placeholders = bool(payload.get("cleanup_default_placeholders", not replace_existing_chapters))
 
     provided_pgn = str(payload.get("pgn", "") or "").strip()
     tree_payload = payload.get("tree")
@@ -3055,15 +4023,43 @@ def export_smart_theory_to_lichess_study() -> tuple:
         else:
             if not isinstance(tree_payload, dict):
                 return jsonify({"error": "Smart theory tree payload is required when PGN is not provided."}), 400
+            tail_engine = None
+            if chapter_strategy == "deep_focus" and extend_with_engine_tail:
+                tail_settings = request_engine_settings(payload, config)
+                tail_settings = EngineSettings(
+                    path=tail_settings.path,
+                    depth=tail_depth,
+                    threads=max(1, min(4, int(tail_settings.threads))),
+                    hash_mb=max(256, min(2048, int(tail_settings.hash_mb))),
+                    multipv=1,
+                    think_time_sec=tail_time_sec,
+                    parallel_workers=1,
+                )
+                tail_engine = shared_engine_for(tail_settings)
             chapters_payload = _smart_tree_chapter_exports(
                 tree_payload,
                 strategy=chapter_strategy,
                 chapter_name_base=chapter_name,
+                max_chapters=max_chapters,
+                min_chapter_moves=min_chapter_moves,
+                tail_engine=tail_engine,
+                tail_depth=tail_depth,
+                tail_time_sec=tail_time_sec,
             )
         if not chapters_payload:
             return jsonify({"error": "No chapters were generated for Lichess study export."}), 400
         created_chapters: list[dict[str, Any]] = []
-        for chapter in chapters_payload[:24]:
+        cleanup_result = {"deleted_count": 0, "deleted_chapter_ids": [], "errors": []}
+        if replace_existing_chapters:
+            try:
+                cleanup_result = _cleanup_all_study_chapters(study_id=study_id, token=token)
+            except Exception as cleanup_exc:
+                cleanup_result = {
+                    "deleted_count": 0,
+                    "deleted_chapter_ids": [],
+                    "errors": [str(cleanup_exc)],
+                }
+        for chapter in chapters_payload[:max_chapters]:
             result = _post_pgn_to_lichess_study(
                 study_id=study_id,
                 token=token,
@@ -3078,8 +4074,7 @@ def export_smart_theory_to_lichess_study() -> tuple:
                     "lichess_response": result.get("response", {}),
                 }
             )
-        cleanup_result = {"deleted_count": 0, "deleted_chapter_ids": [], "errors": []}
-        if created_unified_study:
+        if cleanup_default_placeholders and not replace_existing_chapters:
             try:
                 cleanup_result = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
             except Exception as cleanup_exc:
@@ -3088,6 +4083,20 @@ def export_smart_theory_to_lichess_study() -> tuple:
                     "deleted_chapter_ids": [],
                     "errors": [str(cleanup_exc)],
                 }
+        elif replace_existing_chapters:
+            try:
+                placeholder_cleanup = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
+                cleanup_result["deleted_count"] = int(cleanup_result.get("deleted_count", 0) or 0) + int(placeholder_cleanup.get("deleted_count", 0) or 0)
+                cleanup_result["deleted_chapter_ids"] = [
+                    *list(cleanup_result.get("deleted_chapter_ids", []) or []),
+                    *list(placeholder_cleanup.get("deleted_chapter_ids", []) or []),
+                ]
+                cleanup_result["errors"] = [
+                    *list(cleanup_result.get("errors", []) or []),
+                    *list(placeholder_cleanup.get("errors", []) or []),
+                ][:10]
+            except Exception as cleanup_exc:
+                cleanup_result["errors"] = [*list(cleanup_result.get("errors", []) or []), str(cleanup_exc)][:10]
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except RuntimeError as exc:
@@ -3101,15 +4110,25 @@ def export_smart_theory_to_lichess_study() -> tuple:
             "study_id": study_id,
             "study_url": f"https://lichess.org/study/{study_id}",
             "created_unified_study": created_unified_study,
+            "unified_study_name": unified_study_name,
+            "previous_study_id": previous_study_id or "",
             "chapter_name": chapter_name,
             "chapter_strategy": chapter_strategy,
+            "replace_existing_chapters": replace_existing_chapters,
+            "max_chapters": max_chapters,
+            "min_chapter_moves": min_chapter_moves,
+            "extend_with_engine_tail": extend_with_engine_tail,
             "chapters_created": created_chapters,
             "chapters_created_count": len(created_chapters),
             "cleanup": cleanup_result,
             "orientation": orientation,
             "export_meta": {
                 "chapter_strategy": chapter_strategy,
-                "chapters_attempted": len(chapters_payload[:24]),
+                "replace_existing_chapters": replace_existing_chapters,
+                "max_chapters": max_chapters,
+                "min_chapter_moves": min_chapter_moves,
+                "extend_with_engine_tail": extend_with_engine_tail,
+                "chapters_attempted": len(chapters_payload[:max_chapters]),
                 "chapters_created": len(created_chapters),
                 "warnings": [
                     warning
@@ -3129,29 +4148,92 @@ def export_smart_theory_to_lichess_study() -> tuple:
 def refresh_unified_smart_theory_study() -> tuple:
     payload = request.get_json(force=True) or {}
     config = migrate_engine_defaults(load_config())
+    previous_study_id = _extract_study_id(str(config.get("bookup_study_id", "") or ""))
     token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
     if not token:
         return jsonify({"error": "A Lichess token with study:write scope is required."}), 400
-    unified_name = str(payload.get("unified_study_name", "Bookup") or "Bookup").strip() or "Bookup"
+    configured_unified_name = _normalize_unified_study_name(config.get("bookup_study_name", "Bookup"), fallback="Bookup")
+    unified_name = _normalize_unified_study_name(
+        payload.get("unified_study_name", configured_unified_name),
+        fallback=configured_unified_name,
+    )
     try:
         created = _create_lichess_study(token=token, study_name=unified_name, visibility="unlisted")
         study_id = str(created.get("study_id", "") or "")
         if not study_id:
             return jsonify({"error": "Lichess did not return a study ID."}), 502
-        config["bookup_study_id"] = study_id
-        save_config(config)
+        # Verify the new study is reachable before switching local config.
+        chapters = _list_lichess_study_chapters(study_id=study_id, token=token)
         cleanup = _cleanup_default_placeholder_chapters(study_id=study_id, token=token)
+        if previous_study_id and previous_study_id != study_id:
+            _append_study_history(config, previous_study_id)
+        config["bookup_study_id"] = study_id
+        config["bookup_study_name"] = unified_name
+        save_config(config)
         return jsonify(
             {
                 "ok": True,
                 "study_id": study_id,
                 "study_url": f"https://lichess.org/study/{study_id}",
                 "unified_study_name": unified_name,
+                "previous_study_id": previous_study_id or "",
+                "verified_reachable": True,
+                "chapter_count": len(chapters),
                 "cleanup": cleanup,
             }
         ), 200
     except Exception as exc:
         return jsonify({"error": f"Could not create fresh unified Bookup study: {exc}"}), 502
+
+
+@app.post("/api/smart-theory/check-lichess-study")
+def check_smart_theory_lichess_study() -> tuple:
+    payload = request.get_json(force=True) or {}
+    config = migrate_engine_defaults(load_config())
+    token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
+    if not token:
+        return jsonify({"error": "A Lichess token with study:read or study:write scope is required."}), 400
+
+    requested_study_id = _extract_study_id(str(payload.get("study_id", "") or ""))
+    saved_study_id = _extract_study_id(str(config.get("bookup_study_id", "") or ""))
+    study_id = requested_study_id or saved_study_id
+    if not study_id:
+        history = _normalize_study_history(config.get("bookup_study_id_history", []))
+        return jsonify(
+            {
+                "error": "Paste a Lichess study ID/URL first, or create a fresh Bookup study.",
+                "study_id_history": history,
+            }
+        ), 400
+
+    previous_study_id = saved_study_id
+    unified_name = _normalize_unified_study_name(
+        payload.get("unified_study_name", config.get("bookup_study_name", "Bookup")),
+        fallback=_normalize_unified_study_name(config.get("bookup_study_name", "Bookup"), fallback="Bookup"),
+    )
+    try:
+        chapters = _list_lichess_study_chapters(study_id=study_id, token=token)
+        if previous_study_id and previous_study_id != study_id:
+            _append_study_history(config, previous_study_id)
+        config["bookup_study_id"] = study_id
+        config["bookup_study_name"] = unified_name
+        save_config(config)
+        return jsonify(
+            {
+                "ok": True,
+                "status": "connected_existing_study",
+                "study_id": study_id,
+                "study_url": f"https://lichess.org/study/{study_id}",
+                "unified_study_name": unified_name,
+                "previous_study_id": previous_study_id if previous_study_id != study_id else "",
+                "verified_reachable": True,
+                "chapter_count": len(chapters),
+                "chapters": chapters[:100],
+                "study_id_history": _normalize_study_history(config.get("bookup_study_id_history", [])),
+            }
+        ), 200
+    except Exception as exc:
+        return jsonify({"error": f"Could not check that Lichess study: {exc}"}), 502
 
 
 @app.post("/api/legal-moves")

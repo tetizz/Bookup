@@ -4,17 +4,20 @@ Bookup is a GPL repertoire trainer built from your real games. It imports your p
 
 ## Website
 
-Bookup now includes a GitHub Pages website in `docs/`.
+Bookup includes a GitHub Pages website in `docs/`.
 
-- The site is a public product page and preview for the desktop trainer.
+- The site root is the interactive Bookup Web app, not just a download page.
+- Bookup Web has a real Chess.com public stats lookup for rapid, blitz, and bullet. It does not invent live ratings when the public API cannot be reached.
 - GitHub Pages deploys it from `.github/workflows/pages.yml`.
 - The full trainer still runs through the desktop app because Chess.com imports, Stockfish analysis, local caching, and private Lichess tokens require a local Python backend.
 
-Expected public URL after Pages is enabled for the repo:
+Public URL for this repository:
 
 ```text
 https://tetizz.github.io/Bookup/
 ```
+
+GitHub Pages project paths follow the repository name. To use the lowercase URL `https://tetizz.github.io/bookup/`, rename the repository to lowercase `bookup` or publish the site from a user/organization Pages repo with a `/bookup/` folder.
 
 ## What Bookup Does
 

@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="author" content="tetizz">
-    <meta name="description" content="Try a static browser demo of Bookup's desktop repertoire trainer workflow.">
-    <title>Bookup | Web Demo</title>
+    <meta name="description" content="Use Bookup Web in the browser, explore repertoire study tools, and look up real Chess.com rapid, blitz, and bullet stats from the public API.">
+    <title>Bookup | Web Repertoire Trainer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -13,31 +13,32 @@
   </head>
   <body class="app-page">
     <header class="top-nav app-nav">
-      <a class="brand" href="index.html" aria-label="Bookup download page">
+      <a class="brand" href="index.html" aria-label="Bookup web home">
         <span class="brand-mark">B</span>
         <span>Bookup</span>
       </a>
-      <nav aria-label="Demo navigation">
-        <a href="index.html">Download desktop</a>
+      <nav aria-label="Bookup web navigation">
+        <a href="https://github.com/tetizz/Bookup/releases/latest">Desktop app</a>
         <a href="#study" data-nav-tab="study">Study</a>
         <a href="#theory" data-nav-tab="theory">Theory</a>
         <a href="#stats" data-nav-tab="stats">Stats</a>
         <a href="#review" data-nav-tab="review">Review</a>
+        <a href="https://github.com/tetizz/Bookup">GitHub</a>
       </nav>
     </header>
 
     <main class="web-app-shell">
       <section class="web-app-hero section-panel">
         <div>
-          <p class="section-kicker">Browser demo</p>
-          <h1>Try the Bookup workflow in the browser.</h1>
+          <p class="section-kicker">Bookup Web</p>
+          <h1>Study your repertoire in the browser.</h1>
           <p class="hero-lede">
-            This static web version shows the desktop trainer experience with pregenerated positions,
-            engine lines, move classifications, and theory branches. Download the desktop release for
-            live imports, local Stockfish, persistent cache, and private tokens.
+            Use the public site to explore Bookup's study board, theory tree, review queue, and real
+            Chess.com public stats lookup. Download the desktop release when you want live archive imports,
+            local Stockfish analysis, persistent local cache, and private tokens.
           </p>
         </div>
-        <a class="primary-action" href="https://github.com/tetizz/Bookup/releases/latest">Download full desktop app</a>
+        <a class="primary-action" href="#study" data-nav-tab="study">Start studying</a>
       </section>
 
       <section class="desktop-app-frame">
@@ -202,8 +203,41 @@
           <section id="stats" class="demo-tab-panel stats-panel" data-panel="stats">
             <div class="panel-copy">
               <p class="section-kicker">Stats</p>
-              <h2>Your results and tactics in one place.</h2>
-              <p>The desktop app separates rating progress, W/D/L, time-control trends, Brilliant tracking, scan coverage, and games-with-brilliants into a dedicated stats page.</p>
+              <h2>Real public ratings plus training context.</h2>
+              <p>Look up rapid, blitz, and bullet ratings from Chess.com's public API, then use the sample charts below to see how Bookup organizes progress, tactics, and review work.</p>
+            </div>
+            <div class="live-lookup-card" aria-label="Chess.com public stats lookup">
+              <div class="rating-demo-head">
+                <div>
+                  <span class="review-date">Chess.com Public Lookup</span>
+                  <h3>Rapid, blitz, and bullet</h3>
+                  <p id="liveLookupStatus">Uses only Chess.com's public API. No fallback numbers are shown as live data.</p>
+                </div>
+                <form id="liveLookupForm" class="live-lookup-form">
+                  <label for="liveUsername">Username</label>
+                  <div>
+                    <input id="liveUsername" name="liveUsername" type="text" value="trixize1234" autocomplete="username" spellcheck="false">
+                    <button type="submit">Refresh</button>
+                  </div>
+                </form>
+              </div>
+              <div id="liveLookupGrid" class="live-lookup-grid">
+                <article>
+                  <span>Rapid</span>
+                  <strong data-live-rating="rapid">-</strong>
+                  <small data-live-record="rapid">Waiting for refresh</small>
+                </article>
+                <article>
+                  <span>Blitz</span>
+                  <strong data-live-rating="blitz">-</strong>
+                  <small data-live-record="blitz">Waiting for refresh</small>
+                </article>
+                <article>
+                  <span>Bullet</span>
+                  <strong data-live-rating="bullet">-</strong>
+                  <small data-live-record="bullet">Waiting for refresh</small>
+                </article>
+              </div>
             </div>
             <div class="stats-summary-demo">
               <div><span>Current rapid</span><strong>1494</strong><small>+42 over selected range</small></div>
