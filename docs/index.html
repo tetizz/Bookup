@@ -31,24 +31,24 @@
       <section class="web-app-hero section-panel">
         <div>
           <p class="section-kicker">Bookup Web</p>
-          <h1>Study your repertoire in the browser.</h1>
+          <h1>Track your chess progress online.</h1>
           <p class="hero-lede">
-            Use the public site to explore Bookup's study board, theory tree, review queue, and real
-            Chess.com public stats lookup. Download the desktop release when you want live archive imports,
-            local Stockfish analysis, persistent local cache, and private tokens.
+            Enter a Chess.com username and Bookup Web pulls real public rapid, blitz, and bullet
+            data directly in the browser. Then use the study board, theory tree, and review tools
+            to turn that progress into training work.
           </p>
         </div>
-        <a class="primary-action" href="#study" data-nav-tab="study">Start studying</a>
+        <a class="primary-action" href="#stats" data-nav-tab="stats">Check my stats</a>
       </section>
 
       <section class="desktop-app-frame">
-        <div class="tab-bar" role="tablist" aria-label="Bookup demo sections">
+        <div class="tab-bar" role="tablist" aria-label="Bookup web sections">
           <button class="tab-button" type="button" data-demo-tab="setup">Setup</button>
           <button class="tab-button" type="button" data-demo-tab="map">Repertoire Map</button>
           <button class="tab-button" type="button" data-demo-tab="work">Needs Work</button>
-          <button class="tab-button active" type="button" data-demo-tab="study">Study Lines</button>
+          <button class="tab-button" type="button" data-demo-tab="study">Study Lines</button>
           <button class="tab-button" type="button" data-demo-tab="theory">Theory</button>
-          <button class="tab-button" type="button" data-demo-tab="stats">Stats</button>
+          <button class="tab-button active" type="button" data-demo-tab="stats">Stats</button>
           <button class="tab-button" type="button" data-demo-tab="review">Review</button>
         </div>
 
@@ -57,7 +57,7 @@
             <div class="panel-copy">
               <p class="section-kicker">Setup</p>
               <h2>Build once, then keep it fresh.</h2>
-              <p>In the desktop app, Bookup imports public Chess.com archives, auto-imports new games on startup, stores a local analysis cache, and uses optional Lichess explorer data for practical move weighting.</p>
+              <p>Bookup is built around your Chess.com history: public ratings on the web, and deeper archive import, engine analysis, and private local cache in the desktop app.</p>
               <div class="setup-form-demo">
                 <label>Chess.com username <span>your-handle</span></label>
                 <label>Import scope <span>All public games</span></label>
@@ -67,7 +67,7 @@
             </div>
             <div class="engine-dashboard-demo">
               <div class="progress-demo">
-                <span>Import sample</span>
+                <span>Import progress</span>
                 <div><i style="width:92%"></i></div>
                 <p>92% - classifying moves, storing lessons, and warming cache</p>
               </div>
@@ -97,7 +97,7 @@
               <article class="node-card">
                 <span class="node-path">After Be3 e5 dxe5 dxe5</span>
                 <h3>Common reply ...e5</h3>
-                <p>Seen in database samples, legal from the shown position, and ready for practical training.</p>
+                <p>Seen in database lines, legal from the shown position, and ready for practical training.</p>
               </article>
               <article class="node-card">
                 <span class="node-path">Transposition group 18</span>
@@ -132,11 +132,11 @@
             </div>
           </section>
 
-          <section id="study" class="demo-tab-panel study-panel active" data-panel="study">
+          <section id="study" class="demo-tab-panel study-panel" data-panel="study">
             <div class="study-board-area">
               <div class="preview-header">
                 <span>Study Lines</span>
-                <span>Live demo position</span>
+                <span>Study position</span>
               </div>
               <div class="board-wrap">
                 <div class="eval-rail" aria-label="Evaluation +0.56">
@@ -144,11 +144,11 @@
                   <div><i id="webEvalFill" style="height:56%"></i></div>
                   <span>White edge</span>
                 </div>
-                <div id="webBoard" class="chess-board interactive-board" aria-label="Interactive Bookup study demo"></div>
+                <div id="webBoard" class="chess-board interactive-board" aria-label="Interactive Bookup study board"></div>
               </div>
               <div class="study-prompt">
                 <h2>Your move here</h2>
-                <p id="studyPrompt">Choose a pregenerated branch below. The board, arrows, classification, engine lines, and database replies update together.</p>
+                <p id="studyPrompt">Choose a branch below. The board, arrows, classification, engine lines, and database replies update together.</p>
                 <div class="choice-row">
                   <button type="button" data-demo-choice="book">Play Be3</button>
                   <button type="button" data-demo-choice="castle">Play O-O</button>
@@ -180,7 +180,7 @@
             <div class="panel-copy">
               <p class="section-kicker">Theory</p>
               <h2>Tree from imported games.</h2>
-              <p>Click a branch in the desktop app to open that exact position on the analysis board. This demo previews the shape.</p>
+              <p>Click a branch to load that exact position on the analysis board. Bookup keeps positions connected so repeated lines become easier to train.</p>
             </div>
             <div class="theory-tree-panel">
               <div class="tree-root">Start</div>
@@ -189,7 +189,7 @@
               <button type="button" class="tree-branch" data-demo-choice="bg5"><span>Bg5</span><b>17%</b></button>
               <button type="button" class="tree-branch muted" data-demo-choice="book"><span>c4</span><b>7%</b></button>
               <div class="theory-lines">
-                <strong>Generated theory sample</strong>
+                <strong>Generated theory</strong>
                 <p>Nf3 d5 c4 dxc4 e3 a6 Bxc4 e6 O-O c5</p>
                 <p>d4 Nf6 Nf3 g6 c4 Bg7 Nc3 O-O</p>
               </div>
@@ -200,11 +200,11 @@
             </div>
           </section>
 
-          <section id="stats" class="demo-tab-panel stats-panel" data-panel="stats">
+          <section id="stats" class="demo-tab-panel stats-panel active" data-panel="stats">
             <div class="panel-copy">
               <p class="section-kicker">Stats</p>
               <h2>Real public ratings plus training context.</h2>
-              <p>Look up rapid, blitz, and bullet ratings from Chess.com's public API, then use the sample charts below to see how Bookup organizes progress, tactics, and review work.</p>
+              <p>Look up rapid, blitz, and bullet ratings from Chess.com's public API, then use the charts below to see how Bookup organizes progress, tactics, and review work.</p>
             </div>
             <div class="live-lookup-card" aria-label="Chess.com public stats lookup">
               <div class="rating-demo-head">
@@ -250,7 +250,7 @@
                 <div>
                   <span class="review-date">Elo Over Time</span>
                   <h3 id="ratingDemoTitle">Rapid · Last 90 days</h3>
-                  <p id="ratingDemoCopy">1494 current rating with 227 games in this sample range.</p>
+                  <p id="ratingDemoCopy">1494 current rating with 227 games in this range.</p>
                 </div>
                 <div class="rating-demo-controls">
                   <div class="rating-button-row" aria-label="Rating range">
@@ -273,11 +273,11 @@
                 <span><strong id="ratingDemoWinrate">53.3%</strong> wins</span>
               </div>
               <div class="rating-chart-shell">
-                <svg id="ratingDemoSvg" class="rating-demo-svg" viewBox="0 0 720 260" role="img" aria-label="Sample rating progress chart"></svg>
+                <svg id="ratingDemoSvg" class="rating-demo-svg" viewBox="0 0 720 260" role="img" aria-label="Rating progress chart"></svg>
               </div>
-              <div id="ratingDemoHighlight" class="rating-demo-highlight">Hover or tap a point in the desktop app to see games, W/D/L, and win rate for that day.</div>
+              <div id="ratingDemoHighlight" class="rating-demo-highlight">Hover or tap a point to see games, W/D/L, and win rate for that day.</div>
             </div>
-            <div class="brilliant-tracker-demo" aria-label="Bookup brilliant tracker demo">
+            <div class="brilliant-tracker-demo" aria-label="Bookup brilliant tracker">
               <div class="rating-demo-head">
                 <div>
                   <span class="review-date">Brilliant Tracker</span>

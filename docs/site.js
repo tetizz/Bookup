@@ -1,7 +1,7 @@
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const boardSize = 8;
 
-// Legal demo position after:
+// Legal study position after:
 // 1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Nf3 Bg7 5. Be2 O-O
 const basePosition = {
   a8: "bR", b8: "bN", c8: "bB", d8: "bQ", f8: "bR", g8: "bK",
@@ -21,7 +21,7 @@ const demoStates = {
     icon: "book",
     eval: "+0.56",
     fill: "56%",
-    prompt: "Be3 is legal here, stays inside the imported repertoire, and is the top checked candidate in this demo.",
+    prompt: "Be3 is legal here, stays inside the imported repertoire, and is the top checked candidate.",
     review: "Be3 is Book because it is part of the imported branch before engine coaching takes over.",
     bookState: "Book mode is active. Be3 is trusted because it is in your imported repertoire before engine coaching takes over.",
     replies: ["...e5 41%", "...c6 23%", "...a6 18%"],
@@ -40,7 +40,7 @@ const demoStates = {
     fill: "55%",
     prompt: "O-O is legal because the bishop has already moved from f1. It keeps the position close to the top line.",
     review: "O-O is Excellent here: legal, safe, and nearly tied with the top candidate.",
-    bookState: "This branch is still inside your repertoire, but Bookup marks it Excellent because it is being compared as an engine candidate in the demo.",
+    bookState: "This branch is still inside your repertoire, but Bookup marks it Excellent because it is being compared as an engine candidate.",
     replies: ["...e5 38%", "...c6 22%", "...Nbd7 15%"],
     lines: [
       { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5 Qxd8 Rxd8" },
@@ -515,7 +515,7 @@ function renderRatingDemo(rangeKey = "90", timeKey = "rapid") {
   if (rating) rating.textContent = profile.current;
   if (recordNode) recordNode.textContent = `${record.wins}W ${record.draws}D ${record.losses}L`;
   if (winrateNode) winrateNode.textContent = `${winrate}%`;
-  if (highlight) highlight.textContent = `Sample highlight: ${profile.label} had ${record.wins} wins, ${record.draws} draws, and ${record.losses} losses across ${record.games} games.`;
+  if (highlight) highlight.textContent = `${profile.label} had ${record.wins} wins, ${record.draws} draws, and ${record.losses} losses across ${record.games} games.`;
 }
 
 function bindRatingDemo() {
