@@ -1,551 +1,612 @@
-const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-const boardSize = 8;
+const STORAGE_KEY = "bookup-web-state-v2";
+const MODE_KEYS = ["rapid", "blitz", "bullet"];
+const MODE_LABELS = { rapid: "Rapid", blitz: "Blitz", bullet: "Bullet" };
+const DEFAULT_PROFILE = {
+  username: "trixize1234",
+  fallbackRating: 1507,
+  games: 1096,
+  wins: 602,
+  draws: 50,
+  losses: 444,
+  accuracy: { average: 74.18, opening: 85.1, middlegame: 71.1, endgame: 77.2 },
+};
+const DEFAULT_DROPOFF = [
+  [1, 100, 55, 5, 40],
+  [101, 200, 53, 5, 42],
+  [201, 300, 52, 5, 43],
+  [301, 400, 51, 5, 44],
+  [401, 500, 50, 6, 44],
+  [501, 600, 49, 6, 45],
+  [601, 700, 48, 6, 46],
+  [701, 800, 47, 6, 47],
+  [801, 900, 46, 6, 48],
+  [901, 1000, 45, 6, 49],
+];
 
-// Legal study position after:
-// 1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Nf3 Bg7 5. Be2 O-O
-const basePosition = {
-  a8: "bR", b8: "bN", c8: "bB", d8: "bQ", f8: "bR", g8: "bK",
-  a7: "bP", b7: "bP", c7: "bP", e7: "bP", f7: "bP", g7: "bB", h7: "bP",
-  d6: "bP", f6: "bN", g6: "bP",
-  d4: "wP", e4: "wP",
-  c3: "wN", f3: "wN",
-  a2: "wP", b2: "wP", c2: "wP", e2: "wB", f2: "wP", g2: "wP", h2: "wP",
-  a1: "wR", c1: "wB", d1: "wQ", e1: "wK", h1: "wR",
+const el = {};
+const state = {
+  username: DEFAULT_PROFILE.username,
+  mode: "rapid",
+  stats: {},
+  recentGames: [],
+  sessions: [],
+  dropoff: DEFAULT_DROPOFF.map((row) => [...row]),
+  accuracy: { ...DEFAULT_PROFILE.accuracy },
+  customGames: 538,
+  loading: false,
+  useFallback: false,
+  lastUpdated: "",
 };
 
-const demoStates = {
-  book: {
-    from: "c1",
-    to: "e3",
-    move: "Be3",
-    icon: "book",
-    eval: "+0.56",
-    fill: "56%",
-    prompt: "Be3 is legal here, stays inside the imported repertoire, and is the top checked candidate.",
-    review: "Be3 is Book because it is part of the imported branch before engine coaching takes over.",
-    bookState: "Book mode is active. Be3 is trusted because it is in your imported repertoire before engine coaching takes over.",
-    replies: ["...e5 41%", "...c6 23%", "...a6 18%"],
-    lines: [
-      { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5 Nxe5 Nxe4" },
-      { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7 O-O e5" },
-      { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5 Qxd8 Rxd8" },
-    ],
-  },
-  castle: {
-    from: "e1",
-    to: "g1",
-    move: "O-O",
-    icon: "excellent",
-    eval: "+0.53",
-    fill: "55%",
-    prompt: "O-O is legal because the bishop has already moved from f1. It keeps the position close to the top line.",
-    review: "O-O is Excellent here: legal, safe, and nearly tied with the top candidate.",
-    bookState: "This branch is still inside your repertoire, but Bookup marks it Excellent because it is being compared as an engine candidate.",
-    replies: ["...e5 38%", "...c6 22%", "...Nbd7 15%"],
-    lines: [
-      { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5 Qxd8 Rxd8" },
-      { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5" },
-      { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7" },
-    ],
-  },
-  bg5: {
-    from: "c1",
-    to: "g5",
-    move: "Bg5",
-    icon: "excellent",
-    eval: "+0.54",
-    fill: "54%",
-    prompt: "Bg5 is a legal developing move from c1 to g5 and stays in the same practical setup.",
-    review: "Bg5 is Excellent because it is very close to the top engine line in this validated position.",
-    bookState: "Bookup would keep following Bg5 if your imported games repeatedly transpose here; otherwise it becomes an engine-coached branch.",
-    replies: ["...c6 45%", "...Nbd7 29%", "...e5 11%"],
-    lines: [
-      { eval: "+0.54", move: "Bg5", label: "Excellent", icon: "excellent", text: "Bg5 c6 a4 Nbd7 O-O e5" },
-      { eval: "+0.56", move: "Be3", label: "Book", icon: "book", text: "Be3 e5 dxe5 dxe5" },
-      { eval: "+0.53", move: "O-O", label: "Excellent", icon: "excellent", text: "O-O e5 dxe5 dxe5" },
-    ],
-  },
-};
+function $(id) {
+  return document.getElementById(id);
+}
 
-const ratingRangeLabels = {
-  "7": "Last 7 days",
-  "30": "Last 30 days",
-  "90": "Last 90 days",
-  "365": "Last year",
-  all: "All time",
-};
+function number(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
-const ratingDemoProfiles = {
-  rapid: {
-    label: "Rapid",
-    base: 1328,
-    current: 1494,
-    records: {
-      "7": { games: 21, wins: 13, draws: 1, losses: 7, delta: 18 },
-      "30": { games: 74, wins: 43, draws: 5, losses: 26, delta: 61 },
-      "90": { games: 227, wins: 121, draws: 14, losses: 92, delta: 166 },
-      "365": { games: 612, wins: 337, draws: 31, losses: 244, delta: 241 },
-      all: { games: 1167, wins: 620, draws: 57, losses: 490, delta: 327 },
-    },
-  },
-  blitz: {
-    label: "Blitz",
-    base: 1184,
-    current: 1276,
-    records: {
-      "7": { games: 16, wins: 8, draws: 1, losses: 7, delta: 7 },
-      "30": { games: 58, wins: 31, draws: 2, losses: 25, delta: 36 },
-      "90": { games: 181, wins: 96, draws: 7, losses: 78, delta: 92 },
-      "365": { games: 496, wins: 257, draws: 18, losses: 221, delta: 133 },
-      all: { games: 842, wins: 434, draws: 31, losses: 377, delta: 188 },
-    },
-  },
-  bullet: {
-    label: "Bullet",
-    base: 1002,
-    current: 1098,
-    records: {
-      "7": { games: 33, wins: 17, draws: 0, losses: 16, delta: 4 },
-      "30": { games: 122, wins: 66, draws: 2, losses: 54, delta: 28 },
-      "90": { games: 298, wins: 159, draws: 4, losses: 135, delta: 96 },
-      "365": { games: 708, wins: 371, draws: 9, losses: 328, delta: 118 },
-      all: { games: 1044, wins: 545, draws: 11, losses: 488, delta: 142 },
-    },
-  },
-};
+function formatRating(value) {
+  const parsed = Math.round(number(value, 0));
+  return parsed ? String(parsed) : "-";
+}
 
 function formatCount(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) ? number.toLocaleString("en-US") : "0";
+  return Math.round(number(value, 0)).toLocaleString("en-US");
 }
 
-function readChessComMode(stats, key) {
-  const mode = stats?.[`chess_${key}`];
-  if (!mode?.last) {
-    return { available: false };
-  }
-  const record = mode.record || {};
-  const wins = Number(record.win || 0);
-  const draws = Number(record.draw || 0);
-  const losses = Number(record.loss || 0);
-  const games = wins + draws + losses;
-  return {
-    available: true,
-    rating: Number(mode.last.rating || 0),
-    wins,
-    draws,
-    losses,
-    games,
-  };
+function pct(value, digits = 1) {
+  return `${number(value, 0).toFixed(digits)}%`;
 }
 
-function renderLiveMode(key, mode) {
-  const ratingNode = document.querySelector(`[data-live-rating="${key}"]`);
-  const recordNode = document.querySelector(`[data-live-record="${key}"]`);
-  if (!ratingNode || !recordNode) return;
-
-  if (!mode.available) {
-    ratingNode.textContent = "-";
-    recordNode.textContent = "No public games found";
-    return;
-  }
-
-  ratingNode.textContent = String(mode.rating || "-");
-  recordNode.textContent = `${formatCount(mode.games)} games · ${formatCount(mode.wins)}W ${formatCount(mode.draws)}D ${formatCount(mode.losses)}L`;
+function saveLocal() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    username: state.username,
+    mode: state.mode,
+    sessions: state.sessions,
+    dropoff: state.dropoff,
+    accuracy: state.accuracy,
+    customGames: state.customGames,
+  }));
 }
 
-function setLiveLookupStatus(message, isError = false) {
-  const card = document.querySelector(".live-lookup-card");
-  const status = document.getElementById("liveLookupStatus");
-  if (card) card.classList.toggle("error", isError);
-  if (status) status.textContent = message;
-}
-
-async function fetchChessComStats(username) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 12000);
+function loadLocal() {
   try {
-    const response = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(username)}/stats`, {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    if (saved.username) state.username = String(saved.username);
+    if (MODE_KEYS.includes(saved.mode)) state.mode = saved.mode;
+    if (Array.isArray(saved.sessions)) state.sessions = saved.sessions;
+    if (Array.isArray(saved.dropoff) && saved.dropoff.length) {
+      state.dropoff = saved.dropoff.map((row) => row.map((item) => number(item, 0)));
+    }
+    if (saved.accuracy) state.accuracy = { ...state.accuracy, ...saved.accuracy };
+    if (saved.customGames) state.customGames = number(saved.customGames, 538);
+  } catch {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+}
+
+async function fetchJson(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
       headers: { Accept: "application/json" },
       signal: controller.signal,
     });
-    if (response.status === 404) {
-      throw new Error(`Chess.com user "${username}" was not found.`);
-    }
-    if (response.status === 429) {
-      throw new Error("Chess.com is rate limiting public requests right now. Try again in a bit.");
-    }
-    if (!response.ok) {
-      throw new Error(`Chess.com returned HTTP ${response.status}.`);
-    }
+    if (response.status === 404) throw new Error("That Chess.com username was not found.");
+    if (response.status === 429) throw new Error("Chess.com is rate limiting public requests. Try again soon.");
+    if (!response.ok) throw new Error(`Chess.com returned HTTP ${response.status}.`);
     return await response.json();
   } finally {
     window.clearTimeout(timeout);
   }
 }
 
-async function refreshLiveLookup(username) {
-  const cleanUsername = String(username || "").trim();
-  const form = document.getElementById("liveLookupForm");
-  const button = form?.querySelector("button");
-  if (!cleanUsername) {
-    setLiveLookupStatus("Enter a Chess.com username to refresh public stats.", true);
+function status(message, kind = "normal") {
+  el.statusLine.textContent = message;
+  el.statusLine.dataset.kind = kind;
+}
+
+function modeFromStats(statsPayload, mode) {
+  const data = statsPayload?.[`chess_${mode}`];
+  if (!data?.last) return null;
+  const record = data.record || {};
+  const wins = number(record.win);
+  const draws = number(record.draw);
+  const losses = number(record.loss);
+  const games = wins + draws + losses;
+  return {
+    rating: number(data.last.rating),
+    best: number(data.best?.rating || data.last.rating),
+    wins,
+    draws,
+    losses,
+    games,
+    winRate: games ? (wins / games) * 100 : 0,
+    scoreRate: games ? ((wins + draws * 0.5) / games) * 100 : 0,
+  };
+}
+
+function parseHeaders(pgn) {
+  const headers = {};
+  String(pgn || "").replace(/\[([A-Za-z0-9_]+)\s+"([^"]*)"\]/g, (_, key, value) => {
+    headers[key] = value;
+    return "";
+  });
+  return headers;
+}
+
+function parseClockSeconds(raw) {
+  const match = String(raw || "").match(/(?:(\d+):)?(\d+):(\d+)/);
+  if (!match) return null;
+  const hours = number(match[1]);
+  const minutes = number(match[2]);
+  const seconds = number(match[3]);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function estimateDurationMinutes(game) {
+  const pgn = String(game?.pgn || "");
+  const clocks = [...pgn.matchAll(/\[%clk\s+([^\]]+)\]/g)]
+    .map((match) => parseClockSeconds(match[1]))
+    .filter((item) => item !== null);
+  if (clocks.length >= 4) {
+    const high = Math.max(...clocks.slice(0, 6));
+    const low = Math.min(...clocks.slice(-8));
+    const estimate = Math.max(2, (high - low) / 60);
+    return Math.min(60, estimate);
+  }
+  const tc = String(game?.time_control || "");
+  const [base, inc] = tc.split("+").map((item) => number(item));
+  if (base) return Math.min(60, Math.max(2, (base * 2 + inc * 70) / 60));
+  return 20;
+}
+
+function normalizeGame(game, username) {
+  const headers = parseHeaders(game.pgn);
+  const lower = username.toLowerCase();
+  const isWhite = String(game.white?.username || "").toLowerCase() === lower;
+  const player = isWhite ? game.white : game.black;
+  const result = String(player?.result || "").toLowerCase();
+  const outcome = ["win"].includes(result) ? "win" : ["agreed", "repetition", "stalemate", "insufficient", "50move", "timevsinsufficient"].includes(result) ? "draw" : "loss";
+  return {
+    endTime: number(game.end_time),
+    rating: number(player?.rating),
+    outcome,
+    timeClass: String(game.time_class || headers.TimeControl || "").toLowerCase(),
+    duration: estimateDurationMinutes(game),
+  };
+}
+
+async function fetchRecentGames(username, mode) {
+  const archives = await fetchJson(`https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/archives`, 12000);
+  const urls = Array.isArray(archives.archives) ? archives.archives.slice(-4) : [];
+  const batches = await Promise.allSettled(urls.map((url) => fetchJson(url, 15000)));
+  return batches
+    .filter((item) => item.status === "fulfilled")
+    .flatMap((item) => Array.isArray(item.value.games) ? item.value.games : [])
+    .filter((game) => String(game.time_class || "").toLowerCase() === mode)
+    .map((game) => normalizeGame(game, username))
+    .filter((game) => game.rating && game.endTime)
+    .sort((a, b) => a.endTime - b.endTime)
+    .slice(-80);
+}
+
+async function refresh() {
+  const username = el.usernameInput.value.trim();
+  if (!username) {
+    status("Enter a Chess.com username.", "error");
     return;
   }
-
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Loading";
-  }
-  setLiveLookupStatus(`Fetching real public stats for ${cleanUsername}...`);
-
+  state.username = username;
+  state.loading = true;
+  state.useFallback = false;
+  state.recentGames = [];
+  saveLocal();
+  renderAll();
+  el.refreshBtn.disabled = true;
+  el.refreshBtn.textContent = "Loading";
+  status(`Loading real public data for ${username}...`);
   try {
-    const stats = await fetchChessComStats(cleanUsername);
-    ["rapid", "blitz", "bullet"].forEach((key) => renderLiveMode(key, readChessComMode(stats, key)));
-    setLiveLookupStatus(`Showing live Chess.com public stats for ${cleanUsername}.`);
-  } catch (error) {
-    ["rapid", "blitz", "bullet"].forEach((key) => renderLiveMode(key, { available: false }));
-    const message = error?.name === "AbortError"
-      ? "Chess.com took too long to respond. Check your connection and try again."
-      : error?.message || "Could not load Chess.com public stats.";
-    setLiveLookupStatus(message, true);
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = "Refresh";
+    const statsPayload = await fetchJson(`https://api.chess.com/pub/player/${encodeURIComponent(username)}/stats`);
+    MODE_KEYS.forEach((mode) => {
+      state.stats[mode] = modeFromStats(statsPayload, mode);
+    });
+    try {
+      state.recentGames = await fetchRecentGames(username, state.mode);
+      status(`Loaded public ${MODE_LABELS[state.mode]} stats and ${state.recentGames.length} recent games for ${username}.`);
+    } catch (error) {
+      state.recentGames = [];
+      status(`Loaded public ratings. Recent games could not be loaded: ${error.message}`, "warn");
     }
+    state.lastUpdated = new Date().toLocaleString();
+    state.loading = false;
+    renderAll();
+  } catch (error) {
+    state.loading = false;
+    state.useFallback = true;
+    status(error.name === "AbortError" ? "Chess.com took too long to respond." : error.message, "error");
+    renderAll();
+  } finally {
+    el.refreshBtn.disabled = false;
+    el.refreshBtn.textContent = "Refresh";
   }
 }
 
-function bindLiveLookup() {
-  const form = document.getElementById("liveLookupForm");
-  const input = document.getElementById("liveUsername");
-  if (!form || !input) return;
-
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    void refreshLiveLookup(input.value);
-  });
-
-  void refreshLiveLookup(input.value);
+function currentStats() {
+  return state.stats[state.mode] || null;
 }
 
-function squareCenter(square) {
-  const file = square[0];
-  const rank = Number(square[1]);
+function fallbackStats() {
+  const { games, wins, draws, losses, fallbackRating } = DEFAULT_PROFILE;
   return {
-    x: files.indexOf(file) + 0.5,
-    y: boardSize - rank + 0.5,
+    rating: fallbackRating,
+    best: fallbackRating,
+    wins,
+    draws,
+    losses,
+    games,
+    winRate: games ? wins / games * 100 : 0,
+    scoreRate: games ? (wins + draws * 0.5) / games * 100 : 0,
   };
 }
 
-function arrowPath(fromSquare, toSquare) {
-  const from = squareCenter(fromSquare);
-  const to = squareCenter(toSquare);
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const length = Math.hypot(dx, dy);
-  if (length <= 0.01) return "";
-
-  const unitX = dx / length;
-  const unitY = dy / length;
-  const normalX = -unitY;
-  const normalY = unitX;
-
-  const startInset = 0.42;
-  const tipInset = 0.22;
-  const shaftWidth = 0.07;
-  const headLength = Math.min(0.3, length * 0.2);
-  const headWidth = 0.22;
-
-  const start = {
-    x: from.x + unitX * startInset,
-    y: from.y + unitY * startInset,
-  };
-  const tip = {
-    x: to.x - unitX * tipInset,
-    y: to.y - unitY * tipInset,
-  };
-  const neck = {
-    x: tip.x - unitX * headLength,
-    y: tip.y - unitY * headLength,
-  };
-
-  const points = [
-    [start.x + normalX * shaftWidth, start.y + normalY * shaftWidth],
-    [neck.x + normalX * shaftWidth, neck.y + normalY * shaftWidth],
-    [neck.x + normalX * headWidth, neck.y + normalY * headWidth],
-    [tip.x, tip.y],
-    [neck.x - normalX * headWidth, neck.y - normalY * headWidth],
-    [neck.x - normalX * shaftWidth, neck.y - normalY * shaftWidth],
-    [start.x - normalX * shaftWidth, start.y - normalY * shaftWidth],
-  ];
-
-  return points
-    .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(3)} ${y.toFixed(3)}`)
-    .join(" ") + " Z";
+function activeStats() {
+  return currentStats() || (state.useFallback ? fallbackStats() : null);
 }
 
-function renderBoard(board, stateKey = "book") {
-  if (!board) return;
-  const state = demoStates[stateKey] || demoStates.book;
-  board.innerHTML = "";
-
-  for (let rank = 8; rank >= 1; rank -= 1) {
-    files.forEach((file, fileIndex) => {
-      const squareName = `${file}${rank}`;
-      const square = document.createElement("div");
-      square.className = `square ${((8 - rank) + fileIndex) % 2 === 0 ? "light" : "dark"}`;
-      square.dataset.square = squareName;
-
-      if (squareName === state.from) {
-        square.classList.add("best-from", "classified-source", `classification-${state.icon}`);
-        const overlay = document.createElement("div");
-        overlay.className = "square-classification-overlay";
-        square.appendChild(overlay);
-      }
-      if (squareName === state.to) {
-        square.classList.add("best-to", "classified-target", `classification-${state.icon}`);
-        const overlay = document.createElement("div");
-        overlay.className = "square-classification-overlay";
-        square.appendChild(overlay);
-      }
-
-      const piece = basePosition[squareName];
-      if (piece) {
-        const image = document.createElement("img");
-        image.className = "piece";
-        image.alt = `${piece[0] === "w" ? "White" : "Black"} ${piece[1]}`;
-        image.src = `assets/pieces/cburnett/${piece}.svg`;
-        square.appendChild(image);
-      }
-
-      if (squareName === state.to) {
-        const icon = document.createElement("img");
-        icon.className = "class-icon";
-        icon.alt = `${state.move} ${state.icon} classification`;
-        icon.src = `assets/move-classifications/${state.icon}.png`;
-        square.appendChild(icon);
-      }
-
-      if (file === "a") {
-        const rankLabel = document.createElement("span");
-        rankLabel.className = "coord rank-label";
-        rankLabel.textContent = rank;
-        square.appendChild(rankLabel);
-      }
-
-      if (rank === 1) {
-        const fileLabel = document.createElement("span");
-        fileLabel.className = "coord file-label";
-        fileLabel.textContent = file;
-        square.appendChild(fileLabel);
-      }
-
-      board.appendChild(square);
-    });
+function renderMetrics() {
+  const stats = activeStats();
+  if (!stats) {
+    el.ratingValue.textContent = "-";
+    el.ratingSub.textContent = state.loading ? "Loading Chess.com public rating" : "Refresh to load live rating";
+    el.recordValue.textContent = "-";
+    el.recordSub.textContent = "Waiting for public stats";
+    el.winrateValue.textContent = "-";
+    el.scoreValue.textContent = "-";
+    el.formValue.textContent = "-";
+    el.formSub.textContent = "Waiting for recent games";
+    el.lengthValue.textContent = "-";
+    el.lengthSub.textContent = "Waiting for recent games";
+    return;
   }
-
-  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  arrow.setAttribute("class", "board-arrow-svg");
-  arrow.setAttribute("viewBox", "0 0 8 8");
-  arrow.setAttribute("aria-hidden", "true");
-  arrow.innerHTML = `
-    <defs>
-      <filter id="boardArrowShadow" x="-20%" y="-20%" width="140%" height="140%">
-        <feDropShadow dx="0" dy="0.045" stdDeviation="0.035" flood-color="#0a1c36" flood-opacity="0.32"></feDropShadow>
-      </filter>
-    </defs>
-    <path class="board-arrow-path" d="${arrowPath(state.from, state.to)}"></path>
-  `;
-  board.appendChild(arrow);
+  const live = Boolean(currentStats());
+  const recent = state.recentGames.slice(-20);
+  const wins = recent.filter((game) => game.outcome === "win").length;
+  const draws = recent.filter((game) => game.outcome === "draw").length;
+  const losses = recent.filter((game) => game.outcome === "loss").length;
+  const avgLength = recent.length ? recent.reduce((sum, game) => sum + game.duration, 0) / recent.length : 20;
+  const shortest = recent.length ? Math.min(...recent.map((game) => game.duration)) : 20;
+  const longest = recent.length ? Math.max(...recent.map((game) => game.duration)) : 20;
+  el.ratingValue.textContent = formatRating(stats.rating);
+  el.ratingSub.textContent = live ? `${MODE_LABELS[state.mode]} rating from Chess.com` : "Manual fallback, not live";
+  el.recordValue.textContent = `${formatCount(stats.wins)}W ${formatCount(stats.draws)}D ${formatCount(stats.losses)}L`;
+  el.recordSub.textContent = `${formatCount(stats.games)} rated games`;
+  el.winrateValue.textContent = pct(stats.winRate);
+  el.scoreValue.textContent = pct(stats.scoreRate);
+  el.formValue.textContent = recent.length ? `${wins}W ${draws}D ${losses}L` : "-";
+  el.formSub.textContent = recent.length ? `Last ${recent.length} public games` : "Archives unavailable";
+  el.lengthValue.textContent = recent.length ? `${Math.round(avgLength)}m` : "20m";
+  el.lengthSub.textContent = recent.length ? `${Math.round(shortest)}m shortest · ${Math.round(longest)}m longest` : "Fallback max estimate";
 }
 
-function renderAnalysisLines(stateKey = "book") {
-  const target = document.getElementById("webLines");
-  if (!target) return;
-  const state = demoStates[stateKey] || demoStates.book;
-  target.innerHTML = state.lines
-    .map((line) => `
-      <div class="engine-line">
-        <span class="eval">${line.eval}</span>
-        <strong>${line.move}</strong>
-        <span class="class ${line.icon}">
-          <img src="assets/move-classifications/${line.icon}.png" alt="">${line.label}
-        </span>
-        <small>${line.text}</small>
-      </div>
-    `)
-    .join("");
-}
-
-function updateStudy(stateKey = "book") {
-  const state = demoStates[stateKey] || demoStates.book;
-  renderBoard(document.getElementById("webBoard"), stateKey);
-  renderAnalysisLines(stateKey);
-
-  const prompt = document.getElementById("studyPrompt");
-  const review = document.getElementById("moveReview");
-  const bookStateCopy = document.getElementById("bookStateCopy");
-  const evalText = document.getElementById("webEval");
-  const evalFill = document.getElementById("webEvalFill");
-  const evalRail = evalText?.closest(".eval-rail");
-  const replies = [document.getElementById("replyOne"), document.getElementById("replyTwo"), document.getElementById("replyThree")];
-
-  if (prompt) prompt.textContent = state.prompt;
-  if (review) review.textContent = state.review;
-  if (bookStateCopy) bookStateCopy.textContent = state.bookState;
-  if (evalText) evalText.textContent = state.eval;
-  if (evalRail) evalRail.setAttribute("aria-label", `Evaluation ${state.eval}`);
-  if (evalFill) evalFill.style.height = state.fill;
-  replies.forEach((node, index) => {
-    if (node) node.textContent = state.replies[index];
-  });
-}
-
-function bindTabs() {
-  const buttons = document.querySelectorAll("[data-demo-tab]");
-  const panels = document.querySelectorAll("[data-panel]");
-  const activate = (name) => {
-    buttons.forEach((item) => item.classList.toggle("active", item.dataset.demoTab === name));
-    panels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
-  };
-
-  buttons.forEach((button) => {
-    button.addEventListener("click", () => {
-      activate(button.dataset.demoTab);
-    });
-  });
-
-  document.querySelectorAll("[data-nav-tab]").forEach((link) => {
-    link.addEventListener("click", () => activate(link.dataset.navTab));
-  });
-
-  const initialTab = window.location.hash.replace("#", "");
-  if (initialTab && document.querySelector(`[data-panel="${initialTab}"]`)) {
-    activate(initialTab);
+function renderLineChart(svg, points, options = {}) {
+  const width = options.width || 820;
+  const height = options.height || 300;
+  const pad = { x: 42, y: 30 };
+  if (!points.length) {
+    svg.innerHTML = `<text x="42" y="150" class="chart-empty">Refresh public games or save sessions to draw this chart.</text>`;
+    return;
   }
-}
-
-function bindChoices() {
-  document.querySelectorAll("[data-demo-choice]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const stateKey = button.dataset.demoChoice;
-      updateStudy(stateKey);
-      const studyButton = document.querySelector("[data-demo-tab='study']");
-      if (studyButton) studyButton.click();
-    });
-  });
-}
-
-function makeRatingPoints(profile, record, count) {
-  const points = [];
-  const usableCount = Math.max(6, count);
-  const start = profile.current - record.delta;
-  const volatility = profile.label === "Bullet" ? 9 : profile.label === "Blitz" ? 7 : 5;
-  for (let index = 0; index < usableCount; index += 1) {
-    const progress = index / Math.max(1, usableCount - 1);
-    const wave = Math.sin(progress * Math.PI * 4.2) * volatility;
-    const noise = Math.cos(progress * Math.PI * 8.5) * (volatility * 0.42);
-    const recovery = Math.sin(progress * Math.PI) * Math.max(10, record.delta * 0.08);
-    const value = Math.round(start + record.delta * progress + wave + noise + recovery);
-    const result = index % 9 === 0 ? "loss" : index % 5 === 0 ? "draw" : "win";
-    points.push({ value, result, index });
-  }
-  points[points.length - 1].value = profile.current;
-  return points;
-}
-
-function renderRatingDemo(rangeKey = "90", timeKey = "rapid") {
-  const profile = ratingDemoProfiles[timeKey] || ratingDemoProfiles.rapid;
-  const record = profile.records[rangeKey] || profile.records["90"];
-  const svg = document.getElementById("ratingDemoSvg");
-  if (!svg) return;
-
-  const pointCount = rangeKey === "7" ? 12 : rangeKey === "30" ? 22 : rangeKey === "90" ? 34 : rangeKey === "365" ? 48 : 58;
-  const points = makeRatingPoints(profile, record, pointCount);
-  const values = points.map((point) => point.value);
-  const minValue = Math.min(...values) - 18;
-  const maxValue = Math.max(...values) + 18;
-  const width = 720;
-  const height = 260;
-  const padX = 34;
-  const padY = 28;
-  const chartW = width - padX * 2;
-  const chartH = height - padY * 2;
-  const toX = (index) => padX + (index / Math.max(1, points.length - 1)) * chartW;
-  const toY = (value) => padY + ((maxValue - value) / Math.max(1, maxValue - minValue)) * chartH;
-  const lineD = points.map((point, index) => `${index === 0 ? "M" : "L"} ${toX(index).toFixed(1)} ${toY(point.value).toFixed(1)}`).join(" ");
-  const areaD = `${lineD} L ${toX(points.length - 1).toFixed(1)} ${height - padY} L ${padX} ${height - padY} Z`;
-  const yTicks = [maxValue, Math.round((maxValue + minValue) / 2), minValue];
-
+  const values = points.map((point) => number(point.value));
+  const min = Math.min(...values) - 12;
+  const max = Math.max(...values) + 12;
+  const chartW = width - pad.x * 2;
+  const chartH = height - pad.y * 2;
+  const x = (index) => pad.x + index / Math.max(1, points.length - 1) * chartW;
+  const y = (value) => pad.y + (max - value) / Math.max(1, max - min) * chartH;
+  const path = points.map((point, index) => `${index ? "L" : "M"} ${x(index).toFixed(1)} ${y(point.value).toFixed(1)}`).join(" ");
+  const area = `${path} L ${x(points.length - 1).toFixed(1)} ${height - pad.y} L ${pad.x} ${height - pad.y} Z`;
+  const ticks = [max, (max + min) / 2, min];
   svg.innerHTML = `
     <defs>
-      <linearGradient id="ratingAreaGradient" x1="0" x2="0" y1="0" y2="1">
-        <stop offset="0%" stop-color="#7da2ff" stop-opacity="0.42"></stop>
-        <stop offset="100%" stop-color="#7da2ff" stop-opacity="0.04"></stop>
+      <linearGradient id="${options.gradient || "chartGradient"}" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0%" stop-color="#81d99a" stop-opacity="0.34"></stop>
+        <stop offset="100%" stop-color="#81d99a" stop-opacity="0.02"></stop>
       </linearGradient>
-      <filter id="ratingGlow" x="-10%" y="-30%" width="120%" height="160%">
-        <feGaussianBlur stdDeviation="3.2" result="blur"></feGaussianBlur>
-        <feMerge>
-          <feMergeNode in="blur"></feMergeNode>
-          <feMergeNode in="SourceGraphic"></feMergeNode>
-        </feMerge>
-      </filter>
     </defs>
-    ${yTicks.map((tick) => `<g class="rating-gridline"><line x1="${padX}" x2="${width - padX}" y1="${toY(tick).toFixed(1)}" y2="${toY(tick).toFixed(1)}"></line><text x="8" y="${(toY(tick) + 4).toFixed(1)}">${tick}</text></g>`).join("")}
-    <path class="rating-demo-area" d="${areaD}"></path>
-    <path class="rating-demo-line" d="${lineD}" filter="url(#ratingGlow)"></path>
-    ${points.map((point, index) => {
-      const x = toX(index).toFixed(1);
-      const y = toY(point.value).toFixed(1);
-      return `<circle class="rating-demo-point ${point.result}" cx="${x}" cy="${y}" r="4.8"><title>${profile.label} ${point.value} · ${point.result}</title></circle>`;
-    }).join("")}
+    ${ticks.map((tick) => `<g class="gridline"><line x1="${pad.x}" x2="${width - pad.x}" y1="${y(tick).toFixed(1)}" y2="${y(tick).toFixed(1)}"></line><text x="8" y="${(y(tick) + 4).toFixed(1)}">${formatRating(tick)}</text></g>`).join("")}
+    <path class="chart-area" d="${area}" fill="url(#${options.gradient || "chartGradient"})"></path>
+    <path class="chart-line" d="${path}"></path>
+    ${points.map((point, index) => `<circle class="chart-point ${point.outcome || ""}" cx="${x(index).toFixed(1)}" cy="${y(point.value).toFixed(1)}" r="4"><title>${formatRating(point.value)}</title></circle>`).join("")}
   `;
-
-  const winrate = record.games ? ((record.wins / record.games) * 100).toFixed(1) : "0.0";
-  const title = document.getElementById("ratingDemoTitle");
-  const copy = document.getElementById("ratingDemoCopy");
-  const rating = document.getElementById("ratingDemoRating");
-  const recordNode = document.getElementById("ratingDemoRecord");
-  const winrateNode = document.getElementById("ratingDemoWinrate");
-  const highlight = document.getElementById("ratingDemoHighlight");
-  if (title) title.textContent = `${profile.label} · ${ratingRangeLabels[rangeKey] || ratingRangeLabels["90"]}`;
-  if (copy) copy.textContent = `${profile.current} current rating, ${record.delta >= 0 ? "+" : ""}${record.delta} over the selected range, and ${record.games} games tracked.`;
-  if (rating) rating.textContent = profile.current;
-  if (recordNode) recordNode.textContent = `${record.wins}W ${record.draws}D ${record.losses}L`;
-  if (winrateNode) winrateNode.textContent = `${winrate}%`;
-  if (highlight) highlight.textContent = `${profile.label} had ${record.wins} wins, ${record.draws} draws, and ${record.losses} losses across ${record.games} games.`;
 }
 
-function bindRatingDemo() {
-  const rangeButtons = document.querySelectorAll("[data-rating-range]");
-  const timeButtons = document.querySelectorAll("[data-rating-time]");
-  const current = { range: "7", time: "rapid" };
-  const refresh = () => renderRatingDemo(current.range, current.time);
-
-  rangeButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      current.range = button.dataset.ratingRange || "90";
-      rangeButtons.forEach((item) => item.classList.toggle("active", item === button));
-      refresh();
-    });
-  });
-
-  timeButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      current.time = button.dataset.ratingTime || "rapid";
-      timeButtons.forEach((item) => item.classList.toggle("active", item === button));
-      refresh();
-    });
-  });
-
-  refresh();
+function renderRatingChart() {
+  const games = state.recentGames.filter((game) => game.rating);
+  const points = games.map((game) => ({ value: game.rating, outcome: game.outcome }));
+  renderLineChart(el.ratingChart, points);
+  el.chartMeta.textContent = games.length ? `${games.length} recent ${MODE_LABELS[state.mode]} games` : "Refresh to load recent games";
 }
 
-renderBoard(document.getElementById("landingBoard"), "book");
-updateStudy("book");
-bindTabs();
-bindChoices();
-bindRatingDemo();
-bindLiveLookup();
+function renderAccuracy() {
+  state.accuracy = {
+    average: number(el.accuracyAvg.value, 0),
+    opening: number(el.accuracyOpening.value, 0),
+    middlegame: number(el.accuracyMiddle.value, 0),
+    endgame: number(el.accuracyEnd.value, 0),
+  };
+  saveLocal();
+  const phases = [
+    ["Average", state.accuracy.average, 75],
+    ["Opening", state.accuracy.opening, 85],
+    ["Middlegame", state.accuracy.middlegame, 73],
+    ["Endgame", state.accuracy.endgame, 80],
+  ];
+  el.phaseBars.innerHTML = phases.map(([label, value, target]) => `
+    <div class="phase-row">
+      <div><strong>${label}</strong><span>${pct(value)} / goal ${pct(target, 0)}</span></div>
+      <i><b style="width:${Math.max(0, Math.min(100, value))}%"></b></i>
+    </div>
+  `).join("");
+}
+
+function goalItem(label, value, target, suffix = "") {
+  const percent = target ? Math.max(0, Math.min(100, value / target * 100)) : 0;
+  return `
+    <article class="goal-card">
+      <div><span>${label}</span><strong>${suffix === "%" ? pct(value) : formatCount(value)} / ${suffix === "%" ? pct(target, 0) : formatCount(target)}</strong></div>
+      <i><b style="width:${percent}%"></b></i>
+    </article>
+  `;
+}
+
+function renderGoals() {
+  const stats = activeStats();
+  if (!stats) {
+    el.goalModeLabel.textContent = `${MODE_LABELS[state.mode]} goals`;
+    el.goalGrid.innerHTML = `<p class="empty">Refresh public Chess.com stats to calculate goals.</p>`;
+    return;
+  }
+  const recent = state.recentGames.slice(-25);
+  const recentWins = recent.filter((game) => game.outcome === "win").length;
+  const recentWinrate = recent.length ? recentWins / recent.length * 100 : stats.winRate;
+  el.goalModeLabel.textContent = `${MODE_LABELS[state.mode]} goals`;
+  el.goalGrid.innerHTML = [
+    ...[1600, 1700, 1800, 1900, 2000].map((target) => goalItem(`${target} rating`, stats.rating, target)),
+    goalItem("538 more games", Math.min(538, stats.games), stats.games + 538),
+    goalItem("1000 more games", Math.min(1000, stats.games), stats.games + 1000),
+    goalItem("Avg accuracy 75", state.accuracy.average, 75, "%"),
+    goalItem("Middlegame 73", state.accuracy.middlegame, 73, "%"),
+    goalItem("Endgame 80", state.accuracy.endgame, 80, "%"),
+    goalItem("Recent win rate 52", recentWinrate, 52, "%"),
+  ].join("");
+}
+
+function renderDropoffEditor() {
+  el.dropoffRows.innerHTML = state.dropoff.map((row, index) => `
+    <div class="dropoff-row">
+      <span>${row[0]}-${row[1]}</span>
+      <label>W <input data-dropoff="${index}:2" type="number" min="0" max="100" value="${row[2]}"></label>
+      <label>D <input data-dropoff="${index}:3" type="number" min="0" max="100" value="${row[3]}"></label>
+      <label>L <input data-dropoff="${index}:4" type="number" min="0" max="100" value="${row[4]}"></label>
+    </div>
+  `).join("");
+  document.querySelectorAll("[data-dropoff]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const [row, col] = input.dataset.dropoff.split(":").map(Number);
+      state.dropoff[row][col] = number(input.value);
+      saveLocal();
+      renderProjection();
+    });
+  });
+}
+
+function projectGames(count) {
+  const stats = activeStats();
+  if (!stats) {
+    return { finalRating: 0, net: 0, wins: 0, draws: 0, losses: 0, missing: true };
+  }
+  let wins = 0;
+  let draws = 0;
+  let losses = 0;
+  for (let game = 1; game <= count; game += 1) {
+    const band = state.dropoff.find((row) => game >= row[0] && game <= row[1]) || state.dropoff[state.dropoff.length - 1];
+    wins += band[2] / 100;
+    draws += band[3] / 100;
+    losses += band[4] / 100;
+  }
+  const net = Math.round(wins * 8 - losses * 8);
+  return {
+    finalRating: stats.rating + net,
+    net,
+    wins: Math.round(wins),
+    draws: Math.round(draws),
+    losses: Math.round(losses),
+  };
+}
+
+function timeEstimate(count) {
+  const avg = state.recentGames.length
+    ? state.recentGames.reduce((sum, game) => sum + game.duration, 0) / state.recentGames.length
+    : 20;
+  const maxMinutes = count * 20;
+  const realMinutes = count * avg;
+  const fmt = (minutes) => `${formatCount(minutes)} min · ${Math.floor(minutes / 60)}h${Math.round(minutes % 60).toString().padStart(2, "0")}m`;
+  return { max: fmt(maxMinutes), real: fmt(realMinutes), days20: (realMinutes / avg / 20).toFixed(1) };
+}
+
+function renderProjectionCard(resultId, subId, count) {
+  const result = projectGames(count);
+  if (result.missing) {
+    $(resultId).textContent = "-";
+    $(subId).textContent = "Refresh public Chess.com stats to project.";
+    return;
+  }
+  const time = timeEstimate(count);
+  $(resultId).textContent = `${formatRating(result.finalRating)} (${result.net >= 0 ? "+" : ""}${result.net})`;
+  $(subId).textContent = `${result.wins}W ${result.draws}D ${result.losses}L · real ${time.real} · max ${time.max}`;
+}
+
+function renderProjection() {
+  state.customGames = Math.max(1, number(el.customGames.value, 538));
+  saveLocal();
+  renderProjectionCard("projection538", "projection538Sub", 538);
+  renderProjectionCard("projection1000", "projection1000Sub", 1000);
+  renderProjectionCard("projectionCustom", "projectionCustomSub", state.customGames);
+}
+
+function renderSessions() {
+  const sessions = [...state.sessions].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  renderLineChart(el.sessionChart, sessions.map((session) => ({ value: number(session.endRating || session.startRating) })), { width: 620, height: 240, gradient: "sessionGradient" });
+  el.sessionList.innerHTML = sessions.length ? sessions.slice(-8).reverse().map((session) => `
+    <article>
+      <strong>${session.date || "No date"} · ${formatRating(session.startRating)} → ${formatRating(session.endRating)}</strong>
+      <span>${number(session.wins)}W ${number(session.draws)}D ${number(session.losses)}L · ${session.accuracy ? pct(number(session.accuracy)) : "accuracy not set"}</span>
+      <p>${session.theme || "No theme"} · ${session.next || "No next step"}</p>
+    </article>
+  `).join("") : `<p class="empty">No sessions saved yet. Add one on the left and Bookup Web will chart it locally.</p>`;
+}
+
+function weakness() {
+  const phases = [
+    ["opening", state.accuracy.opening],
+    ["middlegame", state.accuracy.middlegame],
+    ["endgame", state.accuracy.endgame],
+  ];
+  phases.sort((a, b) => a[1] - b[1]);
+  return { worst: phases[0][0], best: phases[2][0] };
+}
+
+function renderTraining() {
+  const stats = activeStats();
+  if (!stats) {
+    el.weaknessLabel.textContent = "Refresh stats to calculate weakness.";
+    el.trainingGrid.innerHTML = `<article><span>Start</span><p>Refresh public Chess.com data, then Bookup Web will generate opening, middlegame, endgame, tactics, and review recommendations.</p></article>`;
+    return;
+  }
+  const recent = state.recentGames.slice(-25);
+  const recentWinrate = recent.length ? recent.filter((game) => game.outcome === "win").length / recent.length * 100 : stats.winRate;
+  const weak = weakness();
+  el.weaknessLabel.textContent = `Main weakness: ${weak.worst}. Best phase: ${weak.best}.`;
+  const recommendations = [
+    ["Opening", state.accuracy.opening >= 82 ? "Keep your current repertoire stable. Add one new response only after review sessions are clean." : "Repair early move-order mistakes. Build one response card for the reply you face most."],
+    ["Middlegame", state.accuracy.middlegame >= 73 ? "Convert good openings into plans: pawn breaks, worst-piece improvement, and king safety checks." : "Main focus: pause before move 12-25, list forcing moves, and review every tactic missed in recent losses."],
+    ["Endgame", state.accuracy.endgame >= 80 ? "Maintain rook and pawn endings twice a week so late-game conversion stays sharp." : "Drill king activity, rook activity, and pawn-race counting. Save every endgame loss as a session theme."],
+    ["Tactics", recentWinrate >= 52 ? "Keep tactics short and daily: 10 clean puzzles before playing." : "Before each session, do forks, pins, back-rank, and removal-of-defender sets. Review losses immediately."],
+    ["Review priority", `${MODE_LABELS[state.mode]} is at ${formatRating(stats.rating)} with ${pct(stats.winRate)} wins. Review ${weak.worst} positions first, then play a smaller set of games with notes.`],
+  ];
+  el.trainingGrid.innerHTML = recommendations.map(([title, text]) => `<article><span>${title}</span><p>${text}</p></article>`).join("");
+}
+
+function renderAll() {
+  document.querySelectorAll("[data-mode]").forEach((button) => button.classList.toggle("active", button.dataset.mode === state.mode));
+  renderMetrics();
+  renderRatingChart();
+  renderAccuracy();
+  renderGoals();
+  renderProjection();
+  renderSessions();
+  renderTraining();
+}
+
+function bind() {
+  Object.assign(el, {
+    usernameInput: $("usernameInput"),
+    refreshForm: $("refreshForm"),
+    refreshBtn: $("refreshBtn"),
+    statusLine: $("statusLine"),
+    ratingValue: $("ratingValue"),
+    ratingSub: $("ratingSub"),
+    recordValue: $("recordValue"),
+    recordSub: $("recordSub"),
+    winrateValue: $("winrateValue"),
+    scoreValue: $("scoreValue"),
+    formValue: $("formValue"),
+    formSub: $("formSub"),
+    lengthValue: $("lengthValue"),
+    lengthSub: $("lengthSub"),
+    ratingChart: $("ratingChart"),
+    chartMeta: $("chartMeta"),
+    accuracyAvg: $("accuracyAvg"),
+    accuracyOpening: $("accuracyOpening"),
+    accuracyMiddle: $("accuracyMiddle"),
+    accuracyEnd: $("accuracyEnd"),
+    phaseBars: $("phaseBars"),
+    goalGrid: $("goalGrid"),
+    goalModeLabel: $("goalModeLabel"),
+    customGames: $("customGames"),
+    dropoffRows: $("dropoffRows"),
+    sessionForm: $("sessionForm"),
+    sessionDate: $("sessionDate"),
+    sessionStart: $("sessionStart"),
+    sessionEnd: $("sessionEnd"),
+    sessionWins: $("sessionWins"),
+    sessionDraws: $("sessionDraws"),
+    sessionLosses: $("sessionLosses"),
+    sessionAccuracy: $("sessionAccuracy"),
+    sessionTheme: $("sessionTheme"),
+    sessionNext: $("sessionNext"),
+    sessionNotes: $("sessionNotes"),
+    sessionChart: $("sessionChart"),
+    sessionList: $("sessionList"),
+    clearSessions: $("clearSessions"),
+    trainingGrid: $("trainingGrid"),
+    weaknessLabel: $("weaknessLabel"),
+  });
+
+  el.refreshForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void refresh();
+  });
+  document.querySelectorAll("[data-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.mode = button.dataset.mode;
+      saveLocal();
+      void refresh();
+    });
+  });
+  [el.accuracyAvg, el.accuracyOpening, el.accuracyMiddle, el.accuracyEnd].forEach((input) => input.addEventListener("input", renderAll));
+  el.customGames.addEventListener("input", renderProjection);
+  el.sessionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.sessions.push({
+      date: el.sessionDate.value,
+      startRating: number(el.sessionStart.value),
+      endRating: number(el.sessionEnd.value),
+      wins: number(el.sessionWins.value),
+      draws: number(el.sessionDraws.value),
+      losses: number(el.sessionLosses.value),
+      accuracy: number(el.sessionAccuracy.value),
+      theme: el.sessionTheme.value.trim(),
+      next: el.sessionNext.value.trim(),
+      notes: el.sessionNotes.value.trim(),
+    });
+    saveLocal();
+    el.sessionForm.reset();
+    el.sessionDate.valueAsDate = new Date();
+    renderAll();
+  });
+  el.clearSessions.addEventListener("click", () => {
+    state.sessions = [];
+    saveLocal();
+    renderAll();
+  });
+}
+
+loadLocal();
+document.addEventListener("DOMContentLoaded", () => {
+  bind();
+  el.usernameInput.value = state.username;
+  el.customGames.value = String(state.customGames);
+  el.accuracyAvg.value = state.accuracy.average;
+  el.accuracyOpening.value = state.accuracy.opening;
+  el.accuracyMiddle.value = state.accuracy.middlegame;
+  el.accuracyEnd.value = state.accuracy.endgame;
+  el.sessionDate.valueAsDate = new Date();
+  renderDropoffEditor();
+  renderAll();
+  void refresh();
+});
