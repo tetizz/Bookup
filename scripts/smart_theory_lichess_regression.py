@@ -185,7 +185,7 @@ def test_settings_style_confidence_round_trip() -> None:
 def test_defaults_do_not_expose_lichess_token() -> None:
     defaults = build_defaults_payload(
         {
-            "lichess_token": "lip_should_not_leave_server",
+            "lichess_token": "test-token-hidden",
             "engine_path": "",
             "depth": 16,
             "threads": 1,
@@ -197,20 +197,20 @@ def test_defaults_do_not_expose_lichess_token() -> None:
     )
     require(str(defaults.get("lichess_token", "")) == "", "defaults_token_value_redacted")
     require(bool(defaults.get("lichess_token_configured")) is True, "defaults_token_configured_flag")
-    require("lip_should_not_leave_server" not in str(defaults), "defaults_token_not_serialized")
+    require("test-token-hidden" not in str(defaults), "defaults_token_not_serialized")
 
 
 def test_auto_create_and_chapter_naming() -> None:
     captured: dict[str, list[str]] = {"chapters": []}
 
     def fake_create(*, token: str, study_name: str, visibility: str) -> dict:
-        require(token == "lip_test_token", "create_uses_token")
+        require(token == "test-token", "create_uses_token")
         require(study_name == "Bookup", "create_uses_unified_name")
         return {"study_id": "AbCdEf12", "study_url": "https://lichess.org/study/AbCdEf12", "response": {"id": "AbCdEf12"}}
 
     def fake_import(*, study_id: str, token: str, chapter_name: str, pgn_text: str, orientation: str) -> dict:
         require(study_id == "AbCdEf12", "import_uses_created_study")
-        require(token == "lip_test_token", "import_uses_token")
+        require(token == "test-token", "import_uses_token")
         require(orientation == "black", "import_uses_orientation")
         require(bool(pgn_text.strip()), "import_has_pgn")
         captured["chapters"].append(chapter_name)
@@ -230,7 +230,7 @@ def test_auto_create_and_chapter_naming() -> None:
             "/api/smart-theory/export-lichess-study",
             json={
                 "study_id": "",
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "auto_create_unified_study": True,
                 "unified_study_name": "Bookup",
                 "chapter_name": "Bookup Smart Theory",
@@ -399,7 +399,7 @@ def test_unknown_focus_chapter_anchors() -> None:
             "/api/smart-theory/export-lichess-study",
             json={
                 "study_id": "AbCdEf12",
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "chapter_name": "Bookup Smart Theory",
                 "chapter_strategy": "unknown_focus",
                 "orientation": "white",
@@ -1111,7 +1111,7 @@ def test_background_auto_sync_during_job() -> None:
     board_fen = chess.STARTING_FEN
     payload = {
         "auto_sync_to_study": True,
-        "lichess_token": "lip_test_token",
+        "lichess_token": "test-token",
         "study_id": "",
         "chapter_name": "Bookup Smart Theory",
         "chapter_strategy": "first_move",
@@ -1171,7 +1171,7 @@ def test_background_auto_sync_during_job() -> None:
             board_fen=board_fen,
             payload=payload,
             settings=settings,
-            lichess_token="lip_test_token",
+            lichess_token="test-token",
         )
     with SMART_THEORY_JOBS_LOCK:
         job = SMART_THEORY_JOBS.get(job_id, {})
@@ -1245,7 +1245,7 @@ def test_background_auto_sync_skips_when_generation_stopped() -> None:
     board_fen = chess.STARTING_FEN
     payload = {
         "auto_sync_to_study": True,
-        "lichess_token": "lip_test_token",
+        "lichess_token": "test-token",
         "study_id": "AbCdEf12",
         "chapter_name": "Bookup Smart Theory",
         "chapter_strategy": "first_move",
@@ -1289,7 +1289,7 @@ def test_background_auto_sync_skips_when_generation_stopped() -> None:
             board_fen=board_fen,
             payload=payload,
             settings=settings,
-            lichess_token="lip_test_token",
+            lichess_token="test-token",
         )
     with SMART_THEORY_JOBS_LOCK:
         job = SMART_THEORY_JOBS.get(job_id, {})
@@ -1317,7 +1317,7 @@ def test_manual_export_cleanup_placeholder_called() -> None:
             "/api/smart-theory/export-lichess-study",
             json={
                 "study_id": "",
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "auto_create_unified_study": True,
                 "unified_study_name": "Bookup",
                 "chapter_name": "Bookup Smart Theory",
@@ -1348,7 +1348,7 @@ def test_cleanup_runs_for_existing_study_exports() -> None:
             "/api/smart-theory/export-lichess-study",
             json={
                 "study_id": "AbCdEf12",
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "auto_create_unified_study": False,
                 "chapter_name": "Bookup Smart Theory",
                 "chapter_strategy": "single",
@@ -1392,7 +1392,7 @@ def test_replace_existing_chapters_deletes_before_export() -> None:
             "/api/smart-theory/export-lichess-study",
             json={
                 "study_id": "AbCdEf12",
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "auto_create_unified_study": False,
                 "chapter_name": "Bookup Smart Theory",
                 "chapter_strategy": "single",
@@ -1424,7 +1424,7 @@ def test_cleanup_placeholder_uses_event_name_fallback() -> None:
     ), patch("bookup.app._delete_lichess_study_chapter", side_effect=fake_delete):
         from bookup.app import _cleanup_default_placeholder_chapters
 
-        result = _cleanup_default_placeholder_chapters(study_id="AbCdEf12", token="lip_test_token")
+        result = _cleanup_default_placeholder_chapters(study_id="AbCdEf12", token="test-token")
         require(int(result.get("deleted_count", 0) or 0) == 1, "placeholder_event_fallback_deleted_count")
         require("c1" in deleted and "c2" not in deleted, "placeholder_event_fallback_deleted_expected")
 
@@ -1452,7 +1452,7 @@ def test_auto_create_uses_configured_study_name_when_payload_missing() -> None:
             "/api/smart-theory/export-lichess-study",
             json={
                 "study_id": "",
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "auto_create_unified_study": True,
                 "chapter_name": "Bookup Smart Theory",
                 "chapter_strategy": "single",
@@ -1480,7 +1480,7 @@ def test_refresh_unified_study_endpoint() -> None:
         response = client.post(
             "/api/smart-theory/refresh-unified-study",
             json={
-                "lichess_token": "lip_test_token",
+                "lichess_token": "test-token",
                 "unified_study_name": "Bookup",
             },
         )
