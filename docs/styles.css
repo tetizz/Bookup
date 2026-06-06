@@ -25,6 +25,11 @@ body.is-loading button {
   cursor: progress;
 }
 
+.stop-import-btn {
+  border-color: rgba(255, 127, 135, 0.48);
+  color: var(--danger);
+}
+
 .goal-row {
   display: grid;
   gap: 8px;
@@ -90,7 +95,11 @@ button.square {
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+  background: #0e131a;
+}
 body {
   margin: 0;
   min-height: 100vh;
@@ -4291,8 +4300,16 @@ select:focus {
   }
 
   .workspace-tabs {
+    flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: thin;
+    padding: 8px 0;
+    background: rgba(13, 17, 23, 0.98);
+  }
+
+  .workspace-tab {
+    flex: 0 0 auto;
+    padding: 10px 14px;
   }
 
   .form-grid,

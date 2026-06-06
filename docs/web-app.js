@@ -6,6 +6,9 @@
   "use strict";
 
   const STORAGE_KEY = "bookup-web-desktop-v2";
+  const CACHE_DB_NAME = "bookup-web-cache";
+  const CACHE_DB_VERSION = 2;
+  const ANALYSIS_VERSION = 3;
   const MODES = ["rapid", "blitz", "bullet"];
   const PIECE_NAMES = { p: "P", n: "N", b: "B", r: "R", q: "Q", k: "K" };
   const DEFAULT_ACCURACY = { average: 74.18, opening: 85.1, middlegame: 71.1, endgame: 77.2 };
@@ -21,7 +24,12 @@
   const state = {
     username: "",
     mode: "rapid",
-    settings: { timeClasses: ["rapid", "blitz", "bullet"], maxGames: 240 },
+    settings: {
+      timeClasses: ["rapid", "blitz", "bullet"],
+      maxGames: 240,
+      importAllGames: false,
+      autoImportStartup: false,
+    },
     stats: {},
     games: [],
     branches: [],
@@ -54,6 +62,10 @@
     resizeTimer: 0,
     tabFrame: 0,
     intelligenceTimer: 0,
+    importController: null,
+    importMeta: null,
+    cacheKey: "local",
+    cacheRestored: false,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -68,6 +80,153 @@
   })[char]);
   const today = () => new Date().toISOString().slice(0, 10);
   const outcomeLabel = (value) => value === "win" ? "W" : value === "loss" ? "L" : "D";
+  const sleep = (ms, signal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Import stopped.", "AbortError"));
+    }, { once: true });
+  });
+
+  function openCacheDb() {
+    return new Promise((resolve, reject) => {
+      if (!("indexedDB" in window)) {
+        resolve(null);
+        return;
+      }
+      const request = indexedDB.open(CACHE_DB_NAME, CACHE_DB_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains("workspaces")) db.createObjectStore("workspaces", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("analysis")) db.createObjectStore("analysis", { keyPath: "key" });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function readWorkspaceCache(key) {
+    const db = await openCacheDb();
+    if (!db) return null;
+    return new Promise((resolve, reject) => {
+      const request = db.transaction("workspaces", "readonly").objectStore("workspaces").get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    }).finally(() => db.close());
+  }
+
+  async function writeWorkspaceCache(record) {
+    const db = await openCacheDb();
+    if (!db) return;
+    await new Promise((resolve, reject) => {
+      const request = db.transaction("workspaces", "readwrite").objectStore("workspaces").put(record);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+  }
+
+  async function clearWorkspaceCache() {
+    const db = await openCacheDb();
+    if (!db) return;
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(["workspaces", "analysis"], "readwrite");
+      transaction.objectStore("workspaces").clear();
+      transaction.objectStore("analysis").clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    db.close();
+  }
+
+  async function readAnalysisCache(key, maxAgeMs) {
+    const db = await openCacheDb();
+    if (!db) return null;
+    const record = await new Promise((resolve, reject) => {
+      const request = db.transaction("analysis", "readonly").objectStore("analysis").get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    }).finally(() => db.close());
+    if (!record || Date.now() - num(record.updatedAt) > maxAgeMs) return null;
+    return record.payload;
+  }
+
+  async function writeAnalysisCache(key, payload) {
+    const db = await openCacheDb();
+    if (!db) return;
+    await new Promise((resolve, reject) => {
+      const request = db.transaction("analysis", "readwrite").objectStore("analysis").put({
+        key,
+        updatedAt: Date.now(),
+        payload,
+      });
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+  }
+
+  function gameFingerprint(games) {
+    let hash = 2166136261;
+    const ids = games.map((game) => String(game.id)).sort();
+    for (const id of ids) {
+      for (let index = 0; index < id.length; index += 1) {
+        hash ^= id.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+    }
+    return `${ANALYSIS_VERSION}-${ids.length}-${(hash >>> 0).toString(16)}`;
+  }
+
+  function compactGame(game) {
+    return {
+      id: game.id,
+      headers: game.headers,
+      moves: game.moves,
+      color: game.color,
+      outcome: game.outcome,
+      rating: game.rating,
+      timeClass: game.timeClass,
+      endTime: game.endTime,
+      url: game.url,
+      timeControl: game.timeControl,
+      accuracy: game.accuracy,
+      durationMinutes: game.durationMinutes,
+    };
+  }
+
+  async function persistAnalysisCache() {
+    if (!state.games.length) return;
+    const fingerprint = gameFingerprint(state.games);
+    const record = {
+      key: state.cacheKey,
+      username: state.username,
+      updatedAt: Date.now(),
+      fingerprint,
+      analysisVersion: ANALYSIS_VERSION,
+      games: state.games.map(compactGame),
+      branches: state.branches,
+      importMeta: state.importMeta,
+    };
+    await writeWorkspaceCache(record);
+    state.cacheRestored = true;
+  }
+
+  async function restoreAnalysisCache() {
+    const key = state.username ? `chesscom:${state.username.toLowerCase()}` : "local";
+    const cached = await readWorkspaceCache(key);
+    if (!cached?.games?.length) return false;
+    state.cacheKey = key;
+    state.games = cached.games;
+    const fingerprint = gameFingerprint(state.games);
+    state.branches = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint && Array.isArray(cached.branches)
+      ? cached.branches
+      : buildBranches(state.games);
+    state.importMeta = cached.importMeta || null;
+    state.cacheRestored = true;
+    markDataDirty();
+    return true;
+  }
 
   function serializedState() {
     return JSON.stringify({
@@ -186,24 +345,76 @@
     </article>`;
   }
 
-  async function fetchJson(url, options = {}, timeoutMs = 18000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      if (response.status === 404) throw new Error("The requested player or position was not found.");
-      if (response.status === 429) throw new Error("The public API is rate limiting requests. Wait a moment and try again.");
-      if (!response.ok) throw new Error(`Public API returned HTTP ${response.status}.`);
-      return await response.json();
-    } catch (error) {
-      if (error.name === "AbortError") throw new Error("The request timed out. Check your connection and try again.");
-      throw error;
-    } finally {
-      clearTimeout(timer);
+  async function fetchJson(url, options = {}, timeoutMs = 18000, retries = 2) {
+    const externalSignal = options.signal;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      const abort = () => controller.abort(externalSignal?.reason);
+      externalSignal?.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(() => controller.abort("timeout"), timeoutMs);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        if (response.status === 404) {
+          const error = new Error("The requested player or archive was not found.");
+          error.status = 404;
+          throw error;
+        }
+        if (response.status === 429 || response.status >= 500) {
+          const error = new Error(response.status === 429
+            ? "The public API is rate limiting requests."
+            : `Public API returned HTTP ${response.status}.`);
+          error.status = response.status;
+          error.retryAfter = num(response.headers.get("retry-after"), 0);
+          throw error;
+        }
+        if (!response.ok) {
+          const error = new Error(`Public API returned HTTP ${response.status}.`);
+          error.status = response.status;
+          throw error;
+        }
+        return await response.json();
+      } catch (error) {
+        if (externalSignal?.aborted) throw new DOMException("Import stopped.", "AbortError");
+        const retryable = error.status === 429 || error.status >= 500 || error.name === "TypeError" || (error.name === "AbortError" && controller.signal.reason === "timeout");
+        if (!retryable || attempt >= retries) {
+          if (error.name === "AbortError") throw new Error("The request timed out. Check your connection and try again.");
+          throw error;
+        }
+        const delay = error.retryAfter ? error.retryAfter * 1000 : 500 * (2 ** attempt);
+        await sleep(delay, externalSignal);
+      } finally {
+        clearTimeout(timer);
+        externalSignal?.removeEventListener("abort", abort);
+      }
     }
+    throw new Error("The public API request failed.");
   }
 
-  function parseGame(raw) {
+  function inferTimeClass(raw, headers) {
+    const explicit = String(raw.time_class || headers.TimeClass || "").toLowerCase();
+    if (explicit && explicit !== "pgn") return explicit;
+    const control = String(raw.time_control || headers.TimeControl || "");
+    const base = num(control.split("+")[0]);
+    if (!base) return "unknown";
+    if (base < 180) return "bullet";
+    if (base < 600) return "blitz";
+    if (base < 86400) return "rapid";
+    return "daily";
+  }
+
+  function estimatePgnMinutes(pgn, timeControl) {
+    const clocks = [...String(pgn || "").matchAll(/\[%clk\s+(?:(\d+):)?(\d+):(\d+)\]/g)]
+      .map((match) => num(match[1]) * 3600 + num(match[2]) * 60 + num(match[3]));
+    if (clocks.length >= 4) {
+      const start = Math.max(...clocks.slice(0, 6));
+      const finish = Math.min(...clocks.slice(-8));
+      return clamp((start - finish) * 2 / 60, 2, 240);
+    }
+    const [base, inc] = String(timeControl || "").split("+").map(num);
+    return base ? clamp((base * 2 + inc * 70) / 60, 2, 240) : 20;
+  }
+
+  function parseGame(raw, options = {}) {
     const chess = new Chess();
     let loaded = false;
     try { loaded = chess.load_pgn(String(raw.pgn || ""), { sloppy: true }); } catch { loaded = false; }
@@ -211,15 +422,16 @@
     const headers = chess.header();
     const moves = chess.history();
     if (!moves.length) return null;
-    const username = state.username.toLowerCase();
+    const username = String(options.username ?? state.username).toLowerCase();
     const whiteName = String(raw.white?.username || headers.White || "").toLowerCase();
     const blackName = String(raw.black?.username || headers.Black || "").toLowerCase();
-    const color = whiteName === username ? "white" : blackName === username ? "black" : "white";
+    const color = options.playerColor || (whiteName === username ? "white" : blackName === username ? "black" : "white");
     const resultCode = headers.Result || "";
     const won = (color === "white" && resultCode === "1-0") || (color === "black" && resultCode === "0-1");
     const lost = (color === "white" && resultCode === "0-1") || (color === "black" && resultCode === "1-0");
     const outcome = won ? "win" : lost ? "loss" : "draw";
     const player = color === "white" ? raw.white : raw.black;
+    const timeControl = raw.time_control || headers.TimeControl || "";
     return {
       id: raw.uuid || raw.url || `${headers.Date || ""}-${moves.join("-")}`,
       pgn: raw.pgn || "",
@@ -228,11 +440,12 @@
       color,
       outcome,
       rating: num(player?.rating),
-      timeClass: raw.time_class || "unknown",
-      endTime: num(raw.end_time),
+      timeClass: inferTimeClass(raw, headers),
+      endTime: num(raw.end_time, Date.parse(String(headers.UTCDate || headers.Date || "").replaceAll(".", "-")) / 1000 || 0),
       url: raw.url || "",
-      timeControl: raw.time_control || headers.TimeControl || "",
+      timeControl,
       accuracy: num(color === "white" ? raw.accuracies?.white : raw.accuracies?.black, 0),
+      durationMinutes: estimatePgnMinutes(raw.pgn, timeControl),
     };
   }
 
@@ -276,11 +489,28 @@
     return branches;
   }
 
-  async function fetchPublicGames() {
+  function setImportProgress(done, total, message = "") {
+    const percentDone = total ? clamp(Math.round(done / total * 100), 0, 100) : 0;
+    setText("progressLabel", `${percentDone}%`);
+    const fill = $("progressFill");
+    if (fill) {
+      fill.classList.toggle("indeterminate", !total);
+      fill.style.width = total ? `${percentDone}%` : "35%";
+    }
+    if (message) status(message);
+  }
+
+  function gameIdentity(raw) {
+    if (raw.uuid) return String(raw.uuid);
+    if (raw.url) return String(raw.url);
+    return `${raw.end_time || ""}|${raw.white?.username || ""}|${raw.black?.username || ""}|${String(raw.pgn || "").slice(-160)}`;
+  }
+
+  async function fetchPublicGames(signal) {
     const username = encodeURIComponent(state.username);
     const [statsPayload, archivesPayload] = await Promise.all([
-      fetchJson(`https://api.chess.com/pub/player/${username}/stats`),
-      fetchJson(`https://api.chess.com/pub/player/${username}/games/archives`),
+      fetchJson(`https://api.chess.com/pub/player/${username}/stats`, { signal }),
+      fetchJson(`https://api.chess.com/pub/player/${username}/games/archives`, { signal }),
     ]);
     const parsedStats = {};
     for (const mode of MODES) {
@@ -296,58 +526,126 @@
     }
     state.stats = parsedStats;
     const urls = (archivesPayload.archives || []).slice().reverse();
-    const wanted = clamp(num($("maxGamesInput")?.value, state.settings.maxGames), 20, 2000);
-    const games = [];
-    for (const archiveUrl of urls) {
-      if (games.length >= wanted) break;
-      setText("progressLabel", `${Math.min(95, Math.round(games.length / wanted * 100))}%`);
-      const payload = await fetchJson(archiveUrl);
-      const archiveGames = (payload.games || []).slice().reverse();
-      for (let index = 0; index < archiveGames.length; index += 1) {
-        const raw = archiveGames[index];
-        if (!state.settings.timeClasses.includes(raw.time_class)) continue;
-        const parsed = parseGame(raw);
-        if (parsed) games.push(parsed);
-        if (games.length >= wanted) break;
-        if (index > 0 && index % 24 === 0) await yieldToMain();
+    if (!urls.length) throw new Error("Chess.com returned no public game archives for this username.");
+    const importAll = state.settings.importAllGames;
+    const wanted = importAll ? Number.POSITIVE_INFINITY : clamp(num(state.settings.maxGames, 240), 1, 20000);
+    const previousKey = state.cacheKey;
+    const nextKey = `chesscom:${state.username.toLowerCase()}`;
+    const existingGames = previousKey === nextKey ? state.games : [];
+    const knownIds = new Set(existingGames.map((game) => String(game.id)));
+    const imported = [];
+    const rawSeen = new Set();
+    const warnings = [];
+    let skipped = 0;
+    let duplicates = 0;
+    let archivesScanned = 0;
+    const startedAt = Date.now();
+    const batchSize = 3;
+    for (let offset = 0; offset < urls.length && imported.length < wanted; offset += batchSize) {
+      const batch = urls.slice(offset, offset + batchSize);
+      const results = await Promise.allSettled(batch.map((archiveUrl) => fetchJson(archiveUrl, { signal }, 22000, 3)));
+      let batchUnknownGames = 0;
+      for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+        if (signal.aborted) throw new DOMException("Import stopped.", "AbortError");
+        archivesScanned += 1;
+        const result = results[resultIndex];
+        if (result.status === "rejected") {
+          warnings.push(`${batch[resultIndex].split("/").slice(-2).join("-")}: ${result.reason?.message || "archive failed"}`);
+          continue;
+        }
+        const archiveGames = (result.value.games || []).slice().reverse();
+        for (let index = 0; index < archiveGames.length && imported.length < wanted; index += 1) {
+          const raw = archiveGames[index];
+          const identity = gameIdentity(raw);
+          if (rawSeen.has(identity) || knownIds.has(identity)) {
+            duplicates += 1;
+            continue;
+          }
+          batchUnknownGames += 1;
+          rawSeen.add(identity);
+          if (!state.settings.timeClasses.includes(String(raw.time_class || "").toLowerCase())) continue;
+          const parsed = parseGame(raw);
+          if (parsed) imported.push(parsed);
+          else skipped += 1;
+          if (index > 0 && index % 40 === 0) await yieldToMain();
+        }
       }
+      setImportProgress(
+        archivesScanned,
+        urls.length,
+        `Scanning Chess.com archives: ${archivesScanned}/${urls.length} · ${count(imported.length)} new games`
+      );
       await yieldToMain();
+      if (!importAll && existingGames.length && batchUnknownGames === 0) break;
     }
-    state.games = games.sort((a, b) => a.endTime - b.endTime);
-    state.branches = buildBranches(state.games);
+    const merged = [...existingGames, ...imported];
+    const unique = [...new Map(merged.map((game) => [String(game.id), game])).values()]
+      .sort((a, b) => a.endTime - b.endTime);
+    state.cacheKey = nextKey;
+    state.games = importAll ? unique : unique.slice(-wanted);
+    const previousFingerprint = previousKey === nextKey && existingGames.length ? gameFingerprint(existingGames) : "";
+    const nextFingerprint = gameFingerprint(state.games);
+    if (previousFingerprint !== nextFingerprint || !state.branches.length) state.branches = buildBranches(state.games);
+    state.importMeta = {
+      source: "Chess.com",
+      username: state.username,
+      imported: imported.length,
+      totalCached: state.games.length,
+      duplicates,
+      skipped,
+      archivesScanned,
+      archivesAvailable: urls.length,
+      warnings: warnings.slice(0, 12),
+      completedAt: Date.now(),
+      elapsedMs: Date.now() - startedAt,
+      fingerprint: nextFingerprint,
+    };
     markDataDirty();
+    await persistAnalysisCache();
   }
 
   async function refreshAll() {
     if (state.loading) return;
     state.loading = true;
     document.body.classList.add("is-loading");
-    const button = $("analyzeBtn");
-    if (button) button.disabled = true;
+    const buttons = [$("analyzeBtn"), $("progressRefreshBtn")].filter(Boolean);
+    buttons.forEach((button) => { button.disabled = true; });
+    const stopButton = $("stopImportBtn");
+    if (stopButton) stopButton.hidden = false;
     const username = String($("usernameInput")?.value || $("mainUsernameInput")?.value || state.username).trim();
     if (!username) {
       status("Enter a Chess.com username.", "error");
       state.loading = false;
+      document.body.classList.remove("is-loading");
+      buttons.forEach((item) => { item.disabled = false; });
+      if (stopButton) stopButton.hidden = true;
       return;
     }
     state.username = username;
-    state.settings.maxGames = clamp(num($("maxGamesInput")?.value, 240), 20, 2000);
+    state.settings.maxGames = clamp(num($("maxGamesInput")?.value, 240), 1, 20000);
     state.settings.timeClasses = parseTimeClasses($("timeClassesInput")?.value);
+    state.settings.importAllGames = Boolean($("importAllGamesInput")?.checked);
+    state.settings.autoImportStartup = Boolean($("autoImportStartupInput")?.checked);
+    state.importController = new AbortController();
     status(`Loading public games for ${state.username}...`);
-    setText("progressLabel", "0%");
+    setImportProgress(0, 0);
     try {
-      await fetchPublicGames();
+      await fetchPublicGames(state.importController.signal);
       save();
       renderAll();
-      status(`Imported ${count(state.games.length)} public games into this browser.`, "success");
-      setText("progressLabel", "100%");
+      const warningText = state.importMeta?.warnings?.length ? ` ${state.importMeta.warnings.length} archive warning(s) were skipped.` : "";
+      status(`Cached ${count(state.games.length)} public games and their analyzed repertoire offline.${warningText}`, "success");
+      setImportProgress(1, 1);
     } catch (error) {
-      status(error.message || "Bookup could not load public games.", "error");
+      const stopped = error.name === "AbortError";
+      status(stopped ? "Import stopped. Your previous offline cache is still intact." : (error.message || "Bookup could not load public games."), stopped ? "" : "error");
       renderAll();
     } finally {
+      state.importController = null;
       state.loading = false;
       document.body.classList.remove("is-loading");
-      if (button) button.disabled = false;
+      buttons.forEach((button) => { button.disabled = false; });
+      if (stopButton) stopButton.hidden = true;
     }
   }
 
@@ -394,11 +692,11 @@
     setText("badgeWinRate", imported.total ? percent(imported.wins / imported.total * 100) : "--");
     setHtml("analysisPreviewPanel", state.branches.length
       ? `<div class="analysis-landscape-metrics">
-          <article><span>Source</span><strong>Chess.com public API</strong></article>
+          <article><span>Source</span><strong>${escapeHtml(state.importMeta?.source || "Local PGN")}</strong></article>
           <article><span>Imported</span><strong>${count(imported.total)} games</strong></article>
           <article><span>Branches</span><strong>${count(state.branches.length)}</strong></article>
-          <article><span>Storage</span><strong>Local browser</strong></article>
-        </div>`
+          <article><span>Offline cache</span><strong>Ready</strong></article>
+        </div>${state.importMeta ? `<p class="line-note">${count(state.importMeta.duplicates)} duplicates ignored · ${count(state.importMeta.skipped)} parse failures${state.importMeta.warnings?.length ? ` · ${count(state.importMeta.warnings.length)} archive warnings` : ""}</p>` : ""}`
       : "Run an import to see live import details.", !state.branches.length);
   }
 
@@ -693,6 +991,7 @@
   }
 
   function estimateMinutes(game) {
+    if (num(game.durationMinutes) > 0) return num(game.durationMinutes);
     const clocks = [...String(game.pgn || "").matchAll(/\[%clk\s+(?:(\d+):)?(\d+):(\d+)\]/g)]
       .map((match) => num(match[1]) * 3600 + num(match[2]) * 60 + num(match[3]));
     if (clocks.length >= 4) {
@@ -757,7 +1056,11 @@
     const allTop = mostCommon(allFirst);
     setHtml("driftDetectorPanel", card(recentTop || "No data", recentTop && allTop && recentTop !== allTop ? `Recent first move differs from your long-term ${allTop}. Decide whether to adopt or repair it.` : "Recent first-move choices match the long-term repertoire.", "opening drift"));
     setHtml("prepPackPanel", weak.slice(0, 5).map((branch) => branchCard(branch, branch._index, false)).join("") || "Import games to assemble a preparation pack.", !weak.length);
-    setHtml("cacheDashboard", card("Browser cache", `${state.branches.length} branches and ${state.reviews.length} reviews saved locally.`, "no server database"));
+    setHtml("cacheDashboard", card(
+      "Offline analysis cache",
+      `${count(state.games.length)} normalized games, ${count(state.branches.length)} analyzed branches, and ${count(state.reviews.length)} reviews are stored on this device.`,
+      state.importMeta?.fingerprint ? `fingerprint ${state.importMeta.fingerprint}` : "IndexedDB + local settings"
+    ));
     setHtml("studyPlanPanel", [
       card("10 min", "Recall the top three due branches without moving pieces.", "warm-up"),
       card("20 min", "Train loss-heavy lines on the legal board.", "main work"),
@@ -1007,30 +1310,44 @@
     return request;
   }
 
-  function fetchCloud(fen, multiPv = 1) {
-    const key = `${fenKey(fen)}|${multiPv}`;
-    return memoizedRequest(cloudCache, key, () =>
-      fetchJson(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=${multiPv}&variant=standard`)
-    );
+  function persistentAnalysisRequest(memoryCache, key, loader, maxAgeMs) {
+    return memoizedRequest(memoryCache, key, async () => {
+      const cached = await readAnalysisCache(key, maxAgeMs).catch(() => null);
+      if (cached) return cached;
+      const payload = await loader();
+      writeAnalysisCache(key, payload).catch(() => {});
+      return payload;
+    });
   }
 
-  async function authenticatedExplorer(fen, token) {
-    const url = `https://explorer.lichess.ovh/lichess?variant=standard&speeds=bullet,blitz,rapid,classical&ratings=1000,1200,1400,1600,1800,2000,2200,2500&fen=${encodeURIComponent(fen)}`;
-    const payload = await memoizedRequest(explorerCache, fenKey(fen), () =>
-      fetchJson(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } }, 18000)
-    );
+  function fetchCloud(fen, multiPv = 1) {
+    const key = `cloud:${fenKey(fen)}|${multiPv}`;
+    return persistentAnalysisRequest(cloudCache, key, () =>
+      fetchJson(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=${multiPv}&variant=standard`)
+    , 7 * 24 * 60 * 60 * 1000);
+  }
+
+  async function fetchExplorerSource(fen, token) {
+    const url = `https://explorer.lichess.org/lichess?variant=standard&speeds=bullet,blitz,rapid,classical&ratings=1000,1200,1400,1600,1800,2000,2200,2500&fen=${encodeURIComponent(fen)}`;
+    const key = `explorer:lichess:${fenKey(fen)}`;
+    const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
+    const payload = await persistentAnalysisRequest(explorerCache, key, () =>
+      fetchJson(url, { headers }, 18000)
+    , 24 * 60 * 60 * 1000);
     return { ...payload, source: "lichess" };
+  }
+
+  async function fetchExplorer(fen) {
+    const token = sessionToken();
+    if (!token) return null;
+    return fetchExplorerSource(fen, token);
   }
 
   async function positionData(fen) {
     const local = localPositionData(fen);
     if (local.moves.length) return local;
-    const token = sessionToken();
-    if (token) {
-      try { return await authenticatedExplorer(fen, token); }
-      catch { return local; }
-    }
-    return local;
+    try { return await fetchExplorer(fen) || local; }
+    catch { return local; }
   }
 
   async function cloudChoice(fen) {
@@ -1054,10 +1371,9 @@
     setText("studyDatabaseMeta", "Loading");
     setText("studyAnalysisMeta", "Public cloud");
     state.database = localPositionData(fen);
-    const token = sessionToken();
     const [cloudResult, explorerResult] = await Promise.allSettled([
       fetchCloud(fen, 3),
-      token ? authenticatedExplorer(fen, token) : Promise.resolve(null),
+      fetchExplorer(fen),
     ]);
     if (requestId !== state.positionRequestId || fen !== state.trainer.chess.fen()) return;
     state.cloud = cloudResult.status === "fulfilled" ? cloudResult.value : null;
@@ -1291,16 +1607,77 @@
     window.scrollTo({ top: document.querySelector(".workspace-tabs")?.offsetTop || 0, behavior: "auto" });
   }
 
-  async function importPgnText(text) {
-    const chunks = String(text || "").split(/(?=\[Event\s+")/).map((item) => item.trim()).filter(Boolean);
-    const parsed = chunks.map((pgn, index) => parseGame({ pgn, uuid: `local-${Date.now()}-${index}`, time_class: "pgn" })).filter(Boolean);
-    if (!parsed.length) throw new Error("No valid PGN games were found.");
-    state.games = [...state.games, ...parsed];
+  function splitPgnGames(text) {
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+    const chunks = [];
+    let current = [];
+    let hasMoves = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      const isHeader = /^\[[A-Za-z0-9_]+\s+".*"\]$/.test(trimmed);
+      if (isHeader && hasMoves) {
+        const chunk = current.join("\n").trim();
+        if (chunk) chunks.push(chunk);
+        current = [];
+        hasMoves = false;
+      }
+      current.push(line);
+      if (trimmed && !isHeader && /\b(?:O-O|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|\d+\.)\b/.test(trimmed)) hasMoves = true;
+    }
+    const finalChunk = current.join("\n").trim();
+    if (finalChunk) chunks.push(finalChunk);
+    return chunks;
+  }
+
+  function stableTextId(text) {
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `local-${(hash >>> 0).toString(16)}`;
+  }
+
+  async function importPgnText(text, options = {}) {
+    const chunks = splitPgnGames(text);
+    const existing = new Set(state.games.map((game) => String(game.id)));
+    const parsed = [];
+    let skipped = 0;
+    let duplicates = 0;
+    for (let index = 0; index < chunks.length; index += 1) {
+      const pgn = chunks[index];
+      const id = stableTextId(pgn.replace(/\s+/g, " ").trim());
+      if (existing.has(id)) {
+        duplicates += 1;
+        continue;
+      }
+      const game = parseGame({ pgn, uuid: id }, options);
+      if (game) {
+        parsed.push(game);
+        existing.add(id);
+      } else {
+        skipped += 1;
+      }
+      if (index > 0 && index % 30 === 0) await yieldToMain();
+    }
+    if (!parsed.length && !duplicates) throw new Error(`No valid PGN games were found. ${skipped} section(s) could not be parsed.`);
+    state.games = [...state.games, ...parsed].sort((a, b) => a.endTime - b.endTime);
     state.branches = buildBranches(state.games);
+    state.importMeta = {
+      source: options.source || "Local PGN",
+      imported: parsed.length,
+      totalCached: state.games.length,
+      duplicates,
+      skipped,
+      warnings: [],
+      completedAt: Date.now(),
+      fingerprint: gameFingerprint(state.games),
+    };
     markDataDirty();
     save();
     renderAll();
-    return parsed.length;
+    await persistAnalysisCache();
+    return { imported: parsed.length, duplicates, skipped, total: state.games.length };
   }
 
   function bind() {
@@ -1323,36 +1700,51 @@
     });
     $("analyzeBtn")?.addEventListener("click", refreshAll);
     $("progressRefreshBtn")?.addEventListener("click", refreshAll);
+    $("stopImportBtn")?.addEventListener("click", () => state.importController?.abort());
+    $("mainUsernameInput")?.addEventListener("input", (event) => {
+      if ($("usernameInput")) $("usernameInput").value = event.currentTarget.value;
+    });
+    $("usernameInput")?.addEventListener("input", (event) => {
+      if ($("mainUsernameInput")) $("mainUsernameInput").value = event.currentTarget.value;
+    });
     $("saveSetupBtn")?.addEventListener("click", () => {
       state.username = String($("usernameInput")?.value || state.username).trim();
-      state.settings.maxGames = clamp(num($("maxGamesInput")?.value, 240), 20, 2000);
+      state.settings.maxGames = clamp(num($("maxGamesInput")?.value, 240), 1, 20000);
       state.settings.timeClasses = parseTimeClasses($("timeClassesInput")?.value);
+      state.settings.importAllGames = Boolean($("importAllGamesInput")?.checked);
+      state.settings.autoImportStartup = Boolean($("autoImportStartupInput")?.checked);
       save();
       status("Setup saved in this browser.", "success");
     });
-    $("resetWorkspaceBtn")?.addEventListener("click", () => {
+    $("resetWorkspaceBtn")?.addEventListener("click", async () => {
       if (!confirm("Clear Bookup Web data stored in this browser?")) return;
       localStorage.removeItem(STORAGE_KEY);
+      await clearWorkspaceCache().catch(() => {});
       location.reload();
     });
     $("reclassifyFreshBtn")?.addEventListener("click", () => {
       state.reviews = [];
       state.branches = buildBranches(state.games);
       markDataDirty();
-      save(); renderAll(); status("Local line classifications reset.", "success");
+      save();
+      persistAnalysisCache().catch(() => {});
+      renderAll(); status("Local line classifications reset.", "success");
     });
     $("importPgnBtn")?.addEventListener("click", async () => {
       try {
-        const amount = await importPgnText($("pgnImportInput")?.value);
-        setText("pgnImportStatus", `Imported ${amount} PGN games locally.`);
+        const report = await importPgnText($("pgnImportInput")?.value, { source: "Local PGN" });
+        setText("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. Analysis is cached offline.`);
       } catch (error) { setText("pgnImportStatus", error.message); }
     });
     $("importChessnutBtn")?.addEventListener("click", async () => {
       const file = $("chessnutDbPathInput")?.files?.[0];
       if (!file) { setText("chessnutImportStatus", "Select a PGN export first."); return; }
       try {
-        const amount = await importPgnText(await file.text());
-        setText("chessnutImportStatus", `Imported ${amount} NewChessnut PGN games locally.`);
+        const report = await importPgnText(await file.text(), {
+          source: "NewChessnut PGN",
+          playerColor: $("chessnutPlayerColorInput")?.value || "white",
+        });
+        setText("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. Analysis is cached offline.`);
       } catch (error) { setText("chessnutImportStatus", error.message); }
     });
     $("trainerResetBtn")?.addEventListener("click", () => state.selectedBranch && openBranch(state.branches.indexOf(state.selectedBranch)));
@@ -1465,7 +1857,7 @@
     }
   }
 
-  function initialize() {
+  async function initialize() {
     load();
     bind();
     const defaults = {
@@ -1477,10 +1869,18 @@
       progressCustomGames: state.customGames,
     };
     Object.entries(defaults).forEach(([id, value]) => { if ($(id)) $(id).value = String(value); });
+    if ($("importAllGamesInput")) $("importAllGamesInput").checked = Boolean(state.settings.importAllGames);
+    if ($("autoImportStartupInput")) $("autoImportStartupInput").checked = Boolean(state.settings.autoImportStartup);
     const sessionDate = $("progressSessionForm")?.querySelector('[name="date"]');
     if (sessionDate) sessionDate.value = today();
+    const restored = await restoreAnalysisCache().catch(() => false);
     renderAll();
-    status(state.branches.length ? `Loaded ${count(state.branches.length)} locally saved branches. Refresh when ready.` : "Ready. Build your repertoire from public games or PGN.");
+    status(restored
+      ? `Restored ${count(state.games.length)} games and ${count(state.branches.length)} analyzed branches from the offline cache.`
+      : (state.branches.length ? `Loaded ${count(state.branches.length)} locally saved branches. Refresh when ready.` : "Ready. Build your repertoire from public games or PGN."));
+    if (state.settings.autoImportStartup && state.username && navigator.onLine) {
+      window.setTimeout(() => refreshAll(), 500);
+    }
   }
 
   document.addEventListener("DOMContentLoaded", initialize);

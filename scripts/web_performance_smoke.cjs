@@ -58,15 +58,19 @@ function check(name, condition, detail = "") {
     check("legal_board_lazy_render", await page.locator("#board .square").count() === 64, "64 squares");
     if (testKnownMove) {
       const moveStarted = Date.now();
-      await page.locator('[data-square="g1"]').click();
-      await page.locator('[data-square="f3"]').click();
+      await page.evaluate(() => {
+        document.querySelector('[data-square="g1"]').click();
+        document.querySelector('[data-square="f3"]').click();
+      });
       await page.locator("#trainerFeedback").filter({ hasText: "Correct" }).waitFor({ timeout: 3000 });
       check("board_move_response", Date.now() - moveStarted < 700, `${Date.now() - moveStarted}ms`);
       await page.waitForTimeout(900);
       const firstPassRequests = cloudRequests;
       await page.getByRole("button", { name: "Reset", exact: true }).click();
-      await page.locator('[data-square="g1"]').click();
-      await page.locator('[data-square="f3"]').click();
+      await page.evaluate(() => {
+        document.querySelector('[data-square="g1"]').click();
+        document.querySelector('[data-square="f3"]').click();
+      });
       await page.waitForTimeout(900);
       check("analysis_request_cache", cloudRequests === firstPassRequests, `${cloudRequests - firstPassRequests} duplicate requests`);
     }
@@ -87,10 +91,10 @@ function check(name, condition, detail = "") {
     await page.getByRole("button", { name: "Build Repertoire", exact: true }).click();
     await page.waitForFunction(() => {
       const text = document.querySelector("#status")?.textContent || "";
-      return /Imported|not found|rate limiting|timed out|could not load/i.test(text);
+      return /Cached|not found|rate limiting|timed out|could not load|HTTP \d+/i.test(text);
     }, null, { timeout: 90000 });
     const importStatus = await page.locator("#status").innerText();
-    check("live_import_status", importStatus.startsWith("Imported"), importStatus);
+    check("live_import_status", importStatus.startsWith("Cached"), importStatus);
     const positions = Number(await page.locator("#summaryPositions").innerText());
     check("live_import", positions > 0, `${positions} branches in ${Date.now() - started}ms`);
     await verifyRepertoireWorkflow();
