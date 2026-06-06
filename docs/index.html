@@ -5,11 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="author" content="tetizz">
   <title>Bookup</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <meta name="description" content="Bookup in the browser: import public games, build a repertoire, study legal positions, generate theory, and review weak lines locally.">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="preload" href="vendor/chess.min.js" as="script">
+  <link rel="stylesheet" href="styles.min.css?v=3">
 </head>
 <body>
   <script>
@@ -843,7 +841,7 @@
     </section>
   </main>
 
-  <script src="vendor/chess.min.js"></script>
-  <script src="web-app.js?v=2"></script>
+  <script defer src="vendor/chess.min.js"></script>
+  <script defer src="web-app.min.js?v=3"></script>
 </body>
 </html>

@@ -12,8 +12,8 @@
   --accent-2: #f1c96a;
   --success: #74d39b;
   --danger: #ff7f87;
-  --mono: "JetBrains Mono", monospace;
-  --body: "Outfit", sans-serif;
+  --mono: "Cascadia Mono", "Consolas", monospace;
+  --body: "Segoe UI", Arial, sans-serif;
   --radius: 22px;
 }
 
@@ -5294,4 +5294,34 @@ button.retry-card {
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+/* Browser performance: defer below-the-fold layout and isolate heavy workspaces. */
+.workspace-panel.active {
+  contain: layout style;
+}
+
+.workspace-panel.active > .section-block,
+.workspace-panel.active > .setup-live-analysis-shell,
+.workspace-panel.active .progress-dashboard-grid,
+.workspace-panel.active .progress-session-layout {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 520px;
+}
+
+.board-grid,
+.progress-canvas,
+.smart-theory-mini-board {
+  contain: layout paint;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

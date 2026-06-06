@@ -13,6 +13,7 @@ Bookup includes a GitHub Pages website in `docs/`.
 - Browser analysis uses Lichess cloud evaluation. Opening data comes from the imported real-game corpus, or from authenticated Lichess Explorer requests when the user supplies a session-only token.
 - Settings, sessions, reviews, and repertoire summaries are stored in browser local storage. Lichess tokens are never persisted or committed.
 - Repertoire PGN, Bookup JSON, and Smart Theory exports are generated entirely in the browser.
+- The production site uses minified assets, native system fonts, lazy workspace rendering, idle-time persistence, cached analysis requests, and a precomputed repertoire position index.
 - GitHub Pages deploys it from `.github/workflows/pages.yml`.
 - The desktop build remains useful for native Stockfish executables, larger local caches, direct filesystem integrations, and NewChessnut database access.
 
@@ -23,6 +24,12 @@ https://tetizz.github.io/Bookup/
 ```
 
 GitHub Pages project paths follow the repository name. To use the lowercase URL `https://tetizz.github.io/bookup/`, rename the repository to lowercase `bookup` or publish the site from a user/organization Pages repo with a `/bookup/` folder.
+
+Regenerate the optimized website assets after changing `docs/web-app.js` or `docs/styles.css`:
+
+```text
+build_web_assets.bat
+```
 
 ## What Bookup Does
 

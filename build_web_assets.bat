@@ -1,0 +1,13 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+
+echo Building optimized Bookup Web assets...
+call npx --yes esbuild docs\web-app.js --minify --target=es2020 --outfile=docs\web-app.min.js
+if errorlevel 1 exit /b 1
+
+call npx --yes esbuild docs\styles.css --minify --outfile=docs\styles.min.css
+if errorlevel 1 exit /b 1
+
+copy /y docs\index.html docs\app.html >nul
+echo Bookup Web assets are ready.
