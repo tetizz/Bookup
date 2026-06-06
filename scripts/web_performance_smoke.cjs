@@ -49,7 +49,7 @@ function check(name, condition, detail = "") {
 
   async function verifyRepertoireWorkflow(testKnownMove = false) {
     await page.getByRole("button", { name: "Repertoire Map", exact: true }).click();
-    const workButtons = page.getByRole("button", { name: "Work on line", exact: true });
+    const workButtons = page.getByRole("button", { name: "Train position", exact: true });
     await workButtons.first().waitFor({ timeout: 5000 });
     const workCount = await workButtons.count();
     check("repertoire_cards", workCount > 0, `${workCount} buttons`);
@@ -59,8 +59,10 @@ function check(name, condition, detail = "") {
     if (testKnownMove) {
       const moveStarted = Date.now();
       await page.evaluate(() => {
-        document.querySelector('[data-square="g1"]').click();
-        document.querySelector('[data-square="f3"]').click();
+        const san = (document.querySelector("#boardLine")?.textContent.match(/best continuation:\s*(\S+)/) || [])[1];
+        const move = new Chess().move(san, { sloppy: true });
+        document.querySelector(`[data-square="${move.from}"]`).click();
+        document.querySelector(`[data-square="${move.to}"]`).click();
       });
       await page.locator("#trainerFeedback").filter({ hasText: "Correct" }).waitFor({ timeout: 3000 });
       check("board_move_response", Date.now() - moveStarted < 700, `${Date.now() - moveStarted}ms`);
@@ -68,8 +70,10 @@ function check(name, condition, detail = "") {
       const firstPassRequests = cloudRequests;
       await page.getByRole("button", { name: "Reset", exact: true }).click();
       await page.evaluate(() => {
-        document.querySelector('[data-square="g1"]').click();
-        document.querySelector('[data-square="f3"]').click();
+        const san = (document.querySelector("#boardLine")?.textContent.match(/best continuation:\s*(\S+)/) || [])[1];
+        const move = new Chess().move(san, { sloppy: true });
+        document.querySelector(`[data-square="${move.from}"]`).click();
+        document.querySelector(`[data-square="${move.to}"]`).click();
       });
       await page.waitForTimeout(900);
       check("analysis_request_cache", cloudRequests === firstPassRequests, `${cloudRequests - firstPassRequests} duplicate requests`);
@@ -88,7 +92,7 @@ function check(name, condition, detail = "") {
     await page.getByLabel("Chess.com import username", { exact: true }).fill(username);
     await page.getByLabel("Max games", { exact: true }).fill("40");
     const started = Date.now();
-    await page.getByRole("button", { name: "Build Repertoire", exact: true }).click();
+    await page.getByRole("button", { name: "Import & Analyze", exact: true }).click();
     await page.waitForFunction(() => {
       const text = document.querySelector("#status")?.textContent || "";
       return /Cached|not found|rate limiting|timed out|could not load|HTTP \d+/i.test(text);
@@ -96,15 +100,17 @@ function check(name, condition, detail = "") {
     const importStatus = await page.locator("#status").innerText();
     check("live_import_status", importStatus.startsWith("Cached"), importStatus);
     const positions = Number(await page.locator("#summaryPositions").innerText());
-    check("live_import", positions > 0, `${positions} branches in ${Date.now() - started}ms`);
+    check("live_import", positions > 0, `${positions} exact positions in ${Date.now() - started}ms`);
     await verifyRepertoireWorkflow();
   } else {
     await page.locator(".import-pgn-panel").first().locator("summary").click();
     await page.getByLabel("PGN text", { exact: true }).fill(
-      '[Event "Performance check"]\n[White "Player"]\n[Black "Opponent"]\n[Result "1-0"]\n\n1. Nf3 d5 2. g3 Nf6 3. Bg2 e6 4. O-O Be7 1-0'
+      '[Event "Performance check 1"]\n[White "Player"]\n[Black "Opponent"]\n[Result "0-1"]\n\n1. f3 d5 2. g4 e5 0-1\n\n'
+      + '[Event "Performance check 2"]\n[White "Player"]\n[Black "Opponent"]\n[Result "0-1"]\n\n1. f3 e5 2. g4 Qh4# 0-1'
     );
     await page.getByRole("button", { name: "Import PGN", exact: true }).click();
-    check("local_pgn_import", Number(await page.locator("#summaryPositions").innerText()) > 0);
+    await page.waitForFunction(() => document.querySelector("#progressLabel")?.textContent === "100%", null, { timeout: 90000 });
+    check("local_pgn_import", Number(await page.locator("#summaryNeedsWork").innerText()) === 1);
     await verifyRepertoireWorkflow(true);
   }
 

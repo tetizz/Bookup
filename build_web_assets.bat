@@ -6,6 +6,9 @@ echo Building optimized Bookup Web assets...
 call npx --yes esbuild docs\web-app.js --minify --target=es2020 --outfile=docs\web-app.min.js
 if errorlevel 1 exit /b 1
 
+call npx --yes esbuild docs\position-analysis.js --minify --target=es2020 --outfile=docs\position-analysis.min.js
+if errorlevel 1 exit /b 1
+
 call npx --yes esbuild docs\styles.css --minify --outfile=docs\styles.min.css
 if errorlevel 1 exit /b 1
 

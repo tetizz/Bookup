@@ -270,6 +270,39 @@ h1 {
   justify-content: flex-end;
 }
 
+.projection-table-wrap {
+  margin-top: 14px;
+  overflow-x: auto;
+}
+
+.projection-table {
+  width: 100%;
+  min-width: 390px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.projection-table th,
+.projection-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.projection-table input {
+  width: 68px;
+  min-width: 0;
+  padding: 7px;
+}
+
+.lesson-continuation {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
 .progress-mode-tabs {
   display: inline-flex;
   padding: 4px;
@@ -4351,26 +4384,31 @@ select:focus {
   }
 
   .board-wrap {
-    grid-template-columns: 18px 440px;
-    grid-template-rows: 440px 18px;
+    width: 100%;
+    grid-template-columns: 18px minmax(0, 1fr);
+    grid-template-rows: auto 18px;
   }
 
   .board-grid {
-    width: 440px;
-    height: 440px;
-    grid-template-columns: repeat(8, 55px);
-    grid-template-rows: repeat(8, 55px);
+    width: 100%;
+    max-width: 440px;
+    height: auto;
+    aspect-ratio: 1;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-rows: repeat(8, minmax(0, 1fr));
   }
 
   .board-arrows {
-    width: 440px;
-    height: 440px;
+    width: calc(100% - 18px);
+    max-width: 440px;
+    height: auto;
+    aspect-ratio: 1;
     left: 18px;
   }
 
   .piece {
-    width: 50px;
-    height: 50px;
+    width: 90%;
+    height: 90%;
   }
 
   .piece-drag-ghost {

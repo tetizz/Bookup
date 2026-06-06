@@ -64,8 +64,8 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
         contentType: "application/json",
         body: JSON.stringify({
           games: [
-            game("rapid-a", "rapid", 1772000000, "1-0", "1. Nf3 d5 2. g3 Nf6 3. Bg2 e6"),
-            game("blitz-a", "blitz", 1772100000, "0-1", "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6"),
+            game("rapid-a", "rapid", 1772000000, "1-0", "1. f3 d5 2. g4 Nf6 3. Bg2 e6"),
+            game("blitz-a", "blitz", 1772100000, "0-1", "1. f3 e5 2. g4 Qh4#"),
             game("bullet-filtered", "bullet", 1772200000, "1-0", "1. d4 d5 2. c4 e6"),
           ],
         }),
@@ -75,7 +75,7 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
       contentType: "application/json",
       body: JSON.stringify({
         games: [
-          game("rapid-a", "rapid", 1772000000, "1-0", "1. Nf3 d5 2. g3 Nf6 3. Bg2 e6"),
+          game("rapid-a", "rapid", 1772000000, "1-0", "1. f3 d5 2. g4 Nf6 3. Bg2 e6"),
           game("rapid-b", "rapid", 1769000000, "1/2-1/2", "1. c4 e5 2. Nc3 Nf6 3. g3 d5"),
         ],
       }),
@@ -96,8 +96,8 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
       subtree: true,
     });
   });
-  await page.getByRole("button", { name: "Build Repertoire", exact: true }).click();
-  await page.waitForFunction(() => /Cached .* public games/.test(document.querySelector("#status")?.textContent || ""), null, { timeout: 30000 });
+  await page.getByRole("button", { name: "Import & Analyze", exact: true }).click();
+  await page.waitForFunction(() => /Cached .* public games/.test(document.querySelector("#status")?.textContent || ""), null, { timeout: 90000 });
 
   const status = await page.locator("#status").innerText();
   const progressSamples = await page.evaluate(() => window.__bookupProgressSamples);
@@ -106,6 +106,7 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
   check("broken_archive_is_skipped", /archive warning/.test(status), status);
   check("all_games_overrides_limit", await page.locator("#badgeGames").innerText() === "3", await page.locator("#badgeGames").innerText());
   check("time_class_filter", !(await page.locator("#analysisPreviewPanel").innerText()).includes("bullet-filtered"));
+  check("exact_position_queue", await page.locator("#summaryNeedsWork").innerText() === "1", await page.locator("#summaryNeedsWork").innerText());
 
   const cache = await page.evaluate(async () => {
     const db = await new Promise((resolve, reject) => {
@@ -119,10 +120,16 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
       request.onerror = () => reject(request.error);
     });
     db.close();
-    return { games: record.games.length, branches: record.branches.length, fingerprint: record.fingerprint };
+    return {
+      games: record.games.length,
+      branches: record.branches.length,
+      lessons: record.lessons.length,
+      candidates: record.analysisMeta.candidates,
+      fingerprint: record.fingerprint,
+    };
   });
   check("offline_game_cache", cache.games === 3, JSON.stringify(cache));
-  check("analyzed_branch_cache", cache.branches > 0 && /^3-3-/.test(cache.fingerprint), JSON.stringify(cache));
+  check("exact_position_cache", cache.branches > 0 && cache.lessons > 0 && cache.candidates > 0 && /^4-3-/.test(cache.fingerprint), JSON.stringify(cache));
 
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));

@@ -8,7 +8,7 @@
   const STORAGE_KEY = "bookup-web-desktop-v2";
   const CACHE_DB_NAME = "bookup-web-cache";
   const CACHE_DB_VERSION = 2;
-  const ANALYSIS_VERSION = 3;
+  const ANALYSIS_VERSION = 4;
   const MODES = ["rapid", "blitz", "bullet"];
   const PIECE_NAMES = { p: "P", n: "N", b: "B", r: "R", q: "Q", k: "K" };
   const DEFAULT_ACCURACY = { average: 74.18, opening: 85.1, middlegame: 71.1, endgame: 77.2 };
@@ -33,12 +33,18 @@
     stats: {},
     games: [],
     branches: [],
+    lessons: [],
+    analysisMeta: null,
     reviews: [],
     sessions: [],
+    snapshots: [],
+    goalBaselines: {},
     accuracy: { ...DEFAULT_ACCURACY },
     dropoff: DEFAULT_DROPOFF.map((row) => [...row]),
+    projectionMode: "realistic",
     customGames: 538,
     selectedBranch: null,
+    selectedLesson: null,
     trainer: {
       chess: new Chess(),
       selected: "",
@@ -207,6 +213,8 @@
       games: state.games.map(compactGame),
       branches: state.branches,
       importMeta: state.importMeta,
+      lessons: state.lessons,
+      analysisMeta: state.analysisMeta,
     };
     await writeWorkspaceCache(record);
     state.cacheRestored = true;
@@ -222,6 +230,12 @@
     state.branches = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint && Array.isArray(cached.branches)
       ? cached.branches
       : buildBranches(state.games);
+    state.lessons = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint && Array.isArray(cached.lessons)
+      ? cached.lessons
+      : [];
+    state.analysisMeta = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint
+      ? (cached.analysisMeta || null)
+      : null;
     state.importMeta = cached.importMeta || null;
     state.cacheRestored = true;
     markDataDirty();
@@ -235,9 +249,12 @@
       settings: state.settings,
       reviews: state.reviews,
       sessions: state.sessions,
+      snapshots: state.snapshots.map((item) => ({ ...item })),
+      goalBaselines: state.goalBaselines,
       accuracy: state.accuracy,
       dropoff: state.dropoff,
       customGames: state.customGames,
+      projectionMode: state.projectionMode,
       branches: state.branches.slice(0, 180).map((branch) => ({
         id: branch.id,
         color: branch.color,
@@ -252,6 +269,8 @@
         ease: branch.ease || 2.5,
       })),
       stats: state.stats,
+      lessons: state.lessons,
+      analysisMeta: state.analysisMeta,
     });
   }
 
@@ -306,10 +325,15 @@
       if (data.settings) state.settings = { ...state.settings, ...data.settings };
       if (Array.isArray(data.reviews)) state.reviews = data.reviews;
       if (Array.isArray(data.sessions)) state.sessions = data.sessions;
+      if (Array.isArray(data.snapshots)) state.snapshots = data.snapshots;
+      if (data.goalBaselines && typeof data.goalBaselines === "object") state.goalBaselines = data.goalBaselines;
       if (data.accuracy) state.accuracy = { ...state.accuracy, ...data.accuracy };
       if (Array.isArray(data.dropoff)) state.dropoff = data.dropoff;
       if (data.customGames) state.customGames = num(data.customGames, 538);
+      if (["simple", "realistic"].includes(data.projectionMode)) state.projectionMode = data.projectionMode;
       if (Array.isArray(data.branches)) state.branches = data.branches;
+      if (Array.isArray(data.lessons)) state.lessons = data.lessons;
+      if (data.analysisMeta) state.analysisMeta = data.analysisMeta;
       if (data.stats) state.stats = data.stats;
       markDataDirty();
     } catch {
@@ -509,6 +533,68 @@
     return `${raw.end_time || ""}|${raw.white?.username || ""}|${raw.black?.username || ""}|${String(raw.pgn || "").slice(-160)}`;
   }
 
+  async function analyzeImportedPositions(signal, progressStart = 58, progressEnd = 96) {
+    const analyzer = window.BookupPositionAnalysis;
+    if (!analyzer?.analyzeImportedGames) {
+      throw new Error("The exact-position analyzer did not load. Refresh the page and try again.");
+    }
+    const startedAt = Date.now();
+    const moveTimeMs = clamp(Math.round(num($("thinkTimeInput")?.value, 0.18) * 1000), 120, 350);
+    setImportProgress(0, 0, "Finding repeated decision positions...", progressStart, progressStart);
+    const result = await analyzer.analyzeImportedGames(state.games, {
+      workerUrl: "./vendor/stockfish/stockfish-18-lite-single.js",
+      signal,
+      moveTimeMs,
+      readCache: (key) => readAnalysisCache(key, 90 * 24 * 60 * 60 * 1000).catch(() => null),
+      writeCache: (key, payload) => writeAnalysisCache(key, payload).catch(() => {}),
+      onProgress: ({ done, total, lessons }) => {
+        setImportProgress(
+          done,
+          total,
+          `Stockfish checked ${done}/${total} repeated positions · ${lessons} lessons built`,
+          progressStart,
+          progressEnd
+        );
+      },
+    });
+    state.lessons = result.lessons;
+    state.analysisMeta = {
+      candidates: result.candidates,
+      lessons: result.lessons.length,
+      due: result.due.length,
+      fresh: result.fresh.length,
+      known: result.known.length,
+      cacheHits: result.cacheHits,
+      analyzed: result.analyzed,
+      moveTimeMs,
+      elapsedMs: Date.now() - startedAt,
+      completedAt: Date.now(),
+    };
+    return result;
+  }
+
+  function saveDailySnapshots(statsByMode) {
+    const date = today();
+    Object.entries(statsByMode).forEach(([mode, data]) => {
+      if (!state.goalBaselines[mode]) state.goalBaselines[mode] = num(data.games);
+      const snapshot = {
+        date,
+        mode,
+        rating: num(data.rating),
+        games: num(data.games),
+        wins: num(data.wins),
+        draws: num(data.draws),
+        losses: num(data.losses),
+      };
+      const index = state.snapshots.findIndex((item) => item.date === date && item.mode === mode);
+      if (index >= 0) state.snapshots[index] = snapshot;
+      else state.snapshots.push(snapshot);
+    });
+    state.snapshots = state.snapshots
+      .sort((left, right) => String(left.date).localeCompare(String(right.date)))
+      .slice(-1095);
+  }
+
   async function fetchPublicGames(signal) {
     const username = encodeURIComponent(state.username);
     setImportProgress(1, 1, `Connecting to Chess.com for ${state.username}...`, 0, 4);
@@ -531,6 +617,7 @@
       };
     }
     state.stats = parsedStats;
+    saveDailySnapshots(parsedStats);
     const urls = (archivesPayload.archives || []).slice().reverse();
     if (!urls.length) throw new Error("Chess.com returned no public game archives for this username.");
     const importAll = state.settings.importAllGames;
@@ -584,7 +671,7 @@
         1,
         `Scanning Chess.com archives: ${archivesScanned}/${urls.length} · ${count(imported.length)} new games`,
         12,
-        96
+        55
       );
       await yieldToMain();
       if (!importAll && existingGames.length && batchUnknownGames === 0) break;
@@ -612,7 +699,9 @@
       fingerprint: nextFingerprint,
     };
     markDataDirty();
-    setImportProgress(1, 1, "Saving games and analyzed branches for offline use...", 96, 99);
+    await analyzeImportedPositions(signal, 58, 96);
+    markDataDirty();
+    setImportProgress(1, 1, "Saving games and exact-position lessons for offline use...", 96, 99);
     await persistAnalysisCache();
   }
 
@@ -641,16 +730,38 @@
     state.importController = new AbortController();
     status(`Loading public games for ${state.username}...`);
     setImportProgress(0, 0, `Starting import for ${state.username}...`, 1, 1);
+    const previousWorkspace = {
+      cacheKey: state.cacheKey,
+      games: state.games,
+      branches: state.branches,
+      lessons: state.lessons,
+      stats: state.stats,
+      snapshots: state.snapshots.map((item) => ({ ...item })),
+      goalBaselines: { ...state.goalBaselines },
+      importMeta: state.importMeta,
+      analysisMeta: state.analysisMeta,
+    };
     try {
       await fetchPublicGames(state.importController.signal);
       save();
       renderAll();
       const warningText = state.importMeta?.warnings?.length ? ` ${state.importMeta.warnings.length} archive warning(s) were skipped.` : "";
-      status(`Cached ${count(state.games.length)} public games and their analyzed repertoire offline.${warningText}`, "success");
+      status(`Cached ${count(state.games.length)} public games and ${count(state.lessons.filter((lesson) => lesson.lineStatus === "needs_work").length)} due positions offline.${warningText}`, "success");
       setImportProgress(1, 1);
     } catch (error) {
+      Object.assign(state, previousWorkspace);
+      markDataDirty();
       const stopped = error.name === "AbortError";
-      status(stopped ? "Import stopped. Your previous offline cache is still intact." : (error.message || "Bookup could not load public games."), stopped ? "" : "error");
+      const message = /failed to fetch|networkerror|network request failed/i.test(String(error.message || ""))
+        ? "No internet connection. Your existing offline games and lessons are still available."
+        : (error.message || "Bookup could not load public games.");
+      status(stopped ? "Import stopped. Your previous offline cache is still intact." : message, stopped ? "" : "error");
+      setText("progressLabel", stopped ? "Stopped" : "Error");
+      const fill = $("progressFill");
+      if (fill) {
+        fill.classList.remove("indeterminate");
+        fill.style.inlineSize = "0%";
+      }
       renderAll();
     } finally {
       state.importController = null;
@@ -689,43 +800,89 @@
     return { wins, draws, losses, total, score: total ? (wins + draws * 0.5) / total * 100 : 0 };
   }
 
+  function latestLessonReview(lessonId) {
+    for (let index = state.reviews.length - 1; index >= 0; index -= 1) {
+      if (state.reviews[index].lessonId === lessonId) return state.reviews[index];
+    }
+    return null;
+  }
+
+  function lessonNeedsWork(lesson) {
+    return lesson?.lineStatus === "needs_work" && lesson.repeatMistakeCount >= 2;
+  }
+
+  function lessonIsDue(lesson) {
+    if (!lessonNeedsWork(lesson)) return false;
+    const review = latestLessonReview(lesson.lessonId);
+    return !review || review.result === "missed" || String(review.due || today()) <= today();
+  }
+
+  function dueLessons() {
+    return state.lessons
+      .filter(lessonIsDue)
+      .sort((left, right) => {
+        const leftReview = latestLessonReview(left.lessonId);
+        const rightReview = latestLessonReview(right.lessonId);
+        return Number(Boolean(rightReview)) - Number(Boolean(leftReview))
+          || right.priority - left.priority
+          || right.repeatMistakeCount - left.repeatMistakeCount;
+      })
+      .slice(0, 32);
+  }
+
+  function lessonCard(lesson, includeAction = true) {
+    const action = includeAction
+      ? `<button class="ghost-btn" data-open-lesson="${escapeHtml(lesson.lessonId)}" type="button">Train position</button>`
+      : "";
+    const date = lesson.lastSeenTime ? new Date(lesson.lastSeenTime * 1000).toLocaleDateString() : "PGN import";
+    const loss = Math.round(num(lesson.valueLostCp));
+    const title = `${lesson.recommendedMove} instead of ${lesson.yourRepeatedMove}`;
+    const body = `You chose ${escapeHtml(lesson.yourRepeatedMove)} in ${count(lesson.repeatMistakeCount)} repeated games. Stockfish prefers ${escapeHtml(lesson.recommendedMove)}${loss ? ` by about ${(loss / 100).toFixed(2)} pawns` : ""}.`;
+    const meta = `${lesson.color} · ${lesson.openingName || lesson.lineLabel || "exact position"} · last seen ${date}`;
+    return card(title, `${body}<br><span class="lesson-continuation">${escapeHtml(lesson.continuationSan || "")}</span>`, meta, action);
+  }
+
   function renderSummary() {
     const imported = importedStats();
-    const urgent = state.branches.filter((branch) => branchResult(branch).lossRate >= 45).length;
-    setText("summaryPositions", count(state.branches.length));
-    setText("summaryNeedsWork", count(urgent));
-    setText("summaryQueue", count(state.reviews.filter((review) => review.result === "missed").length + urgent));
-    setText("heroTitle", state.branches.length ? `${state.username}'s browser repertoire` : "No repertoire loaded yet");
-    setText("heroSummary", state.branches.length
-      ? `${count(imported.total)} real public games produced ${count(state.branches.length)} practical branches. Everything below is saved locally in this browser.`
-      : "Import public games or paste PGN to build your repertoire map and trainable branches.");
+    const needsWork = state.lessons.filter(lessonNeedsWork);
+    const queue = dueLessons();
+    const analyzed = num(state.analysisMeta?.candidates, state.lessons.length);
+    setText("summaryPositions", count(analyzed));
+    setText("summaryNeedsWork", count(needsWork.length));
+    setText("summaryQueue", count(queue.length));
+    setText("heroTitle", state.games.length ? `${state.username || "Your"} exact-position training` : "No games loaded yet");
+    setText("heroSummary", state.games.length
+      ? `${count(imported.total)} real games were indexed into ${count(analyzed)} repeated decision positions. ${count(needsWork.length)} positions contain a repeated move that differs from Stockfish's best move.`
+      : "Import public games or paste PGN to find the exact positions where your repeated move missed Stockfish's best move.");
     setText("badgeGames", imported.total ? count(imported.total) : "--");
-    setText("badgeKnown", count(state.reviews.filter((review) => review.result === "known").length));
+    setText("badgeKnown", count(state.reviews.filter((review) => review.result === "known" && review.lessonId).length));
     setText("badgeWinRate", imported.total ? percent(imported.wins / imported.total * 100) : "--");
-    setHtml("analysisPreviewPanel", state.branches.length
+    setHtml("analysisPreviewPanel", state.games.length
       ? `<div class="analysis-landscape-metrics">
           <article><span>Source</span><strong>${escapeHtml(state.importMeta?.source || "Local PGN")}</strong></article>
           <article><span>Imported</span><strong>${count(imported.total)} games</strong></article>
-          <article><span>Branches</span><strong>${count(state.branches.length)}</strong></article>
-          <article><span>Offline cache</span><strong>Ready</strong></article>
+          <article><span>Exact positions</span><strong>${count(analyzed)}</strong></article>
+          <article><span>Engine cache</span><strong>${count(state.analysisMeta?.cacheHits || 0)} reused</strong></article>
         </div>${state.importMeta ? `<p class="line-note">${count(state.importMeta.duplicates)} duplicates ignored · ${count(state.importMeta.skipped)} parse failures${state.importMeta.warnings?.length ? ` · ${count(state.importMeta.warnings.length)} archive warnings` : ""}</p>` : ""}`
-      : "Run an import to see live import details.", !state.branches.length);
+      : "Run an import to see live import details.", !state.games.length);
   }
 
   function renderHealth() {
-    if (!state.branches.length) {
+    if (!state.games.length) {
       setHtml("healthDashboard", "Build your repertoire to see coverage, confidence, and today's study load.", true);
       return;
     }
-    const totalVisits = state.branches.reduce((sum, branch) => sum + branch.games, 0);
-    const covered = state.branches.filter((branch) => branch.games >= 2).length;
-    const weak = state.branches.filter((branch) => branchResult(branch).lossRate >= 45).length;
-    const known = state.reviews.filter((review) => review.result === "known").length;
+    const totalVisits = state.lessons.reduce((sum, lesson) => sum + num(lesson.frequency), 0);
+    const weak = state.lessons.filter(lessonNeedsWork);
+    const confidence = state.lessons.length
+      ? state.lessons.reduce((sum, lesson) => sum + num(lesson.confidence), 0) / state.lessons.length
+      : 0;
+    const known = state.reviews.filter((review) => review.result === "known" && review.lessonId).length;
     setHtml("healthDashboard", `<div class="analysis-landscape-metrics">
-      <article><span>Coverage</span><strong>${percent(covered / state.branches.length * 100, 0)}</strong><small>branches seen twice</small></article>
-      <article><span>Confidence</span><strong>${percent(clamp(100 - weak / state.branches.length * 100, 0, 100), 0)}</strong><small>loss pressure adjusted</small></article>
+      <article><span>Analyzed</span><strong>${count(state.analysisMeta?.candidates || state.lessons.length)}</strong><small>repeated exact positions</small></article>
+      <article><span>Confidence</span><strong>${percent(confidence, 0)}</strong><small>frequency and move consistency</small></article>
       <article><span>Known reps</span><strong>${count(known)}</strong><small>clean local reviews</small></article>
-      <article><span>Position visits</span><strong>${count(totalVisits)}</strong><small>from imported games</small></article>
+      <article><span>Needs work</span><strong>${count(weak.length)}</strong><small>${count(totalVisits)} repeated visits checked</small></article>
     </div>`);
   }
 
@@ -739,27 +896,50 @@
   function renderRepertoire() {
     const white = state.branches.filter((branch) => branch.color === "white");
     const black = state.branches.filter((branch) => branch.color === "black");
-    const firstMove = (items) => {
+    const firstMove = (items, perspective) => {
       const map = {};
       items.forEach((branch) => { map[branch.moves[0]] = (map[branch.moves[0]] || 0) + branch.games; });
       return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 8)
-        .map(([move, games]) => card(move, `${games} imported games`, "first move")).join("");
+        .map(([move, games]) => card(
+          move,
+          `${games} imported games`,
+          perspective === "opponent" ? "opponent opens with" : "you open with"
+        )).join("");
     };
-    setHtml("firstMoveWhite", firstMove(white) || "No white first-move data yet.", !white.length);
-    setHtml("firstMoveBlack", firstMove(black) || "No black first-move data yet.", !black.length);
-    setHtml("repertoireMapWhite", white.slice(0, 30).map((branch) => branchCard(branch, branch._index)).join("") || "No white repertoire positions yet.", !white.length);
-    setHtml("repertoireMapBlack", black.slice(0, 30).map((branch) => branchCard(branch, branch._index)).join("") || "No black repertoire positions yet.", !black.length);
-    const knownIds = new Set(state.reviews.filter((item) => item.result === "known").map((item) => item.branchId));
-    const known = state.branches.filter((branch) => knownIds.has(branch.id));
-    setHtml("knownArchiveList", known.slice(0, 30).map((branch) => branchCard(branch, branch._index, false)).join("") || "Complete clean reps to build the known-lines archive.", !known.length);
+    setHtml("firstMoveWhite", firstMove(white, "player") || "No games where you played White yet.", !white.length);
+    setHtml("firstMoveBlack", firstMove(black, "opponent") || "No games where you played Black yet.", !black.length);
+    const whiteLessons = state.lessons.filter((lesson) => lesson.color === "white" && lessonNeedsWork(lesson));
+    const blackLessons = state.lessons.filter((lesson) => lesson.color === "black" && lessonNeedsWork(lesson));
+    setHtml("repertoireMapWhite", whiteLessons.slice(0, 30).map((lesson) => lessonCard(lesson)).join("") || "No repeated white mistakes were found.", !whiteLessons.length);
+    setHtml("repertoireMapBlack", blackLessons.slice(0, 30).map((lesson) => lessonCard(lesson)).join("") || "No repeated black mistakes were found.", !blackLessons.length);
+    const preview = state.selectedLesson || [...whiteLessons, ...blackLessons].sort((a, b) => b.priority - a.priority)[0];
+    setHtml("previewPanel", preview ? lessonCard(preview) : "No exact-position lesson is available to preview.", !preview);
+    const knownIds = new Set(state.reviews.filter((item) => item.result === "known" && item.lessonId).map((item) => item.lessonId));
+    const known = state.lessons.filter((lesson) => knownIds.has(lesson.lessonId));
+    setHtml("knownArchiveList", known.slice(0, 30).map((lesson) => lessonCard(lesson, false)).join("") || "Complete clean position reviews to build the known archive.", !known.length);
     const byPosition = new Map();
     state.branches.forEach((branch) => {
-      const key = branch.moves.slice(-4).join(" ");
-      if (!byPosition.has(key)) byPosition.set(key, []);
-      byPosition.get(key).push(branch);
+      const chess = new Chess();
+      const path = [];
+      branch.moves.slice(0, 16).forEach((san) => {
+        const move = chess.move(san, { sloppy: true });
+        if (!move) return;
+        path.push(move.san);
+        const key = fenKey(chess.fen());
+        if (!byPosition.has(key)) byPosition.set(key, new Set());
+        byPosition.get(key).add(path.join(" "));
+      });
     });
-    const transpositions = [...byPosition.entries()].filter(([, items]) => items.length > 1).slice(0, 12);
-    setHtml("transpositionList", transpositions.map(([tail, items]) => card(tail, `${items.length} imported move orders converge on this continuation.`, "transposition")).join("") || "No repeated move-order convergence found in this import.", !transpositions.length);
+    const transpositions = [...byPosition.entries()]
+      .map(([fen, paths]) => [fen, [...paths]])
+      .filter(([, paths]) => paths.length > 1)
+      .sort((left, right) => right[1].length - left[1].length)
+      .slice(0, 12);
+    setHtml("transpositionList", transpositions.map(([fen, paths]) => card(
+      `${paths.length} move orders`,
+      paths.slice(0, 3).map(escapeHtml).join("<br>"),
+      fen.split(" ").slice(0, 2).join(" ")
+    )).join("") || "No true FEN transpositions found in this import.", !transpositions.length);
   }
 
   function weakBranches() {
@@ -773,36 +953,43 @@
   }
 
   function renderNeedsWork() {
-    const weak = weakBranches();
-    const urgent = weak.filter((branch) => branchResult(branch).lossRate >= 45).slice(0, 20);
-    const later = weak.filter((branch) => branch.games === 1).slice(0, 16);
-    setHtml("urgentList", urgent.map((branch) => branchCard(branch, branch._index)).join("") || "No urgent loss-heavy lines found.", !urgent.length);
-    setHtml("sidelineList", later.map((branch) => branchCard(branch, branch._index)).join("") || "No fresh sidelines yet.", !later.length);
-    setHtml("suggestionList", weak.slice(0, 10).map((branch) => {
-      const result = branchResult(branch);
-      return card(branch.moves.slice(0, 6).join(" "), `Prepare one alternative after ${branch.moves[branch.moves.length - 1]}. This branch scores ${percent(result.score)} across ${branch.games} games.`, "upgrade candidate");
-    }).join("") || "Import games to surface upgrade candidates.", !weak.length);
+    const urgent = state.lessons.filter(lessonNeedsWork).sort((a, b) => b.priority - a.priority);
+    const later = urgent.filter((lesson) => lesson.valueLostCp < 100).slice(0, 16);
+    setHtml("urgentList", urgent.slice(0, 20).map((lesson) => lessonCard(lesson)).join("") || "No repeated best-move misses were found.", !urgent.length);
+    setHtml("sidelineList", later.map((lesson) => lessonCard(lesson)).join("") || "No lower-priority exact positions yet.", !later.length);
+    setHtml("suggestionList", urgent.slice(0, 10).map((lesson) => card(
+      lesson.recommendedMove,
+      `Replace ${escapeHtml(lesson.yourRepeatedMove)} with ${escapeHtml(lesson.recommendedMove)} after ${escapeHtml(lesson.lineLabel)}. Rehearse ${escapeHtml(lesson.continuationSan || "the resulting position")}.`,
+      `${lesson.classification?.label || "miss"} · priority ${Math.round(lesson.priority)}`
+    )).join("") || "Import games to surface exact move upgrades.", !urgent.length);
     const squares = new Map();
-    state.games.filter((game) => game.outcome === "loss").forEach((game) => {
-      game.moves.slice(0, 20).forEach((move) => {
-        const match = move.match(/[a-h][1-8]/g);
-        const square = match?.at(-1);
-        if (square) squares.set(square, (squares.get(square) || 0) + 1);
+    urgent.forEach((lesson) => {
+      const move = String(lesson.yourRepeatedMoveUci || "");
+      [move.slice(0, 2), move.slice(2, 4)].filter(Boolean).forEach((square) => {
+        squares.set(square, (squares.get(square) || 0) + Math.max(1, num(lesson.repeatMistakeCount)));
       });
     });
     const heat = [...squares.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
-    setHtml("mistakeHeatmap", heat.length ? `<div class="heatmap-grid">${heat.map(([square, hits]) => `<div class="heatmap-cell"><strong>${square}</strong><span>${hits}</span></div>`).join("")}</div>` : "No loss-square data yet.", !heat.length);
-    setHtml("mistakeTimeline", urgent.slice(0, 8).map((branch) => card(new Date((branch.lastSeen || Date.now() / 1000) * 1000).toLocaleDateString(), branch.moves.slice(0, 7).join(" "), `${branch.losses} losses`)).join("") || "No repeated mistakes yet.", !urgent.length);
+    setHtml("mistakeHeatmap", heat.length ? `<div class="heatmap-grid">${heat.map(([square, hits]) => `<div class="heatmap-cell"><strong>${square}</strong><span>${count(hits)}</span></div>`).join("")}</div>` : "No repeated-mistake squares yet.", !heat.length);
+    setHtml("mistakeTimeline", urgent.slice(0, 8).map((lesson) => card(
+      new Date((lesson.lastSeenTime || Date.now() / 1000) * 1000).toLocaleDateString(),
+      `${escapeHtml(lesson.yourRepeatedMove)} → ${escapeHtml(lesson.recommendedMove)}`,
+      `${count(lesson.repeatMistakeCount)} repeats`
+    )).join("") || "No repeated mistakes yet.", !urgent.length);
     renderReviewSchedule();
-    setHtml("smartRetryPanel", urgent.slice(0, 8).map((branch) => branchCard(branch, branch._index)).join("") || "No retry cards yet.", !urgent.length);
-    setHtml("premoveQuizPanel", urgent.slice(0, 6).map((branch, index) => card(`What comes after ${branch.moves.slice(0, 5).join(" ")}?`, `<button class="ghost-btn" data-reveal="${index}" type="button">Reveal answer</button><span class="quiz-answer" hidden>${escapeHtml(branch.moves[5] || "Line ends")}</span>`, "quick recall")).join("") || "No quiz cards yet.", !urgent.length);
+    setHtml("smartRetryPanel", urgent.slice(0, 8).map((lesson) => lessonCard(lesson)).join("") || "No retry positions yet.", !urgent.length);
+    setHtml("premoveQuizPanel", urgent.slice(0, 6).map((lesson, index) => card(
+      `After ${lesson.lineLabel}, what is best?`,
+      `<button class="ghost-btn" data-reveal="${index}" type="button">Reveal answer</button><span class="quiz-answer" hidden>${escapeHtml(lesson.recommendedMove)} · ${escapeHtml(lesson.continuationSan || "")}</span>`,
+      "exact-position recall"
+    )).join("") || "No position quizzes yet.", !urgent.length);
   }
 
   function renderReviewSchedule() {
-    const items = state.reviews.slice().sort((a, b) => String(a.due).localeCompare(String(b.due))).slice(0, 25);
-    setHtml("reviewSchedule", items.map((item) => card(item.line, `${item.result === "known" ? "Clean rep" : "Retry needed"} · next review ${item.due}`, item.result)).join("") || "Review schedule appears once lines enter the queue.", !items.length);
-    const missed = items.filter((item) => item.result === "missed");
-    setHtml("mistakeList", missed.map((item) => card(item.line, `Missed ${item.date}. Due ${item.due}.`, item.note || "opening review")).join("") || "No missed lines are waiting.", !missed.length);
+    const items = state.reviews.filter((item) => item.lessonId).slice().sort((a, b) => String(a.due).localeCompare(String(b.due))).slice(0, 25);
+    setHtml("reviewSchedule", items.map((item) => card(item.line, `${item.result === "known" ? "Clean position" : "Retry needed"} · next review ${item.due}`, item.result)).join("") || "Review schedule appears once exact positions enter the queue.", !items.length);
+    const waiting = dueLessons();
+    setHtml("mistakeList", waiting.map((lesson) => lessonCard(lesson)).join("") || "No missed positions are waiting.", !waiting.length);
   }
 
   function renderMoveTree() {
@@ -854,6 +1041,7 @@
       return;
     }
     const recent = state.games.filter((game) => game.timeClass === state.mode).slice(-30);
+    const snapshots = state.snapshots.filter((item) => item.mode === state.mode).slice(-90);
     const recentWins = recent.filter((game) => game.outcome === "win").length;
     const recentScore = recent.length ? recentWins / recent.length * 100 : 0;
     const imported = importedStats();
@@ -866,9 +1054,20 @@
       ["Best rating", rating(data.best), "Chess.com best"],
     ].map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join(""));
     setText("progressStatus", `Live ${state.mode} stats for ${state.username}. Ratings are shown without commas.`);
-    drawRatingChart("progressRatingChart", recent.map((game) => ({ x: game.endTime, y: game.rating })), "#7da2ff");
-    const deltas = recent.slice(1).map((game, index) => ({ x: index, y: game.rating - recent[index].rating }));
+    const ratingPoints = snapshots.length >= 2
+      ? snapshots.map((item) => ({ x: item.date, y: item.rating }))
+      : recent.map((game) => ({ x: game.endTime, y: game.rating }));
+    drawRatingChart("progressRatingChart", ratingPoints, "#7da2ff");
+    const deltaSource = snapshots.length >= 2 ? snapshots : recent;
+    const deltas = deltaSource.slice(1).map((item, index) => ({ x: index, y: item.rating - deltaSource[index].rating }));
     drawBarChart("progressDeltaChart", deltas);
+    drawRatingChart("progressGamesChart", snapshots.map((item) => ({ x: item.date, y: item.games })), "#74d39b");
+    drawRatingChart("progressWinRateChart", snapshots.map((item) => ({
+      x: item.date,
+      y: item.games ? item.wins / item.games * 100 : 0,
+    })), "#f1c96a");
+    drawRatingChart("progressAccuracyChart", state.sessions.filter((session) => num(session.accuracy) > 0)
+      .map((session) => ({ x: session.date, y: session.accuracy })), "#c79bff");
     drawPhaseChart();
     renderGoals(data, recentScore);
     renderProjection(data);
@@ -914,6 +1113,12 @@
       if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.stroke();
+    if (points.length === 1) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(38, height / 2, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.fillStyle = "#d2dae6"; ctx.font = "12px Cascadia Mono";
     ctx.fillText(String(Math.max(...values)), 4, 20);
     ctx.fillText(String(Math.min(...values)), 4, height - 12);
@@ -942,14 +1147,44 @@
     const { ctx, width, height } = target;
     ctx.clearRect(0, 0, width, height);
     const rows = [["Opening", state.accuracy.opening], ["Middlegame", state.accuracy.middlegame], ["Endgame", state.accuracy.endgame]];
-    rows.forEach(([label, value], index) => {
-      const y = 34 + index * 58;
-      ctx.fillStyle = "#283241"; ctx.fillRect(100, y, width - 130, 20);
-      ctx.fillStyle = value >= 80 ? "#74d39b" : value >= 73 ? "#7da2ff" : "#f1c96a";
-      ctx.fillRect(100, y, (width - 130) * value / 100, 20);
-      ctx.fillStyle = "#d2dae6"; ctx.font = "13px Segoe UI"; ctx.fillText(label, 12, y + 15);
-      ctx.font = "12px Cascadia Mono"; ctx.fillText(percent(value), width - 52, y + 15);
-    });
+    const history = state.sessions.filter((session) =>
+      num(session.openingAccuracy) > 0 || num(session.middlegameAccuracy) > 0 || num(session.endgameAccuracy) > 0
+    ).slice(-30);
+    if (history.length >= 2) {
+      ctx.strokeStyle = "#283241";
+      for (let index = 1; index < 4; index += 1) {
+        const y = index * height / 4;
+        ctx.beginPath(); ctx.moveTo(35, y); ctx.lineTo(width - 12, y); ctx.stroke();
+      }
+      const series = [
+        ["Opening", "openingAccuracy", "#74d39b"],
+        ["Middlegame", "middlegameAccuracy", "#7da2ff"],
+        ["Endgame", "endgameAccuracy", "#f1c96a"],
+      ];
+      series.forEach(([label, key, color], seriesIndex) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        history.forEach((session, index) => {
+          const x = 38 + index / Math.max(1, history.length - 1) * (width - 58);
+          const y = 12 + (100 - clamp(num(session[key]), 0, 100)) / 100 * (height - 40);
+          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.font = "12px Segoe UI";
+        ctx.fillText(label, 12 + seriesIndex * Math.max(90, width / 3), height - 8);
+      });
+    } else {
+      rows.forEach(([label, value], index) => {
+        const y = 34 + index * 58;
+        ctx.fillStyle = "#283241"; ctx.fillRect(100, y, width - 130, 20);
+        ctx.fillStyle = value >= 80 ? "#74d39b" : value >= 73 ? "#7da2ff" : "#f1c96a";
+        ctx.fillRect(100, y, (width - 130) * value / 100, 20);
+        ctx.fillStyle = "#d2dae6"; ctx.font = "13px Segoe UI"; ctx.fillText(label, 12, y + 15);
+        ctx.font = "12px Cascadia Mono"; ctx.fillText(percent(value), width - 52, y + 15);
+      });
+    }
     const phases = rows.slice().sort((a, b) => a[1] - b[1]);
     setHtml("progressWeaknessPanel", card(`Main weakness: ${phases[0][0]}`, `Best phase: ${phases.at(-1)[0]}. Focus the next review block on ${phases[0][0].toLowerCase()} decisions.`, `average ${percent(state.accuracy.average)}`));
   }
@@ -961,8 +1196,9 @@
 
   function renderGoals(data, recentWinRate) {
     const rows = [1600, 1700, 1800, 1900, 2000].map((target) => goalRow(`${target} rating`, data.rating, target, "rating"));
-    rows.push(goalRow("538 more games", Math.min(538, state.games.length), 538));
-    rows.push(goalRow("1000 more games", Math.min(1000, state.games.length), 1000));
+    const gamesSinceBaseline = Math.max(0, num(data.games) - num(state.goalBaselines[state.mode], data.games));
+    rows.push(goalRow("538 more games", Math.min(538, gamesSinceBaseline), 538));
+    rows.push(goalRow("1000 more games", Math.min(1000, gamesSinceBaseline), 1000));
     rows.push(goalRow("Average accuracy", state.accuracy.average, 75, "%"));
     rows.push(goalRow("Middlegame accuracy", state.accuracy.middlegame, 73, "%"));
     rows.push(goalRow("Endgame accuracy", state.accuracy.endgame, 80, "%"));
@@ -971,6 +1207,14 @@
   }
 
   function projectGames(gameCount, data) {
+    if (state.projectionMode === "simple") {
+      const total = Math.max(1, num(data.games));
+      const wins = gameCount * num(data.wins) / total;
+      const draws = gameCount * num(data.draws) / total;
+      const losses = gameCount * num(data.losses) / total;
+      const change = Math.round((wins - losses) * 8);
+      return { wins: Math.round(wins), draws: Math.round(draws), losses: Math.round(losses), change, final: data.rating + change };
+    }
     let wins = 0, draws = 0, losses = 0;
     let remaining = gameCount;
     for (const band of state.dropoff) {
@@ -995,11 +1239,27 @@
   function renderProjection(data) {
     const custom = clamp(num($("progressCustomGames")?.value, state.customGames), 1, 5000);
     state.customGames = custom;
+    state.projectionMode = $("progressProjectionMode")?.value || state.projectionMode;
     const values = [538, 1000, custom];
     setHtml("progressProjectionPanel", values.map((games) => {
       const result = projectGames(games, data);
-      return card(`${count(games)} games → ${rating(result.final)}`, `${result.wins}W ${result.draws}D ${result.losses}L · net ${result.change >= 0 ? "+" : ""}${result.change}`, "realistic drop-off");
+      return card(
+        `${count(games)} games → ${rating(result.final)}`,
+        `${result.wins}W ${result.draws}D ${result.losses}L · net ${result.change >= 0 ? "+" : ""}${result.change}`,
+        state.projectionMode === "simple" ? "current W/D/L rates" : "realistic drop-off"
+      );
     }).join(""));
+    setHtml("progressProjectionBands", state.projectionMode === "realistic"
+      ? `<div class="projection-table-wrap"><table class="projection-table">
+          <thead><tr><th>Games</th><th>W%</th><th>D%</th><th>L%</th></tr></thead>
+          <tbody>${state.dropoff.map((row, index) => `<tr>
+            <td>${row[0]}-${row[1]}</td>
+            <td><input type="number" min="0" max="100" data-dropoff-row="${index}" data-dropoff-field="2" value="${row[2]}"></td>
+            <td><input type="number" min="0" max="100" data-dropoff-row="${index}" data-dropoff-field="3" value="${row[3]}"></td>
+            <td><input type="number" min="0" max="100" data-dropoff-row="${index}" data-dropoff-field="4" value="${row[4]}"></td>
+          </tr>`).join("")}</tbody>
+        </table></div><p class="line-note">Each row should total 100%. Save projection applies your edits.</p>`
+      : `<p class="line-note">Uses the current public ${state.mode} career percentages: ${percent(data.games ? data.wins / data.games * 100 : 0)} wins, ${percent(data.games ? data.draws / data.games * 100 : 0)} draws, ${percent(data.games ? data.losses / data.games * 100 : 0)} losses.</p>`);
   }
 
   function estimateMinutes(game) {
@@ -1017,7 +1277,8 @@
 
   function durationText(minutes) {
     const rounded = Math.round(minutes);
-    return `${count(rounded)} min · ${Math.floor(rounded / 60)}h ${rounded % 60}m`;
+    const days = rounded >= 1440 ? ` · about ${(rounded / 1440).toFixed(1)} nonstop days` : "";
+    return `${count(rounded)} min · ${Math.floor(rounded / 60)}h ${rounded % 60}m${days}`;
   }
 
   function renderTimeCalculator() {
@@ -1033,13 +1294,14 @@
 
   function renderRecommendations(recentWinRate) {
     const phases = [["opening", state.accuracy.opening], ["middlegame", state.accuracy.middlegame], ["endgame", state.accuracy.endgame]].sort((a, b) => a[1] - b[1]);
-    const weakLines = weakBranches().slice(0, 3).map((branch) => branch.moves.slice(0, 5).join(" ")).join("; ");
+    const weakLines = state.lessons.filter(lessonNeedsWork).slice(0, 3)
+      .map((lesson) => `${lesson.yourRepeatedMove} → ${lesson.recommendedMove}`).join("; ");
     setHtml("progressRecommendationPanel", [
-      card("Opening", weakLines ? `Review these recurring branches first: ${weakLines}.` : "Import games to identify recurring branches.", percent(state.accuracy.opening)),
+      card("Opening", weakLines ? `Review these exact move corrections first: ${weakLines}.` : "Import games to identify repeated decision mistakes.", percent(state.accuracy.opening)),
       card("Middlegame", state.accuracy.middlegame < 73 ? "Pause on forcing moves, pawn breaks, and worst-piece improvement before committing." : "Maintain plan recognition with annotated game reviews.", percent(state.accuracy.middlegame)),
       card("Endgame", state.accuracy.endgame < 80 ? "Prioritize king activity, rook activity, and pawn-race counting." : "Maintain two endgame sessions each week.", percent(state.accuracy.endgame)),
       card("Tactics", recentWinRate < 52 ? "Do a short clean tactics block before playing, then review every loss immediately." : "Keep tactics short and daily; avoid exhausting calculation before games.", percent(recentWinRate)),
-      card("Review priority", `${phases[0][0]} is the lowest phase. Pair it with the top loss-heavy opening branch.`, "today"),
+      card("Review priority", `${phases[0][0]} is the lowest phase. Pair it with the highest-priority exact position in your queue.`, "today"),
     ].join(""));
   }
 
@@ -1047,15 +1309,17 @@
     const items = state.sessions.slice().reverse();
     setHtml("progressSessionList", items.map((session) => card(
       `${session.date} · ${rating(session.startRating)} → ${rating(session.endRating)}`,
-      `${session.wins}W ${session.draws}D ${session.losses}L${session.accuracy ? ` · ${percent(session.accuracy)} accuracy` : ""}<br>${escapeHtml(session.notes || session.nextWork || "No notes")}`,
+      `${session.wins}W ${session.draws}D ${session.losses}L${session.accuracy ? ` · ${percent(session.accuracy)} accuracy` : ""}`
+        + `${session.openingAccuracy ? `<br>O ${percent(session.openingAccuracy)} · M ${percent(session.middlegameAccuracy)} · E ${percent(session.endgameAccuracy)}` : ""}`
+        + `<br>${escapeHtml(session.notes || session.nextWork || "No notes")}`,
       session.theme || "training session"
     )).join("") || "No local progress sessions yet.", !items.length);
   }
 
   function renderIntelligence() {
-    const weak = weakBranches();
-    const knownCount = state.reviews.filter((item) => item.result === "known").length;
-    const missedCount = state.reviews.filter((item) => item.result === "missed").length;
+    const weak = state.lessons.filter(lessonNeedsWork).sort((a, b) => b.priority - a.priority);
+    const knownCount = state.reviews.filter((item) => item.lessonId && item.result === "known").length;
+    const missedCount = state.reviews.filter((item) => item.lessonId && item.result === "missed").length;
     const totalReviews = knownCount + missedCount;
     setHtml("statsSummaryPanel", (() => {
       const data = importedStats();
@@ -1067,27 +1331,40 @@
     const recentTop = mostCommon(recentFirst);
     const allTop = mostCommon(allFirst);
     setHtml("driftDetectorPanel", card(recentTop || "No data", recentTop && allTop && recentTop !== allTop ? `Recent first move differs from your long-term ${allTop}. Decide whether to adopt or repair it.` : "Recent first-move choices match the long-term repertoire.", "opening drift"));
-    setHtml("prepPackPanel", weak.slice(0, 5).map((branch) => branchCard(branch, branch._index, false)).join("") || "Import games to assemble a preparation pack.", !weak.length);
+    setHtml("prepPackPanel", weak.slice(0, 5).map((lesson) => lessonCard(lesson, false)).join("") || "Import games to assemble a preparation pack.", !weak.length);
     setHtml("cacheDashboard", card(
       "Offline analysis cache",
-      `${count(state.games.length)} normalized games, ${count(state.branches.length)} analyzed branches, and ${count(state.reviews.length)} reviews are stored on this device.`,
+      `${count(state.games.length)} normalized games, ${count(state.lessons.length)} exact-position lessons, and ${count(state.reviews.filter((item) => item.lessonId).length)} position reviews are stored on this device.`,
       state.importMeta?.fingerprint ? `fingerprint ${state.importMeta.fingerprint}` : "IndexedDB + local settings"
     ));
     setHtml("studyPlanPanel", [
-      card("10 min", "Recall the top three due branches without moving pieces.", "warm-up"),
-      card("20 min", "Train loss-heavy lines on the legal board.", "main work"),
+      card("10 min", "Recall the best move in the top three due positions.", "warm-up"),
+      card("20 min", "Train repeated best-move misses on the exact-position board.", "main work"),
       card("10 min", "Generate one database-backed theory continuation.", "extend"),
     ].join(""));
     const confidence = [
-      ["High", state.branches.filter((branch) => branchResult(branch).score >= 60).length],
-      ["Medium", state.branches.filter((branch) => branchResult(branch).score >= 40 && branchResult(branch).score < 60).length],
-      ["Low", state.branches.filter((branch) => branchResult(branch).score < 40).length],
+      ["High", state.lessons.filter((lesson) => lesson.confidence >= 70).length],
+      ["Medium", state.lessons.filter((lesson) => lesson.confidence >= 40 && lesson.confidence < 70).length],
+      ["Low", state.lessons.filter((lesson) => lesson.confidence < 40).length],
     ];
-    setHtml("confidenceGraphPanel", confidence.map(([label, value]) => goalRow(label, value, Math.max(1, state.branches.length))).join(""));
+    setHtml("confidenceGraphPanel", confidence.map(([label, value]) => goalRow(label, value, Math.max(1, state.lessons.length))).join(""));
     setHtml("driftFixPanel", card(recentTop || "No drift data", recentTop && allTop && recentTop !== allTop ? `Either add ${recentTop} as a deliberate branch or return to ${allTop}.` : "No first-move repair is currently indicated.", "adopt or repair"));
-    setHtml("importSpeedPanel", card("Browser import", `${importedStats().total} games parsed into ${state.branches.length} branches.`, "direct public API"));
-    setHtml("stockfishStatsPanel", card("Cloud analysis", state.cloud ? `${state.cloud.depth || "?"} depth · ${state.cloud.pvs?.length || 0} principal variations` : "Open a study line to request public cloud evaluation.", "Lichess cloud"));
-    setHtml("brilliantTrackerPanel", card("Verification required", "Bookup Web does not invent brilliant labels. Use cloud evaluation on candidate positions and verify the tactical continuation.", "honest analysis"));
+    setHtml("importSpeedPanel", card("Browser import", `${importedStats().total} games indexed into ${state.analysisMeta?.candidates || 0} repeated positions.`, "direct public API"));
+    setHtml("stockfishStatsPanel", card(
+      "Browser Stockfish",
+      state.analysisMeta
+        ? `${count(state.analysisMeta.analyzed)} positions analyzed now · ${count(state.analysisMeta.cacheHits)} restored from the offline engine cache.`
+        : "Run an import to analyze repeated positions locally.",
+      "Stockfish 18 lite"
+    ));
+    const bestMoves = state.lessons.filter((lesson) => lesson.yourRepeatedMoveUci === lesson.recommendedMoveUci);
+    setHtml("brilliantTrackerPanel", bestMoves.length
+      ? bestMoves.slice(0, 8).map((lesson) => card(
+          lesson.recommendedMove,
+          `Your repeated move matches Stockfish across ${count(lesson.frequency)} visits to this exact position.`,
+          lesson.openingName || lesson.lineLabel
+        )).join("")
+      : "No repeated position in the current analysis sample has your most-played move matching Stockfish yet.", !bestMoves.length);
   }
 
   function mostCommon(values) {
@@ -1144,6 +1421,10 @@
     const whiteShare = clamp(50 + score / 16, 5, 95);
     const fill = $("studyEvalFill");
     if (fill) fill.style.height = `${whiteShare}%`;
+    const history = chess.history();
+    setHtml("studyMoveTrail", history.length ? history.map((move, index) =>
+      `<span>${index % 2 === 0 ? `${Math.floor(index / 2) + 1}. ` : ""}${escapeHtml(move)}</span>`
+    ).join(" ") : "No moves played from this decision position yet.", !history.length);
   }
 
   function cloudCp() {
@@ -1166,6 +1447,7 @@
     const branch = state.branches[num(index, -1)];
     if (!branch) return;
     state.selectedBranch = branch;
+    state.selectedLesson = null;
     state.trainer.chess = new Chess();
     state.trainer.selected = "";
     state.trainer.orientation = branch.color;
@@ -1182,6 +1464,39 @@
     markTabsDirty("trainer");
     activateTab("trainer");
     requestPositionData();
+  }
+
+  function openLesson(lessonId) {
+    const lesson = state.lessons.find((item) => item.lessonId === String(lessonId));
+    if (!lesson) return;
+    state.selectedLesson = lesson;
+    state.selectedBranch = null;
+    state.trainer.chess = new Chess(lesson.decisionFen);
+    state.trainer.selected = "";
+    state.trainer.orientation = lesson.color;
+    state.trainer.cursor = 0;
+    state.trainer.mistakes = 0;
+    state.cloud = null;
+    state.database = null;
+    setText("boardTitle", lesson.openingName || lesson.lineLabel || "Exact decision position");
+    setText("boardSummary", `This is the exact position where you repeatedly played ${lesson.yourRepeatedMove}. Find Stockfish's best move.`);
+    setText("boardLine", `${lesson.introLineSan || lesson.lineLabel} · best continuation: ${lesson.continuationSan || lesson.recommendedMove}`);
+    setText("trainerFeedback", `Your repeated move was ${lesson.yourRepeatedMove}. Find a stronger move.`);
+    setText("trainerDecision", `You are ${lesson.color}. Choose the best move in this position.`);
+    setText("trainerCoach", `${count(lesson.repeatMistakeCount)} repeats · about ${(num(lesson.valueLostCp) / 100).toFixed(2)} pawns lost · ${Math.round(num(lesson.confidence))}% confidence`);
+    setText("studyMoveMeta", "Exact position");
+    setHtml("studyMoveClassifications", card(
+      `${lesson.yourRepeatedMove} was ${lesson.classification?.label || "weaker"}`,
+      `The target move is hidden until you play. This lesson was built from ${count(lesson.frequency)} visits to this exact FEN.`,
+      "Stockfish lesson"
+    ));
+    markTabsDirty("trainer");
+    activateTab("trainer");
+    requestPositionData();
+  }
+
+  function moveMatchesUci(move, uci) {
+    return Boolean(move && uci && `${move.from}${move.to}${move.promotion || ""}` === uci);
   }
 
   function clickSquare(square) {
@@ -1208,6 +1523,40 @@
       renderBoard();
       return;
     }
+    const lesson = state.selectedLesson;
+    if (lesson) {
+      const expectedUci = lesson.trainingLineUci?.[state.trainer.cursor] || lesson.recommendedMoveUci;
+      const correct = moveMatchesUci(move, expectedUci);
+      if (!correct) {
+        state.trainer.mistakes += 1;
+        chess.undo();
+        setText("studyMoveMeta", "Try again");
+        setHtml("studyMoveClassifications", card(
+          move.san,
+          `${move.san} is legal, but Stockfish's best move here is ${lesson.recommendedMove}. The position remains on the board so you can correct it.`,
+          lesson.classification?.label || "miss"
+        ));
+        setText("trainerFeedback", `${move.san} was not the target. Try ${lesson.recommendedMove}.`);
+        renderBoard();
+        return;
+      }
+      state.trainer.cursor += 1;
+      setText("studyMoveMeta", "Best move");
+      setHtml("studyMoveClassifications", card(
+        move.san,
+        `Correct. ${lesson.continuationSan ? `Continue with ${escapeHtml(lesson.continuationSan)}.` : "The exact-position lesson is complete."}`,
+        "Stockfish best"
+      ));
+      setText("trainerFeedback", `Correct: ${move.san}.`);
+      if (state.trainer.cursor >= (lesson.trainingLineUci?.length || 1)) {
+        finishTrainer(state.trainer.mistakes === 0);
+      } else {
+        window.setTimeout(playOpponentMoves, 260);
+      }
+      renderBoard();
+      requestPositionData();
+      return;
+    }
     const branch = state.selectedBranch;
     const expected = branch?.moves[state.trainer.cursor];
     const correct = !expected || move.san === expected || move.san.replace(/[+#]/g, "") === expected.replace(/[+#]/g, "");
@@ -1226,6 +1575,35 @@
   }
 
   function playOpponentMoves() {
+    const lesson = state.selectedLesson;
+    if (lesson) {
+      const userTurn = lesson.color === "white" ? "w" : "b";
+      while (state.trainer.cursor < lesson.trainingLineUci.length && state.trainer.chess.turn() !== userTurn) {
+        const uci = lesson.trainingLineUci[state.trainer.cursor];
+        const move = state.trainer.chess.move({
+          from: uci.slice(0, 2),
+          to: uci.slice(2, 4),
+          promotion: uci.slice(4, 5) || "q",
+        });
+        if (!move) break;
+        state.trainer.cursor += 1;
+      }
+      if (state.trainer.cursor >= lesson.trainingLineUci.length) {
+        finishTrainer(state.trainer.mistakes === 0);
+      } else {
+        const expectedUci = lesson.trainingLineUci[state.trainer.cursor];
+        const probe = new Chess(state.trainer.chess.fen());
+        const expected = probe.move({
+          from: expectedUci.slice(0, 2),
+          to: expectedUci.slice(2, 4),
+          promotion: expectedUci.slice(4, 5) || "q",
+        });
+        setText("trainerDecision", `Your move. Find ${expected?.san || "the best continuation"}.`);
+      }
+      renderBoard();
+      requestPositionData();
+      return;
+    }
     const branch = state.selectedBranch;
     if (!branch) return;
     const userTurn = branch.color === "white" ? "w" : "b";
@@ -1242,6 +1620,31 @@
   }
 
   function finishTrainer(clean) {
+    const lesson = state.selectedLesson;
+    if (lesson) {
+      const previous = latestLessonReview(lesson.lessonId);
+      const streak = clean ? num(previous?.streak) + 1 : 0;
+      const intervals = [1, 3, 7, 14, 30];
+      const interval = clean ? intervals[Math.min(streak, intervals.length - 1)] : 1;
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + interval);
+      state.reviews.push({
+        lessonId: lesson.lessonId,
+        result: clean ? "known" : "missed",
+        date: today(),
+        due: dueDate.toISOString().slice(0, 10),
+        streak,
+        line: `${lesson.lineLabel}: ${lesson.recommendedMove}`,
+        note: clean ? "Clean exact-position repetition" : `${state.trainer.mistakes} incorrect attempt(s)`,
+      });
+      save();
+      markTabsDirty("setup", "repertoire-map", "needs-work", "trainer", "review", "stats");
+      setText("trainerFeedback", clean
+        ? `Position complete. Next review is ${dueDate.toLocaleDateString()}.`
+        : "Position complete after a correction. It is due again tomorrow.");
+      renderQueue();
+      return;
+    }
     const branch = state.selectedBranch;
     if (!branch) return;
     const interval = clean ? 7 : 1;
@@ -1382,6 +1785,7 @@
     setText("studyOpeningMeta", "Loading imported-game database and public cloud evaluation...");
     setText("studyDatabaseMeta", "Loading");
     setText("studyAnalysisMeta", "Public cloud");
+    setHtml("studyPositionLinks", `<a class="ghost-btn" href="https://lichess.org/analysis/standard/${escapeHtml(fen.replaceAll(" ", "_"))}" target="_blank" rel="noopener">Open position in Lichess</a>`);
     state.database = localPositionData(fen);
     const [cloudResult, explorerResult] = await Promise.allSettled([
       fetchCloud(fen, 3),
@@ -1423,13 +1827,12 @@
   }
 
   function renderQueue() {
-    const weak = weakBranches();
-    const dueIds = new Set(state.reviews.filter((review) => review.result === "missed" && review.due <= today()).map((review) => review.branchId));
-    const due = weak.filter((branch) => dueIds.has(branch.id) || branchResult(branch).lossRate >= 50).slice(0, 12);
-    const fresh = weak.filter((branch) => !due.includes(branch)).slice(0, 12);
+    const queue = dueLessons();
+    const due = queue.filter((lesson) => Boolean(latestLessonReview(lesson.lessonId))).slice(0, 16);
+    const fresh = queue.filter((lesson) => !latestLessonReview(lesson.lessonId)).slice(0, 16);
     setText("lessonQueueMeta", `${due.length} due · ${fresh.length} new`);
-    setHtml("lessonListDue", due.map((branch) => branchCard(branch, branch._index)).join("") || "No due lines yet.", !due.length);
-    setHtml("lessonListNew", fresh.map((branch) => branchCard(branch, branch._index)).join("") || "No new lines yet.", !fresh.length);
+    setHtml("lessonListDue", due.map((lesson) => lessonCard(lesson)).join("") || "No reviewed positions are due today.", !due.length);
+    setHtml("lessonListNew", fresh.map((lesson) => lessonCard(lesson)).join("") || "No new repeated mistakes are waiting.", !fresh.length);
   }
 
   function repertoirePgn() {
@@ -1476,7 +1879,16 @@
     state.smartStop = false;
     const source = $("smartTheoryStartingSource")?.value || "starting_position";
     const maxPly = clamp(num($("smartTheoryMaxPly")?.value, 12), 2, 20);
-    const replyCount = clamp(num($("smartTheoryReplies")?.value, 3), 1, 6);
+    const configuredReplies = clamp(num($("smartTheoryReplies")?.value, 3), 1, 12);
+    const opponentProfile = $("smartTheoryOpponentAccuracy")?.value || "mixed";
+    const replyCount = {
+      grandmaster: Math.min(2, configuredReplies),
+      strong_club: Math.min(3, configuredReplies),
+      club: Math.min(5, configuredReplies),
+      beginner_intermediate: Math.min(8, configuredReplies + 2),
+      mixed: configuredReplies,
+    }[opponentProfile] || configuredReplies;
+    const includeRare = Boolean($("smartTheoryIncludeRare")?.checked);
     let fen = new Chess().fen();
     if (source === "current_board" || source === "selected_move") fen = state.trainer.chess.fen();
     if (source === "saved_line" && state.selectedBranch) {
@@ -1494,7 +1906,7 @@
     const root = { san: "Start", fen, children: [], path: [], games: 0 };
     const queue = [{ node: root, ply: 0 }];
     let positions = 0;
-    const maxPositions = Math.min(80, clamp(num($("smartTheoryMaxPositions")?.value, 80), 10, 1500));
+    const maxPositions = clamp(num($("smartTheoryMaxPositions")?.value, 80), 10, 300);
     while (queue.length && positions < maxPositions && !state.smartStop) {
       const { node, ply } = queue.shift();
       if (ply >= maxPly) continue;
@@ -1502,7 +1914,33 @@
       try { payload = await positionData(node.fen); } catch { payload = null; }
       const chess = new Chess(node.fen);
       const myColor = $("smartTheoryMyColor")?.value === "black" ? "b" : "w";
-      let choices = (payload?.moves || []).slice(0, chess.turn() === myColor ? 1 : replyCount);
+      let choices;
+      if (chess.turn() === myColor) {
+        const correction = state.lessons.find((lesson) => fenKey(lesson.decisionFen) === fenKey(node.fen) && lessonNeedsWork(lesson));
+        if (correction) {
+          choices = [{
+            san: correction.recommendedMove,
+            uci: correction.recommendedMoveUci,
+            white: 0,
+            draws: 0,
+            black: 0,
+            source: "local Stockfish correction",
+          }];
+        } else {
+          const cloud = await cloudChoice(node.fen);
+          choices = cloud ? [cloud] : (payload?.moves || []).slice(0, 1);
+        }
+      } else {
+        choices = (payload?.moves || []).slice(0, replyCount);
+      }
+      if (!includeRare && choices.length > 1) {
+        const topGames = num(choices[0].white) + num(choices[0].draws) + num(choices[0].black);
+        choices = choices.filter((choice, index) => {
+          if (index === 0) return true;
+          const games = num(choice.white) + num(choice.draws) + num(choice.black);
+          return games >= Math.max(2, topGames * 0.05);
+        });
+      }
       if (!choices.length) {
         const cloud = await cloudChoice(node.fen);
         if (cloud) choices = [cloud];
@@ -1527,7 +1965,7 @@
     }
     state.smartTree = root;
     setText("smartTheoryStatus", state.smartStop ? "Stopped" : "Complete");
-    setText("smartTheoryProgress", `${positions} public positions generated.`);
+    setText("smartTheoryProgress", `${positions} public positions generated for the ${opponentProfile.replaceAll("_", " ")} profile.`);
     renderSmartTheory();
   }
 
@@ -1548,11 +1986,36 @@
     setHtml("smartTheoryCurrentMeta", first ? card(first.san, first.path.join(" "), `${count(first.games)} games`) : "No generated node.", !first);
     setHtml("smartTheoryMoveList", first ? card("Main path", first.path.join(" "), "SAN") : "No path.", !first);
     setHtml("smartTheoryOpeningMeta", first ? card(first.opening || "Unclassified position", first.fen, "FEN") : "No opening data.", !first);
-    setHtml("smartTheoryRecommendation", first ? card(first.san, `Most-played continuation among the selected public database filters (${count(first.games)} games).`, "database recommendation") : "No recommendation.", !first);
+    const correction = first?.source === "local Stockfish correction";
+    setHtml("smartTheoryRecommendation", first ? card(
+      first.san,
+      correction
+        ? "Recommended by the cached exact-position Stockfish lesson because your repeated move missed the best move here."
+        : `Most-played continuation among the selected public database filters (${count(first.games)} games).`,
+      correction ? "Stockfish correction" : "database recommendation"
+    ) : "No recommendation.", !first);
     setHtml("smartTheoryLearningQueue", nodes.slice().sort((a, b) => b.games - a.games).slice(0, 8).map((node) => card(node.path.join(" "), `${count(node.games)} public games`, "study first")).join("") || "No learning queue.", !nodes.length);
     setHtml("smartTheoryOpponentReplies", root.children.map((node) => card(node.san, `${count(node.games)} public games`, node.opening || "reply")).join("") || "No replies.", !root.children.length);
-    setHtml("smartTheoryExplanation", first ? card("Why this move", `${first.san} is recommended because it is the highest-volume continuation in the live public opening database for this position. Use cloud evaluation in Study Lines for tactical verification.`, "evidence") : "No explanation.", !first);
-    setHtml("smartTheoryTree", renderSmartNodes(root.children));
+    setHtml("smartTheoryExplanation", first ? card(
+      "Why this move",
+      correction
+        ? `${first.san} replaces the repeated mistake found at this exact FEN. The recommendation comes from local browser Stockfish and is saved in the offline lesson cache.`
+        : `${first.san} is the highest-volume continuation in the available imported or public opening data for this position.`,
+      first.source || "evidence"
+    ) : "No explanation.", !first);
+    const search = String($("smartTheoryTreeSearch")?.value || "").trim().toLowerCase();
+    if (search) {
+      const matches = nodes.filter((node) => [
+        node.san, node.uci, node.opening, node.path.join(" "),
+      ].some((value) => String(value || "").toLowerCase().includes(search)));
+      setHtml("smartTheoryTree", matches.slice(0, 80).map((node) => card(
+        node.path.join(" "),
+        `${count(node.games)} public games · ${escapeHtml(node.opening || node.source || "position")}`,
+        node.san
+      )).join("") || "No generated line matches this search.", !matches.length);
+    } else {
+      setHtml("smartTheoryTree", renderSmartNodes(root.children));
+    }
     renderMiniBoard(first?.fen || root.fen);
   }
 
@@ -1608,6 +2071,13 @@
   }
 
   function activateTab(name) {
+    if (name === "trainer" && !state.selectedLesson && !state.selectedBranch) {
+      const next = dueLessons()[0];
+      if (next) {
+        openLesson(next.lessonId);
+        return;
+      }
+    }
     state.activeTab = name;
     qsa("[data-tab-target]").forEach((button) => button.classList.toggle("active", button.dataset.tabTarget === name));
     qsa("[data-tab-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.tabPanel === name));
@@ -1673,23 +2143,40 @@
       if (index > 0 && index % 30 === 0) await yieldToMain();
     }
     if (!parsed.length && !duplicates) throw new Error(`No valid PGN games were found. ${skipped} section(s) could not be parsed.`);
-    state.games = [...state.games, ...parsed].sort((a, b) => a.endTime - b.endTime);
-    state.branches = buildBranches(state.games);
-    state.importMeta = {
-      source: options.source || "Local PGN",
-      imported: parsed.length,
-      totalCached: state.games.length,
-      duplicates,
-      skipped,
-      warnings: [],
-      completedAt: Date.now(),
-      fingerprint: gameFingerprint(state.games),
+    const previousWorkspace = {
+      games: state.games,
+      branches: state.branches,
+      lessons: state.lessons,
+      importMeta: state.importMeta,
+      analysisMeta: state.analysisMeta,
     };
-    markDataDirty();
-    save();
-    renderAll();
-    await persistAnalysisCache();
-    return { imported: parsed.length, duplicates, skipped, total: state.games.length };
+    try {
+      state.games = [...state.games, ...parsed].sort((a, b) => a.endTime - b.endTime);
+      state.branches = buildBranches(state.games);
+      state.importMeta = {
+        source: options.source || "Local PGN",
+        imported: parsed.length,
+        totalCached: state.games.length,
+        duplicates,
+        skipped,
+        warnings: [],
+        completedAt: Date.now(),
+        fingerprint: gameFingerprint(state.games),
+      };
+      markDataDirty();
+      await analyzeImportedPositions(options.signal, 20, 96);
+      markDataDirty();
+      save();
+      renderAll();
+      await persistAnalysisCache();
+      setImportProgress(1, 1, `Analysis complete: ${count(state.analysisMeta?.due || 0)} exact positions need work.`, 100, 100);
+      return { imported: parsed.length, duplicates, skipped, total: state.games.length };
+    } catch (error) {
+      Object.assign(state, previousWorkspace);
+      markDataDirty();
+      renderAll();
+      throw error;
+    }
   }
 
   function bind() {
@@ -1700,6 +2187,8 @@
       renderProgress();
     }));
     document.addEventListener("click", (event) => {
+      const lessonButton = event.target.closest("[data-open-lesson]");
+      if (lessonButton) openLesson(lessonButton.dataset.openLesson);
       const branchButton = event.target.closest("[data-open-branch]");
       if (branchButton) openBranch(branchButton.dataset.openBranch);
       const square = event.target.closest("[data-square]");
@@ -1740,13 +2229,15 @@
       markDataDirty();
       save();
       persistAnalysisCache().catch(() => {});
-      renderAll(); status("Local line classifications reset.", "success");
+      renderAll(); status("Position review history reset. Engine lessons remain cached.", "success");
     });
     $("importPgnBtn")?.addEventListener("click", async () => {
+      state.importController = new AbortController();
       try {
-        const report = await importPgnText($("pgnImportInput")?.value, { source: "Local PGN" });
-        setText("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. Analysis is cached offline.`);
-      } catch (error) { setText("pgnImportStatus", error.message); }
+        const report = await importPgnText($("pgnImportInput")?.value, { source: "Local PGN", signal: state.importController.signal });
+        setText("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`);
+      } catch (error) { setText("pgnImportStatus", error.name === "AbortError" ? "Import stopped." : error.message); }
+      finally { state.importController = null; }
     });
     $("importChessnutBtn")?.addEventListener("click", async () => {
       const file = $("chessnutDbPathInput")?.files?.[0];
@@ -1756,15 +2247,18 @@
           source: "NewChessnut PGN",
           playerColor: $("chessnutPlayerColorInput")?.value || "white",
         });
-        setText("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. Analysis is cached offline.`);
+        setText("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`);
       } catch (error) { setText("chessnutImportStatus", error.message); }
     });
-    $("trainerResetBtn")?.addEventListener("click", () => state.selectedBranch && openBranch(state.branches.indexOf(state.selectedBranch)));
+    $("trainerResetBtn")?.addEventListener("click", () => {
+      if (state.selectedLesson) openLesson(state.selectedLesson.lessonId);
+      else if (state.selectedBranch) openBranch(state.branches.indexOf(state.selectedBranch));
+    });
     $("trainerNextBtn")?.addEventListener("click", () => {
-      const weak = weakBranches();
-      const current = weak.indexOf(state.selectedBranch);
-      const next = weak[(current + 1) % Math.max(1, weak.length)];
-      if (next) openBranch(state.branches.indexOf(next));
+      const queue = dueLessons();
+      const current = queue.findIndex((lesson) => lesson.lessonId === state.selectedLesson?.lessonId);
+      const next = queue[(current + 1) % Math.max(1, queue.length)];
+      if (next) openLesson(next.lessonId);
     });
     $("studyApplySettingsBtn")?.addEventListener("click", () => {
       const token = $("studyLichessTokenInput")?.value || "";
@@ -1773,6 +2267,21 @@
       requestPositionData();
     });
     $("generateTheoryBtn")?.addEventListener("click", () => generateTheory().catch((error) => setHtml("theoryOutput", escapeHtml(error.message))));
+    qsa("[data-smart-preset]").forEach((button) => button.addEventListener("click", () => {
+      const presets = {
+        balanced: { replies: 4, ply: 12, positions: 80, opponent: "mixed" },
+        fast: { replies: 2, ply: 8, positions: 30, opponent: "club" },
+        deep: { replies: 6, ply: 18, positions: 180, opponent: "grandmaster" },
+        realistic: { replies: 6, ply: 14, positions: 120, opponent: "mixed" },
+      };
+      const preset = presets[button.dataset.smartPreset] || presets.balanced;
+      if ($("smartTheoryReplies")) $("smartTheoryReplies").value = preset.replies;
+      if ($("smartTheoryMaxPly")) $("smartTheoryMaxPly").value = preset.ply;
+      if ($("smartTheoryMaxPositions")) $("smartTheoryMaxPositions").value = preset.positions;
+      if ($("smartTheoryOpponentAccuracy")) $("smartTheoryOpponentAccuracy").value = preset.opponent;
+      qsa("[data-smart-preset]").forEach((item) => item.classList.toggle("active", item === button));
+      setText("smartTheoryProgress", `${button.textContent.trim()} preset applied.`);
+    }));
     $("smartTheoryGenerateBtn")?.addEventListener("click", () => generateSmartTheory().catch((error) => {
       setText("smartTheoryStatus", "Error"); setText("smartTheoryProgress", error.message);
     }));
@@ -1791,8 +2300,12 @@
       catch { setText("smartTheoryStatus", "Invalid JSON"); }
     });
     $("smartTheoryPreviewChaptersBtn")?.addEventListener("click", () => {
-      const firstMoves = state.smartTree?.children || [];
-      setHtml("smartTheoryChapterPreview", firstMoves.map((node, index) => card(`Chapter ${index + 1}: ${node.san}`, `${flattenTree(node, []).length + 1} generated moves`, node.opening || "theory branch")).join("") || "Generate a tree first.", !firstMoves.length);
+      const chapters = smartTheoryChapters();
+      setHtml("smartTheoryChapterPreview", chapters.map((chapter, index) => card(
+        `Chapter ${index + 1}: ${chapter.name}`,
+        `${chapter.moves} generated moves · ${chapter.strategy}`,
+        "Lichess-ready PGN"
+      )).join("") || "Generate a tree first.", !chapters.length);
     });
     $("smartTheorySaveCorrectionBtn")?.addEventListener("click", () => {
       const node = flattenTree(state.smartTree || { children: [] })[0];
@@ -1804,7 +2317,13 @@
     $("smartTheoryExportLichessBtn")?.addEventListener("click", () => {
       if (!state.smartTree) { setText("smartTheoryLichessHint", "Generate a tree first."); return; }
       download("bookup-smart-theory.pgn", smartTreePgn(), "application/x-chess-pgn");
-      setText("smartTheoryLichessHint", "PGN downloaded. Import it into Lichess Study; no private token was exposed or saved.");
+      const chapters = smartTheoryChapters();
+      setText("smartTheoryLichessHint", `${chapters.length} Lichess-ready chapter(s) downloaded. No private token was exposed or saved.`);
+      setHtml("smartTheoryStudySyncMeta", card(
+        "PGN ready",
+        `Downloaded ${chapters.length} chapter(s). Use Lichess Study's PGN import to add the complete variation tree.`,
+        $("smartTheoryChapterStrategy")?.selectedOptions?.[0]?.textContent || "export"
+      ));
     });
     $("smartTheoryFreshStudyBtn")?.addEventListener("click", () => {
       window.open("https://lichess.org/study/new/hot", "_blank", "noopener");
@@ -1815,9 +2334,32 @@
       if (!id) { setText("smartTheoryLichessHint", "Enter a Lichess study ID or URL first."); return; }
       window.open(`https://lichess.org/study/${encodeURIComponent(id)}`, "_blank", "noopener");
     });
+    $("smartTheoryTreeSearch")?.addEventListener("input", () => {
+      if (state.smartTree) renderSmartTheory();
+    });
     $("progressSaveProjectionBtn")?.addEventListener("click", () => {
       state.customGames = clamp(num($("progressCustomGames")?.value, 538), 1, 5000);
+      state.projectionMode = $("progressProjectionMode")?.value || "realistic";
+      qsa("[data-dropoff-row]").forEach((input) => {
+        const row = num(input.dataset.dropoffRow, -1);
+        const field = num(input.dataset.dropoffField, -1);
+        if (state.dropoff[row] && field >= 2 && field <= 4) {
+          state.dropoff[row][field] = clamp(num(input.value), 0, 100);
+        }
+      });
+      const invalid = state.dropoff.find((row) => Math.abs(row[2] + row[3] + row[4] - 100) > 0.01);
+      if (invalid && state.projectionMode === "realistic") {
+        status(`Projection row ${invalid[0]}-${invalid[1]} must total 100%.`, "error");
+        return;
+      }
       save(); renderProgress();
+      status("Projection settings saved locally.", "success");
+    });
+    $("progressProjectionMode")?.addEventListener("change", (event) => {
+      state.projectionMode = event.currentTarget.value;
+      save();
+      const data = state.stats[state.mode];
+      if (data) renderProjection(data);
     });
     $("progressSessionForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1828,9 +2370,17 @@
         endRating: num(data.get("end_rating")),
         wins: num(data.get("wins")), draws: num(data.get("draws")), losses: num(data.get("losses")),
         accuracy: num(data.get("accuracy")), theme: String(data.get("mistake_theme") || ""),
+        openingAccuracy: num(data.get("opening_accuracy")),
+        middlegameAccuracy: num(data.get("middlegame_accuracy")),
+        endgameAccuracy: num(data.get("endgame_accuracy")),
         notes: String(data.get("notes") || ""), nextWork: String(data.get("next_work") || ""),
       });
-      save(); renderSessions(); event.currentTarget.reset();
+      const latest = state.sessions.at(-1);
+      if (latest.accuracy) state.accuracy.average = latest.accuracy;
+      if (latest.openingAccuracy) state.accuracy.opening = latest.openingAccuracy;
+      if (latest.middlegameAccuracy) state.accuracy.middlegame = latest.middlegameAccuracy;
+      if (latest.endgameAccuracy) state.accuracy.endgame = latest.endgameAccuracy;
+      save(); renderProgress(); event.currentTarget.reset();
       const dateInput = event.currentTarget.querySelector('[name="date"]'); if (dateInput) dateInput.value = today();
     });
     $("realignUseStartBtn")?.addEventListener("click", () => { if ($("realignSourceFenInput")) $("realignSourceFenInput").value = new Chess().fen(); });
@@ -1843,13 +2393,82 @@
     window.addEventListener("pagehide", flushSave);
   }
 
-  function smartTreePgn() {
-    if (!state.smartTree) return "";
-    const leaves = flattenTree(state.smartTree).filter((node) => !node.children?.length);
+  function pgnStartPly(fen) {
+    const fields = String(fen || "").split(/\s+/);
+    return Math.max(0, (num(fields[5], 1) - 1) * 2 + (fields[1] === "b" ? 1 : 0));
+  }
+
+  function pgnMoveToken(san, ply) {
+    const moveNumber = Math.floor(ply / 2) + 1;
+    return ply % 2 === 0 ? `${moveNumber}. ${san}` : `${moveNumber}... ${san}`;
+  }
+
+  function serializeSmartTree(parent, ply) {
+    const children = parent?.children || [];
+    if (!children.length) return "";
+    const [main, ...alternatives] = children;
+    const mainToken = pgnMoveToken(main.san, ply);
+    const variationText = alternatives.map((node) =>
+      `(${pgnMoveToken(node.san, ply)} ${serializeSmartTree(node, ply + 1)})`.replace(/\s+\)/g, ")")
+    ).join(" ");
+    const continuation = serializeSmartTree(main, ply + 1);
+    return [mainToken, variationText, continuation].filter(Boolean).join(" ").trim();
+  }
+
+  function smartPgnHeader(name, fen) {
+    const startFen = new Chess().fen();
+    const setup = fenKey(fen) === fenKey(startFen) ? "" : `[SetUp "1"]\n[FEN "${fen}"]\n`;
+    const orientation = $("smartTheoryLichessOrientation")?.value || $("smartTheoryMyColor")?.value || "white";
+    return `[Event "${String(name || "Bookup Smart Theory").replaceAll('"', "'")}"]\n[Site "https://tetizz.github.io/Bookup/"]\n[Date "${today().replaceAll("-", ".")}"]\n[Orientation "${orientation}"]\n${setup}[Result "*"]`;
+  }
+
+  function smartTheoryChapters() {
+    if (!state.smartTree) return [];
+    const strategy = $("smartTheoryChapterStrategy")?.value || "single";
+    const maxChapters = clamp(num($("smartTheoryMaxChapters")?.value, 20), 1, 80);
+    const baseName = String(
+      $("smartTheoryLichessChapterName")?.value
+      || $("smartTheoryLichessStudyName")?.value
+      || "Bookup Smart Theory"
+    ).trim();
+    const rootFen = state.smartTree.fen;
+    const startPly = pgnStartPly(rootFen);
+    if (strategy === "single") {
+      const body = serializeSmartTree(state.smartTree, startPly);
+      return [{
+        name: baseName,
+        moves: flattenTree(state.smartTree, []).length,
+        strategy: "single full variation tree",
+        pgn: `${smartPgnHeader(baseName, rootFen)}\n\n${body} *`,
+      }];
+    }
+    if (strategy === "first_move") {
+      return (state.smartTree.children || []).slice(0, maxChapters).map((node, index) => {
+        const parent = { children: [node] };
+        const name = `${baseName} ${index + 1} - ${node.san}`;
+        return {
+          name,
+          moves: flattenTree(node, []).length + 1,
+          strategy: "first-move chapter",
+          pgn: `${smartPgnHeader(name, rootFen)}\n\n${serializeSmartTree(parent, startPly)} *`,
+        };
+      });
+    }
+    const leaves = flattenTree(state.smartTree, []).filter((node) => !node.children?.length).slice(0, maxChapters);
     return leaves.map((node, index) => {
-      const moves = node.path.map((move, ply) => `${ply % 2 === 0 ? `${Math.floor(ply / 2) + 1}. ` : ""}${move}`).join(" ");
-      return `[Event "Bookup Smart Theory ${index + 1}"]\n[Site "https://tetizz.github.io/Bookup/"]\n[Date "${today().replaceAll("-", ".")}"]\n[Result "*"]\n\n${moves} *`;
-    }).join("\n\n");
+      const line = node.path.map((san, offset) => pgnMoveToken(san, startPly + offset)).join(" ");
+      const name = `${baseName} ${index + 1}`;
+      return {
+        name,
+        moves: node.path.length,
+        strategy: "deep focus line",
+        pgn: `${smartPgnHeader(name, rootFen)}\n\n${line} *`,
+      };
+    });
+  }
+
+  function smartTreePgn() {
+    return smartTheoryChapters().map((chapter) => chapter.pgn).join("\n\n");
   }
 
   function generateRealignPlan() {
@@ -1875,10 +2494,8 @@
     const defaults = {
       mainPlatformInput: "chesscom", mainUsernameInput: state.username, usernameInput: state.username,
       timeClassesInput: state.settings.timeClasses.join(","), maxGamesInput: state.settings.maxGames,
-      depthInput: 18, thinkTimeInput: "1", multiPvInput: 3, threadsInput: 2,
-      parallelWorkersInput: 2, hashInput: 256, studyDepthInput: 18, studyThinkTimeInput: "1",
-      studyMultiPvInput: 3, studyThreadsInput: 2, studyParallelWorkersInput: 2, studyHashInput: 256,
-      progressCustomGames: state.customGames,
+      thinkTimeInput: "0.18",
+      progressCustomGames: state.customGames, progressProjectionMode: state.projectionMode,
     };
     Object.entries(defaults).forEach(([id, value]) => { if ($(id)) $(id).value = String(value); });
     if ($("importAllGamesInput")) $("importAllGamesInput").checked = Boolean(state.settings.importAllGames);
@@ -1887,9 +2504,23 @@
     if (sessionDate) sessionDate.value = today();
     const restored = await restoreAnalysisCache().catch(() => false);
     renderAll();
-    status(restored
-      ? `Restored ${count(state.games.length)} games and ${count(state.branches.length)} analyzed branches from the offline cache.`
-      : (state.branches.length ? `Loaded ${count(state.branches.length)} locally saved branches. Refresh when ready.` : "Ready. Build your repertoire from public games or PGN."));
+    if (restored && state.games.length && !state.analysisMeta) {
+      status(`Upgrading ${count(state.games.length)} cached games to exact-position lessons...`);
+      try {
+        await analyzeImportedPositions(undefined, 5, 96);
+        markDataDirty();
+        save();
+        await persistAnalysisCache();
+        renderAll();
+        status(`Restored ${count(state.games.length)} games and ${count(state.analysisMeta?.due || 0)} due exact positions from the offline cache.`, "success");
+      } catch (error) {
+        status(`Games restored, but exact-position analysis could not start: ${error.message}`, "error");
+      }
+    } else {
+      status(restored
+        ? `Restored ${count(state.games.length)} games and ${count(state.analysisMeta?.due || 0)} due exact positions from the offline cache.`
+        : (state.branches.length ? "Loaded local settings. Import games to rebuild exact-position lessons." : "Ready. Import public games or PGN to find repeated best-move misses."));
+    }
     if (state.settings.autoImportStartup && state.username && navigator.onLine) {
       window.setTimeout(() => refreshAll(), 500);
     }
