@@ -113,10 +113,14 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
   check("offline_game_cache", cache.games === 3, JSON.stringify(cache));
   check("analyzed_branch_cache", cache.branches > 0 && /^3-3-/.test(cache.fingerprint), JSON.stringify(cache));
 
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+  await context.setOffline(true);
   await page.reload({ waitUntil: "load" });
   await page.waitForFunction(() => /Restored 3 games/.test(document.querySelector("#status")?.textContent || ""));
   check("offline_restore", await page.locator("#badgeGames").innerText() === "3");
 
+  await context.setOffline(false);
   await page.getByRole("button", { name: "Setup", exact: true }).click();
   await page.locator(".import-pgn-panel").first().locator("summary").click();
   await page.getByLabel("PGN text", { exact: true }).fill(

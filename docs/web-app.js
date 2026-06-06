@@ -1881,6 +1881,9 @@
     if (state.settings.autoImportStartup && state.username && navigator.onLine) {
       window.setTimeout(() => refreshAll(), 500);
     }
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    }
   }
 
   document.addEventListener("DOMContentLoaded", initialize);
