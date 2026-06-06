@@ -8,8 +8,13 @@ Bookup includes a GitHub Pages website in `docs/`.
 
 - The site root is the interactive Bookup Web app, not just a download page.
 - Bookup Web has a real Chess.com public stats lookup for rapid, blitz, and bullet. It does not invent live ratings when the public API cannot be reached.
+- The web edition uses the same eight workspaces as desktop: Setup, Repertoire Map, Progress, Needs Work, Study Lines, Theory, Smart Theory Generator, and Review.
+- Public games and PGN files are parsed locally into repertoire branches, review queues, health metrics, theory trees, and a legal-move training board.
+- Browser analysis uses Lichess cloud evaluation. Opening data comes from the imported real-game corpus, or from authenticated Lichess Explorer requests when the user supplies a session-only token.
+- Settings, sessions, reviews, and repertoire summaries are stored in browser local storage. Lichess tokens are never persisted or committed.
+- Repertoire PGN, Bookup JSON, and Smart Theory exports are generated entirely in the browser.
 - GitHub Pages deploys it from `.github/workflows/pages.yml`.
-- The full trainer still runs through the desktop app because Chess.com imports, Stockfish analysis, local caching, and private Lichess tokens require a local Python backend.
+- The desktop build remains useful for native Stockfish executables, larger local caches, direct filesystem integrations, and NewChessnut database access.
 
 Public URL for this repository:
 
