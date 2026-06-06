@@ -489,13 +489,16 @@
     return branches;
   }
 
-  function setImportProgress(done, total, message = "") {
-    const percentDone = total ? clamp(Math.round(done / total * 100), 0, 100) : 0;
+  function setImportProgress(done, total, message = "", rangeStart = 0, rangeEnd = 100) {
+    const ratio = total ? clamp(done / total, 0, 1) : 0;
+    const percentDone = total
+      ? Math.round(rangeStart + ratio * (rangeEnd - rangeStart))
+      : Math.round(rangeStart);
     setText("progressLabel", `${percentDone}%`);
     const fill = $("progressFill");
     if (fill) {
       fill.classList.toggle("indeterminate", !total);
-      fill.style.width = total ? `${percentDone}%` : "35%";
+      fill.style.inlineSize = total ? `${percentDone}%` : "35%";
     }
     if (message) status(message);
   }
@@ -508,10 +511,13 @@
 
   async function fetchPublicGames(signal) {
     const username = encodeURIComponent(state.username);
-    const [statsPayload, archivesPayload] = await Promise.all([
-      fetchJson(`https://api.chess.com/pub/player/${username}/stats`, { signal }),
-      fetchJson(`https://api.chess.com/pub/player/${username}/games/archives`, { signal }),
-    ]);
+    setImportProgress(1, 1, `Connecting to Chess.com for ${state.username}...`, 0, 4);
+    const statsRequest = fetchJson(`https://api.chess.com/pub/player/${username}/stats`, { signal });
+    const archivesRequest = fetchJson(`https://api.chess.com/pub/player/${username}/games/archives`, { signal });
+    const statsPayload = await statsRequest;
+    setImportProgress(1, 1, "Rating and record loaded. Finding game archives...", 4, 9);
+    const archivesPayload = await archivesRequest;
+    setImportProgress(1, 1, "Archive list loaded. Scanning recent games...", 9, 12);
     const parsedStats = {};
     for (const mode of MODES) {
       const item = statsPayload[`chess_${mode}`];
@@ -570,10 +576,15 @@
           if (index > 0 && index % 40 === 0) await yieldToMain();
         }
       }
+      const archiveRatio = importAll
+        ? archivesScanned / urls.length
+        : Math.max(archivesScanned / urls.length, imported.length / wanted);
       setImportProgress(
-        archivesScanned,
-        urls.length,
-        `Scanning Chess.com archives: ${archivesScanned}/${urls.length} · ${count(imported.length)} new games`
+        archiveRatio,
+        1,
+        `Scanning Chess.com archives: ${archivesScanned}/${urls.length} · ${count(imported.length)} new games`,
+        12,
+        96
       );
       await yieldToMain();
       if (!importAll && existingGames.length && batchUnknownGames === 0) break;
@@ -601,6 +612,7 @@
       fingerprint: nextFingerprint,
     };
     markDataDirty();
+    setImportProgress(1, 1, "Saving games and analyzed branches for offline use...", 96, 99);
     await persistAnalysisCache();
   }
 
@@ -628,7 +640,7 @@
     state.settings.autoImportStartup = Boolean($("autoImportStartupInput")?.checked);
     state.importController = new AbortController();
     status(`Loading public games for ${state.username}...`);
-    setImportProgress(0, 0);
+    setImportProgress(0, 0, `Starting import for ${state.username}...`, 1, 1);
     try {
       await fetchPublicGames(state.importController.signal);
       save();

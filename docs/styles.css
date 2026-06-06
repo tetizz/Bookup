@@ -1060,7 +1060,6 @@ select:focus {
 }
 
 .progress-fill.indeterminate {
-  inline-size: 42%;
   animation: progress-pulse 1.2s ease-in-out infinite alternate;
 }
 

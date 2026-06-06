@@ -87,10 +87,21 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
   await page.getByLabel("Time classes", { exact: true }).fill("rapid,blitz");
   await page.getByLabel("Max games", { exact: true }).fill("1");
   await page.getByLabel("Import all public games", { exact: true }).check();
+  await page.evaluate(() => {
+    window.__bookupProgressSamples = [];
+    const label = document.querySelector("#progressLabel");
+    new MutationObserver(() => window.__bookupProgressSamples.push(label.textContent)).observe(label, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+  });
   await page.getByRole("button", { name: "Build Repertoire", exact: true }).click();
   await page.waitForFunction(() => /Cached .* public games/.test(document.querySelector("#status")?.textContent || ""), null, { timeout: 30000 });
 
   const status = await page.locator("#status").innerText();
+  const progressSamples = await page.evaluate(() => window.__bookupProgressSamples);
+  check("progress_percentage_advances", new Set(progressSamples).size >= 3 && progressSamples.at(-1) === "100%", progressSamples.join(" -> "));
   check("retry_after_rate_limit", attempts.get("https://api.chess.com/pub/player/input-user/games/2026/03") === 2);
   check("broken_archive_is_skipped", /archive warning/.test(status), status);
   check("all_games_overrides_limit", await page.locator("#badgeGames").innerText() === "3", await page.locator("#badgeGames").innerText());
