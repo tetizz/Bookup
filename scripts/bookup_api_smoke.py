@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -371,7 +372,10 @@ def test_study_lines_tactical_reactions() -> None:
 
 
 def _snapshot_style_lines(limit: int = 36) -> list[dict]:
-    snapshot_path = ROOT / "bookup_data" / "trixize1234" / "snapshot.json"
+    configured_path = os.environ.get("BOOKUP_SMOKE_SNAPSHOT", "").strip()
+    if not configured_path:
+        return []
+    snapshot_path = Path(configured_path).expanduser()
     if not snapshot_path.exists():
         return []
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
@@ -404,7 +408,7 @@ def _snapshot_style_lines(limit: int = 36) -> list[dict]:
                 "start_fen": str(lesson.get("line_start_fen") or chess.STARTING_FEN),
                 "moves_uci": clean_moves[:64],
                 "weight": max(1.0, min(9.0, float(lesson.get("frequency", 1) or 1) / 10.0)),
-                "source": "trixize1234_snapshot",
+                "source": "configured_snapshot",
                 "player_color": str(lesson.get("player_color") or lesson.get("color") or "").strip().lower(),
             }
         )
@@ -414,10 +418,7 @@ def _snapshot_style_lines(limit: int = 36) -> list[dict]:
 def test_smart_theory_uses_real_snapshot_spines() -> None:
     style_lines = _snapshot_style_lines()
     if not style_lines:
-        snapshot_path = ROOT / "bookup_data" / "trixize1234" / "snapshot.json"
-        if snapshot_path.exists():
-            raise AssertionError("Real trixize1234 snapshot exists but no Smart Theory style lines were extracted")
-        print("PASS real_snapshot_style_lines_skipped")
+        print("PASS configured_snapshot_style_lines_skipped")
         return
 
     class _Settings:

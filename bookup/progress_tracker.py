@@ -71,7 +71,7 @@ def save_progress_state(root: Path, username: str, payload: dict[str, Any]) -> N
 def migrate_progress_state(payload: dict[str, Any], username: str) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     settings = data.setdefault("settings", {})
-    settings.setdefault("username", username or "trixize1234")
+    settings.setdefault("username", username or "")
     settings.setdefault("mode", "rapid")
     settings.setdefault("custom_games", 538)
     settings.setdefault("accuracy", dict(DEFAULT_ACCURACY))

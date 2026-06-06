@@ -5,7 +5,7 @@
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "bookup-web-desktop-v1";
+  const STORAGE_KEY = "bookup-web-desktop-v2";
   const MODES = ["rapid", "blitz", "bullet"];
   const PIECE_NAMES = { p: "P", n: "N", b: "B", r: "R", q: "Q", k: "K" };
   const DEFAULT_ACCURACY = { average: 74.18, opening: 85.1, middlegame: 71.1, endgame: 77.2 };
@@ -16,7 +16,7 @@
     [901, 1000, 45, 6, 49],
   ];
   const state = {
-    username: "trixize1234",
+    username: "",
     mode: "rapid",
     settings: { timeClasses: ["rapid", "blitz", "bullet"], maxGames: 240 },
     stats: {},
@@ -1124,8 +1124,9 @@
       if (square) clickSquare(square.dataset.square);
       const reveal = event.target.closest("[data-reveal]");
       if (reveal) reveal.parentElement.querySelector(".quiz-answer")?.removeAttribute("hidden");
-      if (event.target.closest("#downloadPgnBtn")) download(`bookup-${state.username}-repertoire.pgn`, repertoirePgn(), "application/x-chess-pgn");
-      if (event.target.closest("#downloadJsonBtn")) download(`bookup-${state.username}.json`, JSON.stringify({ version: 1, username: state.username, branches: state.branches, reviews: state.reviews }, null, 2), "application/json");
+      const exportName = state.username || "player";
+      if (event.target.closest("#downloadPgnBtn")) download(`bookup-${exportName}-repertoire.pgn`, repertoirePgn(), "application/x-chess-pgn");
+      if (event.target.closest("#downloadJsonBtn")) download(`bookup-${exportName}.json`, JSON.stringify({ version: 1, username: state.username, branches: state.branches, reviews: state.reviews }, null, 2), "application/json");
     });
     $("analyzeBtn")?.addEventListener("click", refreshAll);
     $("progressRefreshBtn")?.addEventListener("click", refreshAll);
