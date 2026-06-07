@@ -8,6 +8,16 @@
   const MAX_POSITIONS = 72;
   const MAX_OPENING_PLIES = 16;
   const REPEATED_POSITION_THRESHOLD = 2;
+  const ACCURACY_GAMES_PER_MODE = 5;
+  const MAX_ACCURACY_MOVES = 180;
+  const EXPECTED_POINTS_GRADIENT = 0.0035;
+  const EXPECTED_POINTS_BANDS = [
+    ["excellent", 0.02],
+    ["good", 0.05],
+    ["inaccuracy", 0.10],
+    ["mistake", 0.20],
+    ["blunder", 1],
+  ];
 
   const fenKey = (fen) => String(fen || "").split(" ").slice(0, 4).join(" ");
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -217,6 +227,222 @@
     return { key: "blunder", label: "Blunder" };
   }
 
+  function expectedPoints(scoreCp) {
+    const bounded = clamp(Number(scoreCp) || 0, -4000, 4000);
+    return 1 / (1 + Math.exp(-EXPECTED_POINTS_GRADIENT * bounded));
+  }
+
+  function classifyExpectedLoss(loss, isBestMove) {
+    if (isBestMove) return { key: "best", label: "Best" };
+    const key = EXPECTED_POINTS_BANDS.find(([, ceiling]) => loss <= ceiling)?.[0] || "blunder";
+    return { key, label: key.charAt(0).toUpperCase() + key.slice(1) };
+  }
+
+  function moveAccuracy(loss, isPerfect) {
+    if (isPerfect) return 100;
+    return clamp(100 * Math.exp(-4 * Math.max(0, loss)), 0, 100);
+  }
+
+  function materialProfile(chess) {
+    const values = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+    let nonPawn = 0;
+    let pieces = 0;
+    let queens = 0;
+    chess.board().flat().filter(Boolean).forEach((piece) => {
+      pieces += 1;
+      if (piece.type === "q") queens += 1;
+      if (piece.type !== "p" && piece.type !== "k") nonPawn += values[piece.type] || 0;
+    });
+    return { nonPawn, pieces, queens };
+  }
+
+  function positionPhase(chess, ply, previousPhase, hasOpeningName) {
+    if (previousPhase === "endgame") return "endgame";
+    const material = materialProfile(chess);
+    if (
+      (material.queens === 0 && material.nonPawn <= 22)
+      || material.pieces <= 10
+      || (material.queens <= 1 && material.nonPawn <= 15)
+    ) return "endgame";
+    if (previousPhase === "middlegame") return "middlegame";
+    const openingLimit = hasOpeningName ? 18 : 12;
+    return ply < openingLimit ? "opening" : "middlegame";
+  }
+
+  function buildOpeningFrequency(games) {
+    const positions = new Map();
+    games.forEach((game) => {
+      const chess = new Chess();
+      for (let ply = 0; ply < Math.min(20, game.moves.length); ply += 1) {
+        const fen = fenKey(chess.fen());
+        const played = chess.move(game.moves[ply], { sloppy: true });
+        if (!played) break;
+        const uci = moveUci(played);
+        const key = `${fen}:${uci}`;
+        positions.set(key, (positions.get(key) || 0) + 1);
+      }
+    });
+    return positions;
+  }
+
+  function selectAccuracyGames(games, perMode = ACCURACY_GAMES_PER_MODE) {
+    const modes = [...new Set(games.map((game) => game.timeClass).filter(Boolean))];
+    return modes.flatMap((mode) => games.filter((game) => game.timeClass === mode).slice(-perMode))
+      .sort((left, right) => left.endTime - right.endTime);
+  }
+
+  function summarizeAccuracy(games) {
+    const moves = games.flatMap((game) => game.moveAnalysis || []);
+    const phaseStats = {};
+    ["opening", "middlegame", "endgame"].forEach((phase) => {
+      const phaseMoves = moves.filter((move) => move.phase === phase);
+      phaseStats[phase] = {
+        accuracy: phaseMoves.length
+          ? phaseMoves.reduce((sum, move) => sum + move.accuracy, 0) / phaseMoves.length
+          : null,
+        moves: phaseMoves.length,
+      };
+    });
+    const classifications = {};
+    moves.forEach((move) => {
+      classifications[move.classification.key] = (classifications[move.classification.key] || 0) + 1;
+    });
+    return {
+      average: moves.length ? moves.reduce((sum, move) => sum + move.accuracy, 0) / moves.length : null,
+      moves: moves.length,
+      games: games.length,
+      phaseStats,
+      classifications,
+      perfectMoves: moves.filter((move) => move.accuracy === 100).length,
+    };
+  }
+
+  async function analyzeGameAccuracy(games, options = {}) {
+    const selected = selectAccuracyGames(games, options.gamesPerMode || ACCURACY_GAMES_PER_MODE);
+    const openingFrequency = buildOpeningFrequency(games);
+    const totalPlayerMoves = selected.reduce((sum, game) => (
+      sum + game.moves.filter((_, ply) => ply % 2 === (game.color === "white" ? 0 : 1)).length
+    ), 0);
+    const moveLimit = Math.min(MAX_ACCURACY_MOVES, options.maxMoves || MAX_ACCURACY_MOVES);
+    if (!selected.length || !totalPlayerMoves) {
+      return { games: [], summary: summarizeAccuracy([]), cacheHits: 0, analyzed: 0, truncated: false };
+    }
+
+    const engine = new BrowserStockfish(options.workerUrl || "./vendor/stockfish/stockfish-18-lite-single.js", options.signal);
+    const analyzedGames = [];
+    let cacheHits = 0;
+    let analyzed = 0;
+    let completed = 0;
+    await engine.initialize();
+    try {
+      for (const game of selected) {
+        if (completed >= moveLimit) break;
+        const chess = new Chess();
+        const playerTurn = game.color === "white" ? "w" : "b";
+        const moveAnalysis = [];
+        let phase = "opening";
+        const hasOpeningName = Boolean(game.headers?.ECO || game.headers?.Opening || game.headers?.ECOUrl);
+        for (let ply = 0; ply < game.moves.length; ply += 1) {
+          if (options.signal?.aborted) throw new DOMException("Analysis stopped.", "AbortError");
+          const fen = chess.fen();
+          phase = positionPhase(chess, ply, phase, hasOpeningName);
+          const played = chess.move(game.moves[ply], { sloppy: true });
+          if (!played) break;
+          if (fen.split(" ")[1] !== playerTurn) continue;
+          if (completed >= moveLimit) break;
+          const uci = moveUci(played);
+          const cacheKey = `accuracy-stockfish18:${fenKey(fen)}:${uci}:${options.moveTimeMs || 120}`;
+          let evaluation = await options.readCache?.(cacheKey);
+          if (evaluation) {
+            cacheHits += 1;
+          } else {
+            const rootLines = await engine.analyze(fen, {
+              multiPv: 3,
+              moveTimeMs: options.moveTimeMs || 120,
+            });
+            let playedLine = rootLines.find((line) => line.pv[0] === uci) || null;
+            if (!playedLine) {
+              playedLine = (await engine.analyze(fen, {
+                multiPv: 1,
+                moveTimeMs: options.moveTimeMs || 120,
+                searchMove: uci,
+              }))[0] || null;
+            }
+            evaluation = { rootLines, playedLine };
+            analyzed += 1;
+            await options.writeCache?.(cacheKey, evaluation);
+          }
+          const best = evaluation.rootLines?.[0];
+          if (!best || !evaluation.playedLine) continue;
+          const bestUci = best.pv?.[0] || "";
+          const loss = Math.max(0, expectedPoints(best.scoreCp) - expectedPoints(evaluation.playedLine.scoreCp));
+          const repeatedBookMove = (openingFrequency.get(`${fenKey(fen)}:${uci}`) || 0) >= 2;
+          const isBook = phase === "opening"
+            && hasOpeningName
+            && ply < 18
+            && loss <= 0.05
+            && (repeatedBookMove || (ply < 10 && loss <= 0.02));
+          const isBest = uci === bestUci || Math.abs(best.scoreCp - evaluation.playedLine.scoreCp) <= 8;
+          const classification = isBook
+            ? { key: "book", label: "Book" }
+            : classifyExpectedLoss(loss, isBest);
+          const accuracy = moveAccuracy(loss, isBook || isBest);
+          moveAnalysis.push({
+            ply,
+            moveNumber: Math.floor(ply / 2) + 1,
+            san: played.san,
+            uci,
+            fen,
+            phase,
+            accuracy: Math.round(accuracy * 10) / 10,
+            expectedPointsLoss: Math.round(loss * 10000) / 10000,
+            centipawnLoss: Math.max(0, Math.round(best.scoreCp - evaluation.playedLine.scoreCp)),
+            bestMoveUci: bestUci,
+            bestMoveSan: lineSan(fen, [bestUci]).san[0] || bestUci,
+            classification,
+          });
+          completed += 1;
+          options.onProgress?.({
+            done: completed,
+            total: Math.min(totalPlayerMoves, moveLimit),
+            game,
+            move: moveAnalysis.at(-1),
+          });
+          if (completed % 6 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        if (moveAnalysis.length) {
+          const phaseAccuracy = {};
+          ["opening", "middlegame", "endgame"].forEach((phaseName) => {
+            const phaseMoves = moveAnalysis.filter((move) => move.phase === phaseName);
+            phaseAccuracy[phaseName] = phaseMoves.length
+              ? phaseMoves.reduce((sum, move) => sum + move.accuracy, 0) / phaseMoves.length
+              : null;
+          });
+          analyzedGames.push({
+            id: game.id,
+            endTime: game.endTime,
+            timeClass: game.timeClass,
+            outcome: game.outcome,
+            rating: game.rating,
+            openingName: game.headers?.Opening || game.headers?.ECOUrl?.split("/").at(-1)?.replaceAll("-", " ") || "Imported game",
+            accuracy: moveAnalysis.reduce((sum, move) => sum + move.accuracy, 0) / moveAnalysis.length,
+            phaseAccuracy,
+            moveAnalysis,
+          });
+        }
+      }
+    } finally {
+      engine.close();
+    }
+    return {
+      games: analyzedGames,
+      summary: summarizeAccuracy(analyzedGames),
+      cacheHits,
+      analyzed,
+      truncated: totalPlayerMoves > completed,
+    };
+  }
+
   function createLesson(position, rootLines, playedLine) {
     const best = rootLines[0];
     if (!best?.pv?.length) return null;
@@ -362,10 +588,13 @@
 
   window.BookupPositionAnalysis = {
     analyzeImportedGames,
+    analyzeGameAccuracy,
     buildPositionCandidates,
     constants: {
       maxPositions: MAX_POSITIONS,
       repeatedThreshold: REPEATED_POSITION_THRESHOLD,
+      accuracyGamesPerMode: ACCURACY_GAMES_PER_MODE,
+      maxAccuracyMoves: MAX_ACCURACY_MOVES,
     },
   };
 })();

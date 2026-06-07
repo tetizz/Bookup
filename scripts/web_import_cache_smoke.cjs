@@ -125,11 +125,18 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
       branches: record.branches.length,
       lessons: record.lessons.length,
       candidates: record.analysisMeta.candidates,
+      accuracyMoves: record.gameAnalysisMeta.moves,
+      perfectLabelsStayPerfect: record.gameAnalysis
+        .flatMap((game) => game.moveAnalysis || [])
+        .filter((move) => ["book", "best"].includes(move.classification?.key))
+        .every((move) => move.accuracy === 100),
       fingerprint: record.fingerprint,
     };
   });
   check("offline_game_cache", cache.games === 3, JSON.stringify(cache));
-  check("exact_position_cache", cache.branches > 0 && cache.lessons > 0 && cache.candidates > 0 && /^4-3-/.test(cache.fingerprint), JSON.stringify(cache));
+  check("exact_position_cache", cache.branches > 0 && cache.lessons > 0 && cache.candidates > 0 && /^5-3-/.test(cache.fingerprint), JSON.stringify(cache));
+  check("move_accuracy_cache", cache.accuracyMoves > 0, JSON.stringify(cache));
+  check("book_and_best_are_100", cache.perfectLabelsStayPerfect, JSON.stringify(cache));
 
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));

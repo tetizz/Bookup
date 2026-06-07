@@ -8,7 +8,7 @@
   const STORAGE_KEY = "bookup-web-desktop-v2";
   const CACHE_DB_NAME = "bookup-web-cache";
   const CACHE_DB_VERSION = 2;
-  const ANALYSIS_VERSION = 4;
+  const ANALYSIS_VERSION = 5;
   const MODES = ["rapid", "blitz", "bullet"];
   const PIECE_NAMES = { p: "P", n: "N", b: "B", r: "R", q: "Q", k: "K" };
   const DEFAULT_ACCURACY = { average: 74.18, opening: 85.1, middlegame: 71.1, endgame: 77.2 };
@@ -35,6 +35,8 @@
     branches: [],
     lessons: [],
     analysisMeta: null,
+    gameAnalysis: [],
+    gameAnalysisMeta: null,
     reviews: [],
     sessions: [],
     snapshots: [],
@@ -215,6 +217,8 @@
       importMeta: state.importMeta,
       lessons: state.lessons,
       analysisMeta: state.analysisMeta,
+      gameAnalysis: state.gameAnalysis,
+      gameAnalysisMeta: state.gameAnalysisMeta,
     };
     await writeWorkspaceCache(record);
     state.cacheRestored = true;
@@ -235,6 +239,12 @@
       : [];
     state.analysisMeta = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint
       ? (cached.analysisMeta || null)
+      : null;
+    state.gameAnalysis = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint && Array.isArray(cached.gameAnalysis)
+      ? cached.gameAnalysis
+      : [];
+    state.gameAnalysisMeta = cached.analysisVersion === ANALYSIS_VERSION && cached.fingerprint === fingerprint
+      ? (cached.gameAnalysisMeta || null)
       : null;
     state.importMeta = cached.importMeta || null;
     state.cacheRestored = true;
@@ -271,6 +281,8 @@
       stats: state.stats,
       lessons: state.lessons,
       analysisMeta: state.analysisMeta,
+      gameAnalysis: state.gameAnalysis,
+      gameAnalysisMeta: state.gameAnalysisMeta,
     });
   }
 
@@ -334,6 +346,8 @@
       if (Array.isArray(data.branches)) state.branches = data.branches;
       if (Array.isArray(data.lessons)) state.lessons = data.lessons;
       if (data.analysisMeta) state.analysisMeta = data.analysisMeta;
+      if (Array.isArray(data.gameAnalysis)) state.gameAnalysis = data.gameAnalysis;
+      if (data.gameAnalysisMeta) state.gameAnalysisMeta = data.gameAnalysisMeta;
       if (data.stats) state.stats = data.stats;
       markDataDirty();
     } catch {
@@ -573,6 +587,56 @@
     return result;
   }
 
+  async function analyzeImportedAccuracy(signal, progressStart = 73, progressEnd = 98) {
+    const analyzer = window.BookupPositionAnalysis;
+    if (!analyzer?.analyzeGameAccuracy) {
+      throw new Error("The move accuracy analyzer did not load. Refresh the page and try again.");
+    }
+    const startedAt = Date.now();
+    const moveTimeMs = clamp(Math.round(num($("thinkTimeInput")?.value, 0.18) * 700), 90, 220);
+    setImportProgress(0, 0, "Preparing move-by-move accuracy analysis...", progressStart, progressStart);
+    const result = await analyzer.analyzeGameAccuracy(state.games, {
+      workerUrl: "./vendor/stockfish/stockfish-18-lite-single.js",
+      signal,
+      moveTimeMs,
+      gamesPerMode: 5,
+      maxMoves: 180,
+      readCache: (key) => readAnalysisCache(key, 90 * 24 * 60 * 60 * 1000).catch(() => null),
+      writeCache: (key, payload) => writeAnalysisCache(key, payload).catch(() => {}),
+      onProgress: ({ done, total, move }) => {
+        setImportProgress(
+          done,
+          total,
+          `Measuring move accuracy ${done}/${total} · ${move?.phase || "position"} · ${move?.classification?.label || ""}`,
+          progressStart,
+          progressEnd
+        );
+      },
+    });
+    state.gameAnalysis = result.games;
+    const summary = result.summary || {};
+    const phaseStats = summary.phaseStats || {};
+    if (num(summary.moves) > 0) {
+      state.accuracy = {
+        average: num(summary.average),
+        opening: phaseStats.opening?.accuracy ?? 0,
+        middlegame: phaseStats.middlegame?.accuracy ?? 0,
+        endgame: phaseStats.endgame?.accuracy ?? 0,
+      };
+    }
+    state.gameAnalysisMeta = {
+      ...summary,
+      cacheHits: result.cacheHits,
+      analyzed: result.analyzed,
+      truncated: result.truncated,
+      moveTimeMs,
+      elapsedMs: Date.now() - startedAt,
+      completedAt: Date.now(),
+      methodology: "Bookup expected-points accuracy",
+    };
+    return result;
+  }
+
   function saveDailySnapshots(statsByMode) {
     const date = today();
     Object.entries(statsByMode).forEach(([mode, data]) => {
@@ -699,9 +763,10 @@
       fingerprint: nextFingerprint,
     };
     markDataDirty();
-    await analyzeImportedPositions(signal, 58, 96);
+    await analyzeImportedPositions(signal, 58, 72);
+    await analyzeImportedAccuracy(signal, 73, 98);
     markDataDirty();
-    setImportProgress(1, 1, "Saving games and exact-position lessons for offline use...", 96, 99);
+    setImportProgress(1, 1, "Saving games, lessons, and move accuracy for offline use...", 98, 99);
     await persistAnalysisCache();
   }
 
@@ -740,6 +805,8 @@
       goalBaselines: { ...state.goalBaselines },
       importMeta: state.importMeta,
       analysisMeta: state.analysisMeta,
+      gameAnalysis: state.gameAnalysis,
+      gameAnalysisMeta: state.gameAnalysisMeta,
     };
     try {
       await fetchPublicGames(state.importController.signal);
@@ -1036,44 +1103,117 @@
   function renderProgress() {
     const data = state.stats[state.mode];
     qsa("[data-progress-mode]").forEach((button) => button.classList.toggle("active", button.dataset.progressMode === state.mode));
+    const recent = state.games.filter((game) => game.timeClass === state.mode).slice(-30);
+    const measured = summarizeModeAccuracy(state.mode);
     if (!data) {
-      setHtml("progressMetricGrid", card("No live rating", `Chess.com has no ${state.mode} rating for this player.`));
+      setHtml("progressMetricGrid", [
+        ["Live rating", "--", `No Chess.com ${state.mode} rating loaded`],
+        ["Imported games", count(recent.length), `${state.mode} games on this device`],
+        ["Bookup accuracy", measured.moves ? percent(measured.average) : "--", measured.moves ? `${measured.moves} moves measured` : "run local analysis"],
+        ["Analyzed games", count(measured.games.length), "recent local sample"],
+        ["Needs work", count(state.lessons.filter(lessonNeedsWork).length), "repeated best-move misses"],
+      ].map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join(""));
+      setText("progressStatus", `No live ${state.mode} rating is loaded. Local game analysis remains available.`);
+      setText("progressRatingContext", `${recent.length} imported ${state.mode} games`);
+      setText("progressDeltaTitle", "Game-by-game rating change");
+      setText("progressDeltaContext", "Import rated games with rating headers to build this chart.");
+      drawRatingChart("progressRatingChart", recent.filter((game) => game.rating).map((game) => ({ x: game.endTime, y: game.rating })), "#7da2ff");
+      const rated = recent.filter((game) => game.rating);
+      drawBarChart("progressDeltaChart", rated.slice(1).map((game, index) => ({ x: game.endTime, y: game.rating - rated[index].rating })));
+      drawRatingChart("progressGamesChart", [], "#74d39b");
+      drawRatingChart("progressWinRateChart", [], "#f1c96a", { suffix: "%" });
+      drawRatingChart("progressAccuracyChart", measured.games.map((game) => ({ x: game.endTime, y: game.accuracy })), "#c79bff", { suffix: "%" });
+      renderAccuracyLab(measured, DEFAULT_ACCURACY);
+      setHtml("progressGoalGrid", `<p class="line-note">Load Chess.com stats to track rating goals.</p>`);
+      setHtml("progressProjectionPanel", `<p class="line-note">Load a live rating to calculate projections.</p>`);
+      setHtml("progressProjectionBands", "");
+      renderTimeCalculator();
+      renderRecommendations(0, measured.moves ? {
+        average: measured.average,
+        opening: measured.phaseStats.opening.accuracy ?? DEFAULT_ACCURACY.opening,
+        middlegame: measured.phaseStats.middlegame.accuracy ?? DEFAULT_ACCURACY.middlegame,
+        endgame: measured.phaseStats.endgame.accuracy ?? DEFAULT_ACCURACY.endgame,
+      } : DEFAULT_ACCURACY);
+      renderSessions();
       return;
     }
-    const recent = state.games.filter((game) => game.timeClass === state.mode).slice(-30);
     const snapshots = state.snapshots.filter((item) => item.mode === state.mode).slice(-90);
     const recentWins = recent.filter((game) => game.outcome === "win").length;
     const recentScore = recent.length ? recentWins / recent.length * 100 : 0;
     const imported = importedStats();
+    const accuracy = measured.moves ? {
+      average: measured.average,
+      opening: measured.phaseStats.opening.accuracy ?? DEFAULT_ACCURACY.opening,
+      middlegame: measured.phaseStats.middlegame.accuracy ?? DEFAULT_ACCURACY.middlegame,
+      endgame: measured.phaseStats.endgame.accuracy ?? DEFAULT_ACCURACY.endgame,
+    } : DEFAULT_ACCURACY;
     setHtml("progressMetricGrid", [
       ["Current rating", rating(data.rating), `${state.mode} from Chess.com`],
       ["Record", `${count(data.wins)}W ${count(data.draws)}D ${count(data.losses)}L`, `${count(data.games)} games`],
-      ["Win rate", percent(data.games ? data.wins / data.games * 100 : 0), "career public stats"],
-      ["Recent form", percent(recentScore), `${recentWins} wins in ${recent.length} imported ${state.mode} games`],
-      ["Imported score", percent(imported.score), "draw counts as half"],
-      ["Best rating", rating(data.best), "Chess.com best"],
+      ["Recent score", percent(recent.length ? (recentWins + recent.filter((game) => game.outcome === "draw").length * 0.5) / recent.length * 100 : 0), `${recent.length} imported ${state.mode} games`],
+      ["Bookup accuracy", measured.moves ? percent(measured.average) : "--", measured.moves ? `${measured.moves} moves measured` : "run local analysis"],
+      ["Needs work", count(state.lessons.filter(lessonNeedsWork).length), "repeated best-move misses"],
     ].map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join(""));
-    setText("progressStatus", `Live ${state.mode} stats for ${state.username}. Ratings are shown without commas.`);
+    setText("progressStatus", `Live ${state.mode} stats for ${state.username}. Accuracy is measured locally and cached offline.`);
     const ratingPoints = snapshots.length >= 2
       ? snapshots.map((item) => ({ x: item.date, y: item.rating }))
       : recent.map((game) => ({ x: game.endTime, y: game.rating }));
+    setText("progressRatingContext", snapshots.length >= 2
+      ? `${snapshots.length} daily snapshots`
+      : `${recent.length} recent imported games`);
     drawRatingChart("progressRatingChart", ratingPoints, "#7da2ff");
     const deltaSource = snapshots.length >= 2 ? snapshots : recent;
-    const deltas = deltaSource.slice(1).map((item, index) => ({ x: index, y: item.rating - deltaSource[index].rating }));
+    const deltas = deltaSource.slice(1).map((item, index) => ({
+      x: item.date || item.endTime,
+      y: item.rating - deltaSource[index].rating,
+    }));
+    setText("progressDeltaTitle", snapshots.length >= 2 ? "Daily rating gain / loss" : "Game-by-game rating change");
+    setText("progressDeltaContext", snapshots.length >= 2
+      ? "Change between locally saved daily snapshots."
+      : "Change between consecutive imported games. This switches to daily data after more snapshot days are saved.");
     drawBarChart("progressDeltaChart", deltas);
     drawRatingChart("progressGamesChart", snapshots.map((item) => ({ x: item.date, y: item.games })), "#74d39b");
     drawRatingChart("progressWinRateChart", snapshots.map((item) => ({
       x: item.date,
       y: item.games ? item.wins / item.games * 100 : 0,
-    })), "#f1c96a");
-    drawRatingChart("progressAccuracyChart", state.sessions.filter((session) => num(session.accuracy) > 0)
-      .map((session) => ({ x: session.date, y: session.accuracy })), "#c79bff");
-    drawPhaseChart();
-    renderGoals(data, recentScore);
+    })), "#f1c96a", { suffix: "%" });
+    drawRatingChart("progressAccuracyChart", measured.games.map((game) => ({
+      x: game.endTime,
+      y: game.accuracy,
+    })), "#c79bff", { suffix: "%" });
+    renderAccuracyLab(measured, accuracy);
+    renderGoals(data, recentScore, accuracy);
     renderProjection(data);
     renderTimeCalculator();
-    renderRecommendations(recentScore);
+    renderRecommendations(recentScore, accuracy);
     renderSessions();
+  }
+
+  function summarizeModeAccuracy(mode) {
+    const games = state.gameAnalysis.filter((game) => game.timeClass === mode);
+    const moves = games.flatMap((game) => game.moveAnalysis || []);
+    const phaseStats = {};
+    ["opening", "middlegame", "endgame"].forEach((phase) => {
+      const phaseMoves = moves.filter((move) => move.phase === phase);
+      phaseStats[phase] = {
+        moves: phaseMoves.length,
+        accuracy: phaseMoves.length
+          ? phaseMoves.reduce((sum, move) => sum + num(move.accuracy), 0) / phaseMoves.length
+          : null,
+      };
+    });
+    const classifications = {};
+    moves.forEach((move) => {
+      const key = move.classification?.key || "unknown";
+      classifications[key] = (classifications[key] || 0) + 1;
+    });
+    return {
+      games,
+      moves: moves.length,
+      average: moves.length ? moves.reduce((sum, move) => sum + num(move.accuracy), 0) / moves.length : 0,
+      phaseStats,
+      classifications,
+    };
   }
 
   function canvasContext(id) {
@@ -1089,39 +1229,66 @@
     return { canvas, ctx, width, height };
   }
 
-  function drawRatingChart(id, points, color) {
+  function chartLabel(value) {
+    if (typeof value === "number" && value > 1000000000) {
+      return new Date(value * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+    const date = new Date(String(value || ""));
+    if (!Number.isNaN(date.getTime())) return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return String(value ?? "");
+  }
+
+  function drawRatingChart(id, points, color, options = {}) {
     const target = canvasContext(id);
     if (!target) return;
     const { ctx, width, height } = target;
     ctx.clearRect(0, 0, width, height);
-    ctx.strokeStyle = "#283241";
-    ctx.lineWidth = 1;
-    for (let i = 1; i < 4; i += 1) {
-      ctx.beginPath(); ctx.moveTo(35, i * height / 4); ctx.lineTo(width - 12, i * height / 4); ctx.stroke();
-    }
+    const plot = { left: 50, right: width - 16, top: 16, bottom: height - 32 };
     if (!points.length) {
-      ctx.fillStyle = "#8d9bb0"; ctx.font = "14px Segoe UI"; ctx.fillText("Import games to draw this chart.", 42, height / 2);
+      ctx.fillStyle = "#8d9bb0"; ctx.font = "13px Segoe UI"; ctx.fillText("More saved data is needed for this trend.", plot.left, height / 2);
       return;
     }
     const values = points.map((point) => point.y);
-    const min = Math.min(...values) - 8;
-    const max = Math.max(...values) + 8;
+    const spread = Math.max(1, Math.max(...values) - Math.min(...values));
+    const pad = Math.max(options.suffix === "%" ? 2 : 1, spread * 0.12);
+    const min = Math.min(...values) - pad;
+    const max = Math.max(...values) + pad;
+    ctx.font = "11px Cascadia Mono";
+    for (let i = 0; i <= 4; i += 1) {
+      const ratio = i / 4;
+      const y = plot.top + ratio * (plot.bottom - plot.top);
+      const value = max - ratio * (max - min);
+      ctx.strokeStyle = i === 4 ? "#3b4758" : "#283241";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(plot.left, y); ctx.lineTo(plot.right, y); ctx.stroke();
+      ctx.fillStyle = "#8d9bb0";
+      ctx.textAlign = "right";
+      ctx.fillText(`${Math.round(value)}${options.suffix || ""}`, plot.left - 7, y + 4);
+    }
     ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
     points.forEach((point, index) => {
-      const x = 38 + index / Math.max(1, points.length - 1) * (width - 58);
-      const y = 15 + (max - point.y) / Math.max(1, max - min) * (height - 35);
+      const x = plot.left + index / Math.max(1, points.length - 1) * (plot.right - plot.left);
+      const y = plot.top + (max - point.y) / Math.max(1, max - min) * (plot.bottom - plot.top);
       if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.stroke();
-    if (points.length === 1) {
+    points.forEach((point, index) => {
+      const x = plot.left + index / Math.max(1, points.length - 1) * (plot.right - plot.left);
+      const y = plot.top + (max - point.y) / Math.max(1, max - min) * (plot.bottom - plot.top);
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(38, height / 2, 4, 0, Math.PI * 2);
+      ctx.arc(x, y, points.length > 24 ? 2 : 3, 0, Math.PI * 2);
       ctx.fill();
-    }
-    ctx.fillStyle = "#d2dae6"; ctx.font = "12px Cascadia Mono";
-    ctx.fillText(String(Math.max(...values)), 4, 20);
-    ctx.fillText(String(Math.min(...values)), 4, height - 12);
+    });
+    const labelIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
+    ctx.fillStyle = "#8d9bb0";
+    ctx.font = "11px Segoe UI";
+    labelIndexes.forEach((index) => {
+      const x = plot.left + index / Math.max(1, points.length - 1) * (plot.right - plot.left);
+      ctx.textAlign = index === 0 ? "left" : index === points.length - 1 ? "right" : "center";
+      ctx.fillText(chartLabel(points[index].x), x, height - 10);
+    });
+    ctx.textAlign = "left";
   }
 
   function drawBarChart(id, points) {
@@ -1129,64 +1296,102 @@
     if (!target) return;
     const { ctx, width, height } = target;
     ctx.clearRect(0, 0, width, height);
-    const middle = height / 2;
-    ctx.strokeStyle = "#364558"; ctx.beginPath(); ctx.moveTo(12, middle); ctx.lineTo(width - 12, middle); ctx.stroke();
-    if (!points.length) return;
+    if (!points.length) {
+      ctx.fillStyle = "#8d9bb0"; ctx.font = "13px Segoe UI"; ctx.fillText("At least two dated ratings are needed.", 50, height / 2);
+      return;
+    }
+    const plot = { left: 48, right: width - 14, top: 20, bottom: height - 34 };
     const max = Math.max(8, ...points.map((point) => Math.abs(point.y)));
-    const barWidth = (width - 30) / points.length;
-    points.forEach((point, index) => {
-      const size = Math.abs(point.y) / max * (height / 2 - 18);
-      ctx.fillStyle = point.y >= 0 ? "#74d39b" : "#ff7f87";
-      ctx.fillRect(15 + index * barWidth, point.y >= 0 ? middle - size : middle, Math.max(2, barWidth - 2), size);
+    const middle = plot.top + (plot.bottom - plot.top) / 2;
+    [-max, 0, max].forEach((value) => {
+      const y = middle - value / max * (plot.bottom - plot.top) / 2;
+      ctx.strokeStyle = value === 0 ? "#526174" : "#283241";
+      ctx.beginPath(); ctx.moveTo(plot.left, y); ctx.lineTo(plot.right, y); ctx.stroke();
+      ctx.fillStyle = "#8d9bb0"; ctx.font = "11px Cascadia Mono"; ctx.textAlign = "right";
+      ctx.fillText(`${value > 0 ? "+" : ""}${Math.round(value)}`, plot.left - 7, y + 4);
     });
+    const barWidth = (plot.right - plot.left) / points.length;
+    points.forEach((point, index) => {
+      const size = Math.abs(point.y) / max * (plot.bottom - plot.top) / 2;
+      ctx.fillStyle = point.y >= 0 ? "#74d39b" : "#ff7f87";
+      const x = plot.left + index * barWidth + Math.min(3, barWidth * 0.12);
+      ctx.fillRect(x, point.y >= 0 ? middle - size : middle, Math.max(2, barWidth - Math.min(6, barWidth * 0.24)), Math.max(1, size));
+      if (points.length <= 14 && point.y) {
+        ctx.fillStyle = point.y >= 0 ? "#9ce8bc" : "#ffabb0";
+        ctx.font = "10px Cascadia Mono";
+        ctx.textAlign = "center";
+        ctx.fillText(`${point.y > 0 ? "+" : ""}${Math.round(point.y)}`, x + Math.max(2, barWidth - 6) / 2, point.y >= 0 ? middle - size - 5 : middle + size + 12);
+      }
+    });
+    const labelIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
+    ctx.fillStyle = "#8d9bb0"; ctx.font = "11px Segoe UI";
+    labelIndexes.forEach((index) => {
+      const x = plot.left + (index + 0.5) * barWidth;
+      ctx.textAlign = index === 0 ? "left" : index === points.length - 1 ? "right" : "center";
+      ctx.fillText(chartLabel(points[index].x), x, height - 9);
+    });
+    ctx.textAlign = "left";
   }
 
-  function drawPhaseChart() {
-    const target = canvasContext("progressPhaseChart");
-    if (!target) return;
-    const { ctx, width, height } = target;
-    ctx.clearRect(0, 0, width, height);
-    const rows = [["Opening", state.accuracy.opening], ["Middlegame", state.accuracy.middlegame], ["Endgame", state.accuracy.endgame]];
-    const history = state.sessions.filter((session) =>
-      num(session.openingAccuracy) > 0 || num(session.middlegameAccuracy) > 0 || num(session.endgameAccuracy) > 0
-    ).slice(-30);
-    if (history.length >= 2) {
-      ctx.strokeStyle = "#283241";
-      for (let index = 1; index < 4; index += 1) {
-        const y = index * height / 4;
-        ctx.beginPath(); ctx.moveTo(35, y); ctx.lineTo(width - 12, y); ctx.stroke();
-      }
-      const series = [
-        ["Opening", "openingAccuracy", "#74d39b"],
-        ["Middlegame", "middlegameAccuracy", "#7da2ff"],
-        ["Endgame", "endgameAccuracy", "#f1c96a"],
-      ];
-      series.forEach(([label, key, color], seriesIndex) => {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        history.forEach((session, index) => {
-          const x = 38 + index / Math.max(1, history.length - 1) * (width - 58);
-          const y = 12 + (100 - clamp(num(session[key]), 0, 100)) / 100 * (height - 40);
-          if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-        ctx.fillStyle = color;
-        ctx.font = "12px Segoe UI";
-        ctx.fillText(label, 12 + seriesIndex * Math.max(90, width / 3), height - 8);
-      });
+  function renderAccuracyLab(measured, fallbackAccuracy) {
+    const hasMeasured = measured.moves > 0;
+    const rows = [
+      ["Opening", "opening", fallbackAccuracy.opening],
+      ["Middlegame", "middlegame", fallbackAccuracy.middlegame],
+      ["Endgame", "endgame", fallbackAccuracy.endgame],
+    ];
+    setText("progressAccuracyMethod", hasMeasured
+      ? `${measured.games.length} games · ${measured.moves} moves`
+      : "No measured sample yet");
+    setHtml("progressAccuracySummary", [
+      ["Overall", hasMeasured ? percent(measured.average) : "--", "average analyzed move"],
+      ["Perfect", hasMeasured ? percent((num(measured.classifications.book) + num(measured.classifications.best)) / measured.moves * 100) : "--", "book or best"],
+      ["Games", count(measured.games.length), "recent local sample"],
+      ["Engine cache", count(state.gameAnalysisMeta?.cacheHits || 0), "moves restored offline"],
+    ].map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join(""));
+    setHtml("progressPhaseChart", rows.map(([label, key, fallback]) => {
+      const stat = measured.phaseStats[key];
+      const value = stat?.accuracy ?? 0;
+      return `<div class="progress-phase-measure">
+        <div><strong>${label}</strong><span>${stat?.moves || 0} moves</span></div>
+        <div class="progress-phase-track"><span style="width:${clamp(num(value), 0, 100)}%"></span></div>
+        <b>${stat?.moves ? percent(value) : "--"}</b>
+      </div>`;
+    }).join(""));
+    const order = ["book", "best", "excellent", "good", "inaccuracy", "mistake", "blunder"];
+    setHtml("progressClassificationPanel", hasMeasured ? order.map((key) => {
+      const value = num(measured.classifications[key]);
+      return `<div class="classification-row classification-${key}">
+        <span>${key.charAt(0).toUpperCase() + key.slice(1)}</span>
+        <div><i style="width:${value / measured.moves * 100}%"></i></div>
+        <strong>${value}</strong>
+      </div>`;
+    }).join("") : `<p class="line-note">Import games to classify your moves.</p>`);
+    const measuredRows = rows.filter(([, key]) => measured.phaseStats[key]?.moves);
+    if (measuredRows.length) {
+      const sorted = measuredRows.slice().sort((left, right) =>
+        measured.phaseStats[left[1]].accuracy - measured.phaseStats[right[1]].accuracy
+      );
+      const weakest = sorted[0];
+      const strongest = sorted.at(-1);
+      const weakLessons = state.lessons.filter(lessonNeedsWork).slice(0, 2)
+        .map((lesson) => `${lesson.yourRepeatedMove} → ${lesson.recommendedMove}`).join(" · ");
+      setHtml("progressWeaknessPanel", `<div class="progress-plan-callout">
+        <span>Main weakness</span><strong>${weakest[0]} · ${percent(measured.phaseStats[weakest[1]].accuracy)}</strong>
+        <p>${weakest[0] === "Opening" ? "Repair repeated opening decisions in the exact-position queue." : weakest[0] === "Middlegame" ? "Review forcing moves, pawn breaks, and your worst piece before the next session." : "Train king activity, rook activity, and pawn races from your recent games."}</p>
+        ${weakLessons ? `<small>Queue: ${escapeHtml(weakLessons)}</small>` : ""}
+        <small>Best measured phase: ${strongest[0]} · ${percent(measured.phaseStats[strongest[1]].accuracy)}</small>
+      </div>`);
     } else {
-      rows.forEach(([label, value], index) => {
-        const y = 34 + index * 58;
-        ctx.fillStyle = "#283241"; ctx.fillRect(100, y, width - 130, 20);
-        ctx.fillStyle = value >= 80 ? "#74d39b" : value >= 73 ? "#7da2ff" : "#f1c96a";
-        ctx.fillRect(100, y, (width - 130) * value / 100, 20);
-        ctx.fillStyle = "#d2dae6"; ctx.font = "13px Segoe UI"; ctx.fillText(label, 12, y + 15);
-        ctx.font = "12px Cascadia Mono"; ctx.fillText(percent(value), width - 52, y + 15);
-      });
+      setHtml("progressWeaknessPanel", `<p class="line-note">No move-by-move sample exists for ${escapeHtml(state.mode)} yet.</p>`);
     }
-    const phases = rows.slice().sort((a, b) => a[1] - b[1]);
-    setHtml("progressWeaknessPanel", card(`Main weakness: ${phases[0][0]}`, `Best phase: ${phases.at(-1)[0]}. Focus the next review block on ${phases[0][0].toLowerCase()} decisions.`, `average ${percent(state.accuracy.average)}`));
+    setHtml("progressAnalyzedGames", measured.games.slice().reverse().map((game) => `<div class="progress-analysis-row">
+      <div><strong>${escapeHtml(game.openingName || "Imported game")}</strong><span>${new Date(num(game.endTime) * 1000).toLocaleDateString()} · ${outcomeLabel(game.outcome)} · ${rating(game.rating)}</span></div>
+      <b>${percent(game.accuracy)}</b>
+      <span>O ${game.phaseAccuracy.opening == null ? "--" : percent(game.phaseAccuracy.opening)}</span>
+      <span>M ${game.phaseAccuracy.middlegame == null ? "--" : percent(game.phaseAccuracy.middlegame)}</span>
+      <span>E ${game.phaseAccuracy.endgame == null ? "--" : percent(game.phaseAccuracy.endgame)}</span>
+    </div>`).join("") || `No analyzed ${escapeHtml(state.mode)} games yet.`, !measured.games.length);
   }
 
   function goalRow(label, value, target, suffix = "") {
@@ -1194,14 +1399,14 @@
     return `<div class="goal-row"><div><span>${label}</span><strong>${suffix === "rating" ? rating(value) : `${num(value).toFixed(suffix === "%" ? 1 : 0)}${suffix === "%" ? "%" : ""}`} / ${target}</strong></div><div class="goal-track"><div style="width:${progress}%"></div></div></div>`;
   }
 
-  function renderGoals(data, recentWinRate) {
+  function renderGoals(data, recentWinRate, accuracy = state.accuracy) {
     const rows = [1600, 1700, 1800, 1900, 2000].map((target) => goalRow(`${target} rating`, data.rating, target, "rating"));
     const gamesSinceBaseline = Math.max(0, num(data.games) - num(state.goalBaselines[state.mode], data.games));
     rows.push(goalRow("538 more games", Math.min(538, gamesSinceBaseline), 538));
     rows.push(goalRow("1000 more games", Math.min(1000, gamesSinceBaseline), 1000));
-    rows.push(goalRow("Average accuracy", state.accuracy.average, 75, "%"));
-    rows.push(goalRow("Middlegame accuracy", state.accuracy.middlegame, 73, "%"));
-    rows.push(goalRow("Endgame accuracy", state.accuracy.endgame, 80, "%"));
+    rows.push(goalRow("Average accuracy", accuracy.average, 75, "%"));
+    rows.push(goalRow("Middlegame accuracy", accuracy.middlegame, 73, "%"));
+    rows.push(goalRow("Endgame accuracy", accuracy.endgame, 80, "%"));
     rows.push(goalRow("Recent win rate", recentWinRate, 52, "%"));
     setHtml("progressGoalGrid", rows.join(""));
   }
@@ -1292,14 +1497,14 @@
     setHtml("progressTimePanel", rows.join(""));
   }
 
-  function renderRecommendations(recentWinRate) {
-    const phases = [["opening", state.accuracy.opening], ["middlegame", state.accuracy.middlegame], ["endgame", state.accuracy.endgame]].sort((a, b) => a[1] - b[1]);
+  function renderRecommendations(recentWinRate, accuracy = state.accuracy) {
+    const phases = [["opening", accuracy.opening], ["middlegame", accuracy.middlegame], ["endgame", accuracy.endgame]].sort((a, b) => a[1] - b[1]);
     const weakLines = state.lessons.filter(lessonNeedsWork).slice(0, 3)
       .map((lesson) => `${lesson.yourRepeatedMove} → ${lesson.recommendedMove}`).join("; ");
     setHtml("progressRecommendationPanel", [
-      card("Opening", weakLines ? `Review these exact move corrections first: ${weakLines}.` : "Import games to identify repeated decision mistakes.", percent(state.accuracy.opening)),
-      card("Middlegame", state.accuracy.middlegame < 73 ? "Pause on forcing moves, pawn breaks, and worst-piece improvement before committing." : "Maintain plan recognition with annotated game reviews.", percent(state.accuracy.middlegame)),
-      card("Endgame", state.accuracy.endgame < 80 ? "Prioritize king activity, rook activity, and pawn-race counting." : "Maintain two endgame sessions each week.", percent(state.accuracy.endgame)),
+      card("Opening", weakLines ? `Review these exact move corrections first: ${weakLines}.` : "Import games to identify repeated decision mistakes.", percent(accuracy.opening)),
+      card("Middlegame", accuracy.middlegame < 73 ? "Pause on forcing moves, pawn breaks, and worst-piece improvement before committing." : "Maintain plan recognition with annotated game reviews.", percent(accuracy.middlegame)),
+      card("Endgame", accuracy.endgame < 80 ? "Prioritize king activity, rook activity, and pawn-race counting." : "Maintain two endgame sessions each week.", percent(accuracy.endgame)),
       card("Tactics", recentWinRate < 52 ? "Do a short clean tactics block before playing, then review every loss immediately." : "Keep tactics short and daily; avoid exhausting calculation before games.", percent(recentWinRate)),
       card("Review priority", `${phases[0][0]} is the lowest phase. Pair it with the highest-priority exact position in your queue.`, "today"),
     ].join(""));
@@ -2149,6 +2354,8 @@
       lessons: state.lessons,
       importMeta: state.importMeta,
       analysisMeta: state.analysisMeta,
+      gameAnalysis: state.gameAnalysis,
+      gameAnalysisMeta: state.gameAnalysisMeta,
     };
     try {
       state.games = [...state.games, ...parsed].sort((a, b) => a.endTime - b.endTime);
@@ -2164,7 +2371,8 @@
         fingerprint: gameFingerprint(state.games),
       };
       markDataDirty();
-      await analyzeImportedPositions(options.signal, 20, 96);
+      await analyzeImportedPositions(options.signal, 20, 55);
+      await analyzeImportedAccuracy(options.signal, 56, 98);
       markDataDirty();
       save();
       renderAll();
@@ -2375,11 +2583,6 @@
         endgameAccuracy: num(data.get("endgame_accuracy")),
         notes: String(data.get("notes") || ""), nextWork: String(data.get("next_work") || ""),
       });
-      const latest = state.sessions.at(-1);
-      if (latest.accuracy) state.accuracy.average = latest.accuracy;
-      if (latest.openingAccuracy) state.accuracy.opening = latest.openingAccuracy;
-      if (latest.middlegameAccuracy) state.accuracy.middlegame = latest.middlegameAccuracy;
-      if (latest.endgameAccuracy) state.accuracy.endgame = latest.endgameAccuracy;
       save(); renderProgress(); event.currentTarget.reset();
       const dateInput = event.currentTarget.querySelector('[name="date"]'); if (dateInput) dateInput.value = today();
     });
@@ -2507,7 +2710,8 @@
     if (restored && state.games.length && !state.analysisMeta) {
       status(`Upgrading ${count(state.games.length)} cached games to exact-position lessons...`);
       try {
-        await analyzeImportedPositions(undefined, 5, 96);
+        await analyzeImportedPositions(undefined, 5, 45);
+        await analyzeImportedAccuracy(undefined, 46, 98);
         markDataDirty();
         save();
         await persistAnalysisCache();

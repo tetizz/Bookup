@@ -7,7 +7,7 @@
   <title>Bookup</title>
   <meta name="description" content="Bookup in the browser: import public games, find repeated best-move misses, train exact positions, generate theory, and review progress locally.">
   <link rel="preload" href="vendor/chess.min.js" as="script">
-  <link rel="stylesheet" href="styles.min.css?v=6">
+  <link rel="stylesheet" href="styles.min.css?v=7">
 </head>
 <body>
   <script>
@@ -237,7 +237,8 @@
             <div id="repertoireMapWhite" class="stack empty">No white repertoire positions yet.</div>
           </article>
           <article class="card">
-            <h3>Black repertoire</h3>
+            <h3>Your replies as Black</h3>
+            <p class="line-note">Grouped by the first move your opponent played.</p>
             <div id="repertoireMapBlack" class="stack empty">No black repertoire positions yet.</div>
           </article>
         </div>
@@ -264,11 +265,10 @@
 
     <section class="workspace-panel" data-tab-panel="stats">
       <section class="section-block progress-cockpit-section">
-        <div class="section-label">Progress Dashboard</div>
         <div class="progress-cockpit-head">
           <div>
-            <h2 class="section-title">Live ratings, goals, sessions, and what to study next</h2>
-            <p class="summary-copy">Your Chess.com progress sits beside Bookup’s prep tools, so each rating trend turns into a concrete training plan.</p>
+            <h2 class="section-title">Progress you can turn into training</h2>
+            <p class="summary-copy">Live results, locally measured move accuracy, and the exact phase that deserves your next review.</p>
           </div>
           <div class="progress-cockpit-actions">
             <div class="progress-mode-tabs" role="tablist" aria-label="Progress time control">
@@ -281,39 +281,78 @@
         </div>
         <div id="progressStatus" class="line-note">Progress tracker will load with your saved Chess.com username.</div>
         <div id="progressMetricGrid" class="progress-metric-grid-v2"></div>
-        <div class="progress-dashboard-grid">
-          <article class="card progress-chart-card">
-            <div class="rating-progress-head">
+        <div class="progress-primary-grid">
+          <article class="progress-data-panel progress-rating-panel">
+            <div class="progress-panel-head">
               <div>
-                <h3>Rating Over Time</h3>
-                <p class="summary-copy">Recent live games plus local session snapshots.</p>
+                <h3>Rating trajectory</h3>
+                <p id="progressRatingContext">Recent games, with dates and rating range.</p>
+              </div>
+              <span class="progress-source-tag">Chess.com public data</span>
+            </div>
+            <canvas id="progressRatingChart" class="progress-canvas progress-canvas-large" height="280"></canvas>
+          </article>
+          <article class="progress-data-panel progress-delta-panel">
+            <div class="progress-panel-head">
+              <div>
+                <h3 id="progressDeltaTitle">Rating change</h3>
+                <p id="progressDeltaContext">Daily snapshots when available, otherwise each imported game.</p>
               </div>
             </div>
-            <canvas id="progressRatingChart" class="progress-canvas" height="220"></canvas>
+            <canvas id="progressDeltaChart" class="progress-canvas progress-canvas-large" height="280"></canvas>
           </article>
-          <article class="card progress-chart-card">
-            <h3>Daily Gain/Loss</h3>
-            <canvas id="progressDeltaChart" class="progress-canvas" height="220"></canvas>
+        </div>
+
+        <section class="progress-accuracy-lab">
+          <div class="progress-panel-head">
+            <div>
+              <h3>Move accuracy lab</h3>
+              <p>Bookup compares each analyzed move with Stockfish. Book and engine-best moves score 100%.</p>
+            </div>
+            <span id="progressAccuracyMethod" class="progress-source-tag">Local analysis</span>
+          </div>
+          <details class="progress-method-note">
+            <summary>Scoring method</summary>
+            <p>Chess.com’s CAPS2 formula and phase boundaries are not public. Bookup uses Stockfish expected-points loss: Book and engine-best moves are 100%, then each remaining move is scored by how much winning expectation it gives away. Opening, middlegame, and endgame are separated with transparent move-count and material rules.</p>
+          </details>
+          <div id="progressAccuracySummary" class="progress-accuracy-summary"></div>
+          <div class="progress-accuracy-grid">
+            <article class="progress-data-panel">
+              <h4>Accuracy by phase</h4>
+              <div id="progressPhaseChart" class="progress-phase-bars"></div>
+            </article>
+            <article class="progress-data-panel">
+              <h4>Move feedback</h4>
+              <div id="progressClassificationPanel" class="progress-classification-list"></div>
+            </article>
+            <article class="progress-data-panel progress-plan-panel">
+              <h4>Weakness and next action</h4>
+              <div id="progressWeaknessPanel" class="stack empty">Analyze games to measure phase accuracy.</div>
+            </article>
+          </div>
+          <div class="progress-data-panel progress-game-analysis-panel">
+            <div class="progress-panel-head">
+              <div>
+                <h4>Recently analyzed games</h4>
+                <p>Overall and phase accuracy from your own moves.</p>
+              </div>
+            </div>
+            <div id="progressAnalyzedGames" class="progress-analysis-table empty">Import games to analyze recent play.</div>
+          </div>
+        </section>
+
+        <div class="progress-trend-grid">
+          <article class="progress-data-panel">
+            <h3>Games played</h3>
+            <canvas id="progressGamesChart" class="progress-canvas" height="190"></canvas>
           </article>
-          <article class="card progress-chart-card">
-            <h3>Games Played</h3>
-            <canvas id="progressGamesChart" class="progress-canvas" height="220"></canvas>
+          <article class="progress-data-panel">
+            <h3>Career win rate</h3>
+            <canvas id="progressWinRateChart" class="progress-canvas" height="190"></canvas>
           </article>
-          <article class="card progress-chart-card">
-            <h3>Win Rate</h3>
-            <canvas id="progressWinRateChart" class="progress-canvas" height="220"></canvas>
-          </article>
-          <article class="card progress-chart-card">
-            <h3>Accuracy Over Time</h3>
-            <canvas id="progressAccuracyChart" class="progress-canvas" height="220"></canvas>
-          </article>
-          <article class="card progress-chart-card">
-            <h3>Phase Accuracy Over Time</h3>
-            <canvas id="progressPhaseChart" class="progress-canvas" height="220"></canvas>
-          </article>
-          <article class="card progress-insight-card">
-            <h3>Weakness and Plan</h3>
-            <div id="progressWeaknessPanel" class="stack empty">Refresh progress to see weakness and phase accuracy.</div>
+          <article class="progress-data-panel">
+            <h3>Accuracy by game</h3>
+            <canvas id="progressAccuracyChart" class="progress-canvas" height="190"></canvas>
           </article>
         </div>
         <div class="progress-dashboard-grid lower">
@@ -761,7 +800,7 @@
   </main>
 
   <script defer src="vendor/chess.min.js"></script>
-  <script defer src="position-analysis.min.js?v=6"></script>
-  <script defer src="web-app.min.js?v=6"></script>
+  <script defer src="position-analysis.min.js?v=7"></script>
+  <script defer src="web-app.min.js?v=7"></script>
 </body>
 </html>
