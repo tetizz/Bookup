@@ -3853,7 +3853,12 @@ select:focus {
 
 .engine-arrow-line {
   mix-blend-mode: normal;
+  stroke: rgba(90, 176, 255, 0.82);
+  stroke-width: 10;
 }
+
+.engine-arrow-2 { opacity: 0.68; stroke-width: 8; }
+.engine-arrow-3 { opacity: 0.5; stroke-width: 7; }
 
 .threat-arrow-line {
   mix-blend-mode: normal;

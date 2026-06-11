@@ -268,19 +268,24 @@
     tree.root = root;
     const queue = [{ parentId: "root", fen: rootChess.fen(), ply: 0 }];
 
-    const analyze = async (fen, multiPv = 5) => {
-      const key = `smart-v2:${fenKey(fen)}:${multiPv}:${options.moveTimeMs || 180}`;
+    const analyze = async (fen, multiPv = 5, searchMove = "") => {
+      const key = `smart-v2:${fenKey(fen)}:${multiPv}:${options.moveTimeMs || 180}:${searchMove}`;
       const cached = await cacheGet(key);
       if (Array.isArray(cached) && cached.length) {
         cacheHits += 1;
         return cached;
       }
       engineCalls += 1;
-      const lines = await pool.analyze(fen, { multiPv, moveTimeMs: options.moveTimeMs || 180 });
+      const lines = await pool.analyze(fen, {
+        multiPv,
+        moveTimeMs: options.moveTimeMs || 180,
+        searchMove,
+      });
       await cacheSet(key, lines);
       return lines;
     };
 
+    let stopped = false;
     await pool.initialize();
     try {
       while (queue.length && nodes.length < options.maxPositions) {
@@ -303,7 +308,7 @@
         const bestUci = String(lines[0].pv?.[0] || "");
         const exactUci = sourceMoves.get(fenKey(chess.fen())) || "";
         const style = stylePriors.get(fenKey(chess.fen())) || [];
-        const styleUci = style[0]?.uci || "";
+        const styleUci = Number(style[0]?.weight || 0) >= Number(options.styleMinWeight || 1.2) ? style[0]?.uci || "" : "";
         const knownUci = exactUci || styleUci;
         const candidates = [];
 
@@ -315,28 +320,39 @@
           if (knownUci && legalMove(chess, knownUci)) {
             let knownLine = lines.find((line) => line.pv?.[0] === knownUci);
             if (!knownLine) {
-              const after = legalMove(chess, knownUci);
-              const replyLines = await analyze(after.fenAfter, 1);
-              const afterWhiteCp = whiteCp(replyLines[0], after.chess.turn());
-              knownLine = { scoreCp: turn === "w" ? afterWhiteCp : -afterWhiteCp, pv: [knownUci] };
+              knownLine = (await analyze(chess.fen(), 1, knownUci))[0] || null;
             }
-            const knownCp = whiteCp(knownLine, turn);
+            const knownCp = knownLine ? whiteCp(knownLine, turn) : beforeCp;
             const loss = moverLoss(beforeCp, knownCp, turn);
             classification = classifyLoss(loss);
-            if (["Best", "Excellent", "Good"].includes(classification)) {
+            const tolerance = exactUci
+              ? Number(options.followToleranceCp || 75)
+              : Number(options.styleToleranceCp || 60);
+            if (loss <= tolerance && ["Best", "Excellent", "Good"].includes(classification)) {
               chosen = knownLine;
               sourceLabel = exactUci
                 ? ({ saved_line: "My saved line", imported_game: "My imported game", my_repertoire: "My repertoire" }[context.type] || "My repertoire")
                 : "My repertoire";
             } else {
               sourceLabel = "Stockfish correction";
-              correction = { original: knownUci, corrected: bestUci, originalClass: classification, loss };
+              const originalSan = legalMove(chess, knownUci)?.move?.san || knownUci;
+              const correctedSan = legalMove(chess, bestUci)?.move?.san || bestUci;
+              correction = {
+                original: originalSan,
+                originalUci: knownUci,
+                corrected: correctedSan,
+                correctedUci: bestUci,
+                originalClass: classification,
+                loss,
+              };
               classification = "Best";
             }
           }
           candidates.push({ line: chosen, sourceLabel, classification, correction });
         } else {
-          const database = await options.databaseReplies?.(chess.fen()) || [];
+          const database = (await options.databaseReplies?.(chess.fen()) || [])
+            .slice()
+            .sort((left, right) => Number(right.games || 0) - Number(left.games || 0) || String(left.uci || "").localeCompare(String(right.uci || "")));
           const seen = new Set();
           if (options.includeBestEngineReplies !== false) {
             candidates.push({ line: lines[0], sourceLabel: "Opponent best engine reply", classification: "Best", isBest: true });
@@ -345,9 +361,11 @@
           for (const reply of database) {
             const uci = String(reply.uci || "");
             if (!uci || seen.has(uci) || !legalMove(chess, uci)) continue;
-            const line = lines.find((entry) => entry.pv?.[0] === uci) || { scoreCp: lines[0].scoreCp, pv: [uci] };
+            let line = lines.find((entry) => entry.pv?.[0] === uci) || null;
+            if (!line) line = (await analyze(chess.fen(), 1, uci))[0] || null;
+            if (!line) continue;
             const delta = Math.abs(Number(lines[0].scoreCp || 0) - Number(line.scoreCp || 0));
-            const classification = lines.includes(line) ? classifyLoss(delta) : "Sideline";
+            const classification = classifyLoss(delta);
             const allowed = ["Best", "Excellent", "Good", "Sideline"].includes(classification)
               || options.includeMistakes && ["Inaccuracy", "Mistake"].includes(classification)
               || options.includeBlunders && classification === "Blunder";
@@ -355,7 +373,45 @@
             candidates.push({ line, sourceLabel: "Opponent database reply", classification, database: reply });
             seen.add(uci);
           }
-          candidates.splice(options.opponentReplies);
+          const engineAlternatives = lines.slice(1).map((line) => {
+            const delta = Math.abs(Number(lines[0].scoreCp || 0) - Number(line.scoreCp || 0));
+            return { line, classification: classifyLoss(delta) };
+          });
+          const model = String(options.opponentModel || "mixed");
+          const modelAllows = (classification) => {
+            if (["Best", "Excellent", "Good"].includes(classification)) return true;
+            if (model === "grandmaster") return false;
+            if (classification === "Inaccuracy") return Boolean(options.includeMistakes) && model !== "strong_club";
+            if (classification === "Mistake") return Boolean(options.includeMistakes) && ["mixed", "club", "beginner_intermediate"].includes(model);
+            if (classification === "Blunder") return Boolean(options.includeBlunders) && ["mixed", "club", "beginner_intermediate"].includes(model);
+            return true;
+          };
+          for (const alternative of engineAlternatives) {
+            const uci = String(alternative.line.pv?.[0] || "");
+            if (!uci || seen.has(uci) || !modelAllows(alternative.classification)) continue;
+            candidates.push({
+              line: alternative.line,
+              sourceLabel: "Opponent best engine reply",
+              classification: alternative.classification,
+              isBest: false,
+            });
+            seen.add(uci);
+          }
+          if (!options.includeRare) {
+            candidates.sort((left, right) => Number(right.database?.games || 0) - Number(left.database?.games || 0));
+          }
+          if (!candidates.length) {
+            const fallback = chess.moves({ verbose: true })
+              .sort((left, right) => uciOf(left).localeCompare(uciOf(right)))[0];
+            if (fallback) {
+              candidates.push({
+                line: { scoreCp: lines[0]?.scoreCp || 0, pv: [uciOf(fallback)], fallback: true },
+                sourceLabel: "Fallback legal move",
+                classification: "Good",
+              });
+            }
+          }
+          candidates.splice(Number(options.opponentReplies || 4));
         }
 
         for (const candidate of candidates) {
@@ -405,7 +461,9 @@
             isBestEngineReply: Boolean(candidate.isBest),
             isCorrectedMove: Boolean(candidate.correction),
             originalUserMove: candidate.correction?.original || "",
-            correctedMove: candidate.correction?.corrected || "",
+            originalUserMoveUci: candidate.correction?.originalUci || "",
+            correctedMove: candidate.correction?.correctedUci || "",
+            correctedMoveSan: candidate.correction?.corrected || "",
             recommendedResponseUci: !isUser ? responseLine : "",
             recommendedResponseSan: !isUser ? response : "",
             theoryExplanation: explanation.summary,
@@ -429,12 +487,19 @@
         options.onProgress?.({ done: nodes.length, queued: queue.length, cacheHits, engineCalls, workers });
         if (nodes.length % 4 === 0) await sleep();
       }
+    } catch (error) {
+      if (error?.name === "AbortError" || signal?.aborted) {
+        stopped = true;
+        warnings.push("Generation stopped by the user; the validated partial tree was preserved.");
+      } else {
+        throw error;
+      }
     } finally {
       pool.close();
     }
     const payload = {
       schema_version: SCHEMA_VERSION,
-      status: signal?.aborted ? "stopped" : "complete",
+      status: stopped || signal?.aborted ? "stopped" : "complete",
       root_id: "root",
       start_fen: rootChess.fen(),
       effective_start_fen: rootChess.fen(),

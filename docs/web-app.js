@@ -30,9 +30,25 @@
       importAllGames: false,
       autoImportStartup: false,
     },
+    smartSettings: {
+      moveTime: 180,
+      replies: 5,
+      maxPly: 12,
+      maxPositions: 80,
+      followToleranceCp: 75,
+      styleToleranceCp: 60,
+      styleMinWeight: 1.2,
+      opponentModel: "mixed",
+      includeRare: true,
+      includeMistakes: true,
+      includeBlunders: false,
+      includeBestEngineReplies: true,
+      cacheEvals: true,
+    },
     stats: {},
     games: [],
     branches: [],
+    manualRepertoire: {},
     lessons: [],
     analysisMeta: null,
     gameAnalysis: [],
@@ -55,9 +71,11 @@
       mistakes: 0,
       boardNodes: new Map(),
       renderedOrientation: "",
+      detached: false,
     },
     database: null,
     cloud: null,
+    localEngineLines: [],
     smartTree: null,
     smartSelectedNodeId: "",
     smartController: null,
@@ -280,6 +298,7 @@
       username: state.username,
       mode: state.mode,
       settings: state.settings,
+      smartSettings: state.smartSettings,
       reviews: state.reviews,
       sessions: state.sessions,
       snapshots: state.snapshots.map((item) => ({ ...item })),
@@ -291,6 +310,7 @@
       branches: state.branches.slice(0, 180).map((branch) => ({
         id: branch.id,
         color: branch.color,
+        startFen: branch.startFen || "",
         moves: branch.moves,
         games: branch.games,
         wins: branch.wins,
@@ -301,6 +321,7 @@
         due: branch.due || today(),
         ease: branch.ease || 2.5,
       })),
+      manualRepertoire: state.manualRepertoire,
       stats: state.stats,
       lessons: state.lessons,
       analysisMeta: state.analysisMeta,
@@ -357,6 +378,7 @@
       if (data.username) state.username = String(data.username);
       if (MODES.includes(data.mode)) state.mode = data.mode;
       if (data.settings) state.settings = { ...state.settings, ...data.settings };
+      if (data.smartSettings) state.smartSettings = { ...state.smartSettings, ...data.smartSettings };
       if (Array.isArray(data.reviews)) state.reviews = data.reviews;
       if (Array.isArray(data.sessions)) state.sessions = data.sessions;
       if (Array.isArray(data.snapshots)) state.snapshots = data.snapshots;
@@ -366,6 +388,9 @@
       if (data.customGames) state.customGames = num(data.customGames, 538);
       if (["simple", "realistic"].includes(data.projectionMode)) state.projectionMode = data.projectionMode;
       if (Array.isArray(data.branches)) state.branches = data.branches;
+      if (data.manualRepertoire && typeof data.manualRepertoire === "object") {
+        state.manualRepertoire = data.manualRepertoire;
+      }
       if (Array.isArray(data.lessons)) state.lessons = data.lessons;
       if (data.analysisMeta) state.analysisMeta = data.analysisMeta;
       if (Array.isArray(data.gameAnalysis)) state.gameAnalysis = data.gameAnalysis;
@@ -1002,8 +1027,26 @@
     setHtml("firstMoveBlack", firstMove(black, "opponent") || "No games where you played Black yet.", !black.length);
     const whiteLessons = state.lessons.filter((lesson) => lesson.color === "white" && lessonNeedsWork(lesson));
     const blackLessons = state.lessons.filter((lesson) => lesson.color === "black" && lessonNeedsWork(lesson));
-    setHtml("repertoireMapWhite", whiteLessons.slice(0, 30).map((lesson) => lessonCard(lesson)).join("") || "No repeated white mistakes were found.", !whiteLessons.length);
-    setHtml("repertoireMapBlack", blackLessons.slice(0, 30).map((lesson) => lessonCard(lesson)).join("") || "No repeated black mistakes were found.", !blackLessons.length);
+    const manualCards = (color) => Object.values(state.manualRepertoire || {})
+      .filter((entry) => (entry.playerColor || "white") === color)
+      .map((entry) => card(
+        entry.san || entry.uci,
+        `Saved for this exact position.<br><span class="mono-inline">${escapeHtml(entry.fen)}</span>`,
+        "manual repertoire",
+        `<button class="ghost-btn" data-open-manual="${escapeHtml(entry.id)}" type="button">Train position</button>`
+      ));
+    const whiteCards = [
+      ...manualCards("white"),
+      ...white.slice(0, 24).map((branch) => branchCard(branch, branch._index)),
+      ...whiteLessons.slice(0, 12).map((lesson) => lessonCard(lesson)),
+    ];
+    const blackCards = [
+      ...manualCards("black"),
+      ...black.slice(0, 24).map((branch) => branchCard(branch, branch._index)),
+      ...blackLessons.slice(0, 12).map((lesson) => lessonCard(lesson)),
+    ];
+    setHtml("repertoireMapWhite", whiteCards.join("") || "No saved or imported White repertoire lines were found.", !whiteCards.length);
+    setHtml("repertoireMapBlack", blackCards.join("") || "No saved or imported Black repertoire lines were found.", !blackCards.length);
     const preview = state.selectedLesson || [...whiteLessons, ...blackLessons].sort((a, b) => b.priority - a.priority)[0];
     setHtml("previewPanel", preview ? lessonCard(preview) : "No exact-position lesson is available to preview.", !preview);
     const knownIds = new Set(state.reviews.filter((item) => item.result === "known" && item.lessonId).map((item) => item.lessonId));
@@ -1549,9 +1592,61 @@
     setHtml("studyMoveTrail", history.length ? history.map((move, index) =>
       `<span>${index % 2 === 0 ? `${Math.floor(index / 2) + 1}. ` : ""}${escapeHtml(move)}</span>`
     ).join(" ") : "No moves played from this decision position yet.", !history.length);
+    renderTrainerArrows();
+  }
+
+  function trainerUserTurn() {
+    const color = state.selectedLesson?.color || state.selectedBranch?.color || state.trainer.orientation || "white";
+    return color === "black" ? "b" : "w";
+  }
+
+  function squareCenter(square) {
+    const board = $("board");
+    const node = state.trainer.boardNodes.get(square);
+    if (!board || !node) return null;
+    const boardRect = board.getBoundingClientRect();
+    const squareRect = node.getBoundingClientRect();
+    return {
+      x: squareRect.left - boardRect.left + squareRect.width / 2,
+      y: squareRect.top - boardRect.top + squareRect.height / 2,
+    };
+  }
+
+  function renderTrainerArrows() {
+    const layer = $("boardArrows");
+    const board = $("board");
+    if (!layer || !board) return;
+    const candidates = (state.localEngineLines || []).slice(0, 3)
+      .map((line) => String(line?.pv?.[0] || ""))
+      .filter((uci) => uci.length >= 4);
+    if (!candidates.length || !board.offsetWidth || !board.offsetHeight) {
+      layer.replaceChildren();
+      return;
+    }
+    const arrows = candidates.map((uci, index) => {
+      const from = squareCenter(uci.slice(0, 2));
+      const to = squareCenter(uci.slice(2, 4));
+      if (!from || !to) return "";
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const length = Math.hypot(dx, dy);
+      if (!length) return "";
+      const trim = Math.min(20, length * 0.18);
+      const x2 = to.x - (dx / length) * trim;
+      const y2 = to.y - (dy / length) * trim;
+      return `<line x1="${from.x.toFixed(1)}" y1="${from.y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="board-arrow-line engine-arrow-line engine-arrow-${index + 1}" marker-end="url(#webEngineArrow)"/>`;
+    }).join("");
+    layer.innerHTML = `<svg class="board-arrow-svg" viewBox="0 0 ${board.offsetWidth} ${board.offsetHeight}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><marker id="webEngineArrow" markerWidth="16" markerHeight="16" refX="13" refY="8" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L16,8 L0,16 L4,8 Z" fill="rgba(90,176,255,.92)"></path></marker></defs>
+      ${arrows}
+    </svg>`;
   }
 
   function cloudCp() {
+    const localCp = state.localEngineLines?.[0]?.scoreCp;
+    if (Number.isFinite(localCp)) {
+      return state.trainer.chess.turn() === "w" ? localCp : -localCp;
+    }
     const cp = state.cloud?.pvs?.[0]?.cp;
     const mate = state.cloud?.pvs?.[0]?.mate;
     if (Number.isFinite(cp)) return cp;
@@ -1560,6 +1655,11 @@
   }
 
   function cloudScore() {
+    const local = state.localEngineLines?.[0];
+    if (local) {
+      const cp = state.trainer.chess.turn() === "w" ? num(local.scoreCp) : -num(local.scoreCp);
+      return `${cp >= 0 ? "+" : ""}${(cp / 100).toFixed(2)}`;
+    }
     const pv = state.cloud?.pvs?.[0];
     if (!pv) return "+0.00";
     if (Number.isFinite(pv.mate)) return `#${pv.mate}`;
@@ -1577,17 +1677,23 @@
     state.trainer.orientation = branch.color;
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
+    state.trainer.detached = false;
     state.cloud = null;
+    state.localEngineLines = [];
     state.database = null;
     setText("boardTitle", branch.moves.slice(0, 6).join(" "));
     setText("boardSummary", `Train this ${branch.color} branch from the beginning. Bookup checks legal moves and the imported continuation.`);
     setText("boardLine", branch.moves.join(" "));
-    setText("trainerFeedback", `Your expected first move is ${branch.moves[0]}.`);
+    const firstUserMove = branch.moves.find((_, ply) => ply % 2 === (branch.color === "black" ? 1 : 0));
+    setText("trainerFeedback", `Your expected first move is ${firstUserMove || branch.moves[0]}.`);
     setText("trainerDecision", "Choose a legal piece, then choose its destination.");
     setText("trainerCoach", "Your move is compared with the imported repertoire. Opponent moves are replayed automatically.");
     markTabsDirty("trainer");
     activateTab("trainer");
     requestPositionData();
+    if (state.trainer.chess.turn() !== trainerUserTurn()) {
+      window.setTimeout(playOpponentMoves, 180);
+    }
   }
 
   function openLesson(lessonId) {
@@ -1600,7 +1706,9 @@
     state.trainer.orientation = lesson.color;
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
+    state.trainer.detached = false;
     state.cloud = null;
+    state.localEngineLines = [];
     state.database = null;
     setText("boardTitle", lesson.openingName || lesson.lineLabel || "Exact decision position");
     const needsCorrection = ["inaccuracy", "mistake", "blunder"].includes(String(lesson.classification?.key || "").toLowerCase());
@@ -1624,6 +1732,58 @@
     requestPositionData();
   }
 
+  function openManualRepertoire(entryId) {
+    const entry = Object.values(state.manualRepertoire || {}).find((item) => String(item.id) === String(entryId));
+    if (!entry?.fen || !entry?.uci) return;
+    const probe = new Chess(entry.fen);
+    const move = probe.move({
+      from: entry.uci.slice(0, 2),
+      to: entry.uci.slice(2, 4),
+      promotion: entry.uci.slice(4, 5) || "q",
+    });
+    if (!move) {
+      status("That saved repertoire move is no longer legal and was skipped.", "error");
+      return;
+    }
+    const lesson = {
+      lessonId: entry.id,
+      decisionFen: entry.fen,
+      color: entry.playerColor || "white",
+      openingName: "Saved repertoire position",
+      lineLabel: "Manual repertoire",
+      yourRepeatedMove: move.san,
+      recommendedMove: move.san,
+      recommendedMoveUci: entry.uci,
+      trainingLineUci: [entry.uci],
+      continuationSan: move.san,
+      classification: { key: "best", label: "Saved" },
+      repeatMistakeCount: 0,
+      frequency: 1,
+      confidence: 100,
+      lineStatus: "new",
+    };
+    state.selectedLesson = lesson;
+    state.selectedBranch = null;
+    state.trainer.chess = new Chess(entry.fen);
+    state.trainer.selected = "";
+    state.trainer.orientation = lesson.color;
+    state.trainer.cursor = 0;
+    state.trainer.mistakes = 0;
+    state.trainer.detached = false;
+    state.cloud = null;
+    state.localEngineLines = [];
+    state.database = null;
+    setText("boardTitle", "Saved repertoire position");
+    setText("boardSummary", `Play ${move.san} from the exact position where you saved it.`);
+    setText("boardLine", move.san);
+    setText("trainerFeedback", `Find your saved move ${move.san}.`);
+    setText("trainerDecision", `You are ${lesson.color}. Play the saved repertoire move.`);
+    setText("trainerCoach", "This exact-position choice is included in future Smart Theory style decisions.");
+    markTabsDirty("trainer");
+    activateTab("trainer");
+    requestPositionData();
+  }
+
   function moveMatchesUci(move, uci) {
     return Boolean(move && uci && `${move.from}${move.to}${move.promotion || ""}` === uci);
   }
@@ -1631,6 +1791,10 @@
   function clickSquare(square) {
     const chess = state.trainer.chess;
     const selected = state.trainer.selected;
+    if (chess.turn() !== trainerUserTurn()) {
+      setText("trainerDecision", "Bookup is choosing the opponent reply.");
+      return;
+    }
     if (!selected) {
       const piece = chess.get(square);
       if (piece && piece.color === chess.turn()) {
@@ -1687,6 +1851,15 @@
       return;
     }
     const branch = state.selectedBranch;
+    if (state.trainer.detached) {
+      setText("studyMoveMeta", "Live continuation");
+      setHtml("studyMoveClassifications", card(move.san, "This legal move is being evaluated from the current board. Bookup will answer with a practical legal reply.", "live analysis"));
+      setText("trainerFeedback", `${move.san} played. Evaluating the opponent's reply...`);
+      renderBoard();
+      requestPositionData();
+      window.setTimeout(() => { void playPracticalOpponentReply(); }, 180);
+      return;
+    }
     const expected = branch?.moves[state.trainer.cursor];
     const correct = !expected || move.san === expected || move.san.replace(/[+#]/g, "") === expected.replace(/[+#]/g, "");
     if (!correct) state.trainer.mistakes += 1;
@@ -1695,8 +1868,12 @@
     state.trainer.cursor += 1;
     if (branch && state.trainer.cursor >= branch.moves.length) {
       finishTrainer(correct && state.trainer.mistakes === 0);
+    } else if (!correct) {
+      state.trainer.detached = true;
+      setText("trainerFeedback", `${move.san} leaves the stored line. Bookup switched to live legal replies from this exact position.`);
+      window.setTimeout(() => { void playPracticalOpponentReply(); }, 180);
     } else {
-      setText("trainerFeedback", correct ? `Correct: ${move.san}.` : `${move.san} is legal, but the imported continuation was ${expected}.`);
+      setText("trainerFeedback", `Correct: ${move.san}.`);
       window.setTimeout(playOpponentMoves, 260);
     }
     renderBoard();
@@ -1744,6 +1921,55 @@
     }
     if (state.trainer.cursor >= branch.moves.length) finishTrainer(state.trainer.mistakes === 0);
     else setText("trainerDecision", `Your move. Imported continuation: ${branch.moves[state.trainer.cursor]}.`);
+    renderBoard();
+    requestPositionData();
+  }
+
+  async function playPracticalOpponentReply() {
+    if (!state.selectedBranch || !state.trainer.detached) return;
+    if (state.trainer.chess.turn() === trainerUserTurn()) return;
+    const fen = state.trainer.chess.fen();
+    setText("trainerDecision", "Bookup is choosing a practical reply from the live position.");
+    let choice = null;
+    try {
+      const local = await positionData(fen);
+      const candidate = (local.moves || []).find((item) => item.uci || item.san);
+      if (candidate) {
+        const probe = new Chess(fen);
+        const move = candidate.uci
+          ? probe.move({ from: candidate.uci.slice(0, 2), to: candidate.uci.slice(2, 4), promotion: candidate.uci.slice(4, 5) || "q" })
+          : probe.move(candidate.san, { sloppy: true });
+        if (move) choice = { uci: `${move.from}${move.to}${move.promotion || ""}`, source: "your imported games" };
+      }
+      if (!choice) {
+        const lines = await localEngineAnalysis(fen, 3, 180);
+        const uci = String(lines[0]?.pv?.[0] || "");
+        if (uci) choice = { uci, source: "local Stockfish" };
+      }
+    } catch {
+      choice = null;
+    }
+    if (fen !== state.trainer.chess.fen() || state.trainer.chess.turn() === trainerUserTurn()) return;
+    let reply = null;
+    if (choice?.uci) {
+      reply = state.trainer.chess.move({
+        from: choice.uci.slice(0, 2),
+        to: choice.uci.slice(2, 4),
+        promotion: choice.uci.slice(4, 5) || "q",
+      });
+    }
+    if (!reply) {
+      const legal = state.trainer.chess.moves({ verbose: true })
+        .sort((left, right) => `${left.from}${left.to}`.localeCompare(`${right.from}${right.to}`));
+      if (legal[0]) reply = state.trainer.chess.move(legal[0]);
+      choice = { source: "deterministic legal fallback" };
+    }
+    if (!reply) {
+      setText("trainerDecision", "No legal opponent reply is available.");
+      return;
+    }
+    setText("trainerFeedback", `${reply.san} played from ${choice.source}. Continue from the live board.`);
+    setText("trainerDecision", "Your move. Bookup will classify it and keep the board synchronized.");
     renderBoard();
     requestPositionData();
   }
@@ -1822,6 +2048,28 @@
         if (!chess.move(san, { sloppy: true })) break;
       }
     }
+    Object.values(state.manualRepertoire || {}).forEach((entry) => {
+      if (!entry?.fen || !entry?.uci) return;
+      const chess = new Chess(entry.fen);
+      const move = chess.move({
+        from: entry.uci.slice(0, 2),
+        to: entry.uci.slice(2, 4),
+        promotion: entry.uci.slice(4, 5) || "q",
+      });
+      if (!move) return;
+      const key = fenKey(entry.fen);
+      if (!positions.has(key)) positions.set(key, { source: "local", white: 0, draws: 0, black: 0, moveMap: new Map() });
+      const position = positions.get(key);
+      position.moveMap.set(move.san, {
+        san: move.san,
+        uci: entry.uci,
+        white: 0,
+        draws: 1,
+        black: 0,
+        source: "manual repertoire",
+      });
+      position.draws += 1;
+    });
     positions.forEach((position) => {
       position.moves = [...position.moveMap.values()].sort((a, b) => (b.white + b.draws + b.black) - (a.white + a.draws + a.black));
       delete position.moveMap;
@@ -1871,6 +2119,23 @@
     , 7 * 24 * 60 * 60 * 1000);
   }
 
+  async function localEngineAnalysis(fen, multiPv = 3, moveTimeMs = 180) {
+    const key = `trainer-stockfish18:${fenKey(fen)}:${multiPv}:${moveTimeMs}`;
+    const cached = await readAnalysisCache(key, 90 * 24 * 60 * 60 * 1000).catch(() => null);
+    if (Array.isArray(cached) && cached.length) return cached;
+    const Engine = window.BookupPositionAnalysis?.BrowserStockfish;
+    if (!Engine) return [];
+    const engine = new Engine("./vendor/stockfish/stockfish-18-lite-single.js");
+    try {
+      await engine.initialize();
+      const lines = await engine.analyze(fen, { multiPv, moveTimeMs });
+      writeAnalysisCache(key, lines).catch(() => {});
+      return lines;
+    } finally {
+      engine.close();
+    }
+  }
+
   async function fetchExplorerSource(fen, token) {
     const url = `https://explorer.lichess.org/lichess?variant=standard&speeds=bullet,blitz,rapid,classical&ratings=1000,1200,1400,1600,1800,2000,2200,2500&fen=${encodeURIComponent(fen)}`;
     const key = `explorer:lichess:${fenKey(fen)}`;
@@ -1916,11 +2181,14 @@
     setText("studyAnalysisMeta", "Public cloud");
     setHtml("studyPositionLinks", `<a class="ghost-btn" href="https://lichess.org/analysis/standard/${escapeHtml(fen.replaceAll(" ", "_"))}" target="_blank" rel="noopener">Open position in Lichess</a>`);
     state.database = localPositionData(fen);
-    const [cloudResult, explorerResult] = await Promise.allSettled([
+    setHtml("trainerInsight", "Analyzing the exact position with local Stockfish...", true);
+    const [localEngineResult, cloudResult, explorerResult] = await Promise.allSettled([
+      localEngineAnalysis(fen, 3, 180),
       fetchCloud(fen, 3),
       fetchExplorer(fen),
     ]);
     if (requestId !== state.positionRequestId || fen !== state.trainer.chess.fen()) return;
+    state.localEngineLines = localEngineResult.status === "fulfilled" ? localEngineResult.value : [];
     state.cloud = cloudResult.status === "fulfilled" ? cloudResult.value : null;
     if (explorerResult.status === "fulfilled" && explorerResult.value) state.database = explorerResult.value;
     renderPositionData();
@@ -1942,16 +2210,35 @@
       setText("studyDatabaseMeta", "Unavailable");
       setHtml("studyDatabaseMoves", "Database unavailable or this position has no indexed games.", true);
     }
+    const localLines = state.localEngineLines || [];
     const cloud = state.cloud;
-    if (cloud?.pvs?.length) {
-      setText("studyAnalysisMeta", `Depth ${cloud.depth || "?"} · ${cloud.pvs.length} PV`);
+    if (localLines.length) {
+      setText("studyAnalysisMeta", `Local Stockfish · ${localLines.length} PV`);
+      setText("studyEvalCaption", "Local browser Stockfish");
+      setHtml("studyEngineLines", localLines.map((line, index) => {
+        const probe = new Chess(state.trainer.chess.fen());
+        const uci = String(line.pv?.[0] || "");
+        const move = uci ? probe.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || "q" }) : null;
+        return card(`#${index + 1} ${move?.san || uci}`, `${num(line.scoreCp) >= 0 ? "+" : ""}${(num(line.scoreCp) / 100).toFixed(2)} · ${(line.pv || []).join(" ")}`, "local Stockfish");
+      }).join(""));
+      const top = localLines[0];
+      const topUci = String(top?.pv?.[0] || "");
+      const topProbe = new Chess(state.trainer.chess.fen());
+      const topMove = topUci ? topProbe.move({ from: topUci.slice(0, 2), to: topUci.slice(2, 4), promotion: topUci.slice(4, 5) || "q" }) : null;
+      const databaseMoves = (db?.moves || []).slice(0, 3).map((item) => item.san || item.uci).filter(Boolean);
+      setHtml("trainerInsight", `<div class="trainer-live-reaction"><div class="trainer-live-facts"><span>Engine: <strong>${escapeHtml(topMove?.san || topUci || "No move")}</strong></span>${databaseMoves.length ? `<span>Database: ${databaseMoves.map(escapeHtml).join(" / ")}</span>` : ""}<span>Blue arrows show the top legal Stockfish candidates from this exact board.</span></div></div>`);
+    } else if (cloud?.pvs?.length) {
+      setText("studyAnalysisMeta", `Cloud depth ${cloud.depth || "?"} · ${cloud.pvs.length} PV`);
       setText("studyEvalCaption", "Lichess cloud evaluation");
       setHtml("studyEngineLines", cloud.pvs.map((pv, index) => card(`#${index + 1} ${Number.isFinite(pv.mate) ? `#${pv.mate}` : `${num(pv.cp) >= 0 ? "+" : ""}${(num(pv.cp) / 100).toFixed(2)}`}`, escapeHtml(pv.moves || ""), "cloud PV")).join(""));
+      setHtml("trainerInsight", "Local engine analysis was unavailable; showing public cloud analysis.", true);
     } else {
       setText("studyAnalysisMeta", "No cached cloud analysis");
       setText("studyEvalCaption", "No public cloud evaluation");
       setHtml("studyEngineLines", "This position is not currently available in the public cloud cache.", true);
+      setHtml("trainerInsight", "No engine result is available for this position. Legal board play and imported database moves still work.", true);
     }
+    renderTrainerArrows();
   }
 
   function renderQueue() {
@@ -1999,14 +2286,25 @@
       moves_uci: sansToUci(game.moves, game.headers?.FEN || new Chess().fen()),
       player_color: game.color || "white",
     }));
-    if (type === "my_repertoire") return state.branches.map((branch, index) => ({
-      id: String(branch.id || `branch-${index}`),
-      label: `${branch.color} · ${branch.moves.slice(0, 5).join(" ")}`,
-      detail: `${branch.games || 0} imported games`,
-      fen: new Chess().fen(),
-      moves_uci: sansToUci(branch.moves),
-      player_color: branch.color || "white",
-    }));
+    if (type === "my_repertoire") {
+      const imported = state.branches.map((branch, index) => ({
+        id: String(branch.id || `branch-${index}`),
+        label: `${branch.color} · ${branch.moves.slice(0, 5).join(" ")}`,
+        detail: `${branch.games || 0} imported games`,
+        fen: branch.startFen || new Chess().fen(),
+        moves_uci: sansToUci(branch.moves, branch.startFen || new Chess().fen()),
+        player_color: branch.color || "white",
+      }));
+      const manual = Object.entries(state.manualRepertoire || {}).map(([positionKey, entry], index) => ({
+        id: String(entry.id || `manual-${index}-${positionKey}`),
+        label: `${entry.playerColor || "white"} · ${entry.san || entry.uci}`,
+        detail: "Saved exact-position correction",
+        fen: entry.fen,
+        moves_uci: [entry.uci],
+        player_color: entry.playerColor || "white",
+      }));
+      return [...manual, ...imported];
+    }
     return [];
   }
 
@@ -2072,6 +2370,11 @@
     previewSmartSource();
   }
 
+  function setSmartTheoryRunning(running) {
+    if ($("smartTheoryGenerateBtn")) $("smartTheoryGenerateBtn").disabled = running;
+    if ($("smartTheoryStopBtn")) $("smartTheoryStopBtn").disabled = !running;
+  }
+
   function smartStylePriors() {
     const map = new Map();
     state.games.forEach((game) => {
@@ -2091,11 +2394,24 @@
         map.set(before, list);
       });
     });
+    Object.values(state.manualRepertoire || {}).forEach((entry) => {
+      if (!entry?.fen || !entry?.uci) return;
+      const key = fenKey(entry.fen);
+      const list = map.get(key) || [];
+      const found = list.find((item) => item.uci === entry.uci);
+      if (found) found.weight += 8;
+      else list.push({ uci: entry.uci, weight: 8 });
+      list.sort((a, b) => b.weight - a.weight || a.uci.localeCompare(b.uci));
+      map.set(key, list);
+    });
     return map;
   }
 
-  function smartCacheKey(source, settings) {
-    const text = JSON.stringify({ schema: 2, source, settings });
+  function smartCacheKey(source, settings, stylePriors = new Map()) {
+    const style = [...stylePriors.entries()]
+      .map(([fen, moves]) => [fen, (moves || []).map((move) => [move.uci, move.weight])])
+      .sort((left, right) => left[0].localeCompare(right[0]));
+    const text = JSON.stringify({ schema: 2, source, settings, style });
     let hash = 2166136261;
     for (let index = 0; index < text.length; index += 1) {
       hash ^= text.charCodeAt(index);
@@ -2116,9 +2432,14 @@
       includeMistakes: Boolean($("smartTheoryIncludeMistakes")?.checked),
       includeBlunders: Boolean($("smartTheoryIncludeBlunders")?.checked),
       includeBestEngineReplies: Boolean($("smartTheoryIncludeBestEngineReplies")?.checked),
-      moveTimeMs: 180,
+      followToleranceCp: clamp(num($("smartTheoryFollowToleranceCp")?.value, 75), 10, 300),
+      styleToleranceCp: clamp(num($("smartTheoryStyleToleranceCp")?.value, 60), 10, 300),
+      styleMinWeight: clamp(num($("smartTheoryStyleMinWeight")?.value, 1.2), 0.2, 8),
+      cacheEvals: Boolean($("smartTheoryCacheEvals")?.checked),
+      moveTimeMs: clamp(num($("smartTheoryMoveTime")?.value, 180), 60, 2000),
     };
-    const key = smartCacheKey(source, settings);
+    const stylePriors = smartStylePriors();
+    const key = smartCacheKey(source, settings, stylePriors);
     const cached = await readSmartTheoryCache(key).catch(() => null);
     if (cached) {
       state.smartTree = (await engine.validateTree(cached)).tree;
@@ -2131,32 +2452,38 @@
     state.smartController?.abort();
     state.smartController = new AbortController();
     state.smartStop = false;
+    setSmartTheoryRunning(true);
     setText("smartTheoryStatus", "Generating");
     setText("smartTheoryProgress", "Starting browser Stockfish workers...");
-    state.smartTree = await engine.generate({
-      source,
-      ...settings,
-      stylePriors: smartStylePriors(),
-      signal: state.smartController.signal,
-      includeRare: Boolean($("smartTheoryIncludeRare")?.checked),
-      cacheGet: (cacheKey) => readAnalysisCache(cacheKey, 180 * 24 * 60 * 60 * 1000).catch(() => null),
-      cacheSet: (cacheKey, payload) => writeAnalysisCache(cacheKey, payload).catch(() => {}),
-      databaseReplies: async (fen) => {
-        try {
-          const payload = await positionData(fen);
-          return (payload.moves || []).map((move) => ({
-            uci: move.uci,
-            san: move.san,
-            games: num(move.white) + num(move.draws) + num(move.black),
-          }));
-        } catch {
-          return [];
-        }
-      },
-      onProgress: ({ done, queued, cacheHits, engineCalls, workers }) => {
-        setText("smartTheoryProgress", `${done} nodes · ${queued} queued · ${workers} worker${workers === 1 ? "" : "s"} · ${cacheHits} cache hits · ${engineCalls} engine calls`);
-      },
-    });
+    try {
+      state.smartTree = await engine.generate({
+        source,
+        ...settings,
+        stylePriors,
+        signal: state.smartController.signal,
+        includeRare: Boolean($("smartTheoryIncludeRare")?.checked),
+        cacheGet: (cacheKey) => settings.cacheEvals ? readAnalysisCache(cacheKey, 180 * 24 * 60 * 60 * 1000).catch(() => null) : null,
+        cacheSet: (cacheKey, payload) => settings.cacheEvals ? writeAnalysisCache(cacheKey, payload).catch(() => {}) : null,
+        databaseReplies: async (fen) => {
+          try {
+            const payload = await positionData(fen);
+            return (payload.moves || []).map((move) => ({
+              uci: move.uci,
+              san: move.san,
+              games: num(move.white) + num(move.draws) + num(move.black),
+            }));
+          } catch {
+            return [];
+          }
+        },
+        onProgress: ({ done, queued, cacheHits, engineCalls, workers }) => {
+          setText("smartTheoryProgress", `${done} nodes · ${queued} queued · ${workers} worker${workers === 1 ? "" : "s"} · ${cacheHits} cache hits · ${engineCalls} engine calls`);
+        },
+      });
+    } finally {
+      state.smartController = null;
+      setSmartTheoryRunning(false);
+    }
     state.smartSelectedNodeId = state.smartTree.root_id;
     await writeSmartTheoryCache(key, state.smartTree).catch(() => {});
     setText("smartTheoryStatus", state.smartTree.status === "stopped" ? "Stopped" : "Complete");
@@ -2202,7 +2529,7 @@
     setHtml("smartTheoryCurrentMeta", `<strong>${escapeHtml(node.san || "(root position)")}</strong><span>${escapeHtml(source)} · ${escapeHtml(node.classification || "Root")}</span>`);
     setHtml("smartTheoryMoveList", smartPath(node).map((item) => escapeHtml(item.san)).join(" ") || "Root position.", !node.parentId);
     setHtml("smartTheoryOpeningMeta", `<strong>Exact FEN</strong><span class="mono-inline">${escapeHtml(node.fenAfter || node.fen)}</span>`);
-    setHtml("smartTheoryRecommendation", `<strong>${escapeHtml(node.bestMoveSan || node.san || "Position ready")}</strong><span>${escapeHtml(source)}</span>${node.correctedMove ? `<small>${escapeHtml(node.originalUserMove)} → ${escapeHtml(node.correctedMove)}</small>` : ""}`);
+    setHtml("smartTheoryRecommendation", `<strong>${escapeHtml(node.bestMoveSan || node.san || "Position ready")}</strong><span>${escapeHtml(source)}</span>${node.correctedMove ? `<small>${escapeHtml(node.originalUserMove)} → ${escapeHtml(node.correctedMoveSan || node.correctedMove)}</small>` : ""}`);
     const explanation = node.explanation || {};
     setHtml("smartTheoryExplanation", `<strong>${escapeHtml(explanation.summary || "Selected starting position.")}</strong>${explanation.why ? `<p>${escapeHtml(explanation.why)}</p>` : ""}${explanation.threat ? `<p><b>Threat:</b> ${escapeHtml(explanation.threat)}</p>` : ""}${explanation.response ? `<p><b>Response:</b> ${escapeHtml(explanation.response)}</p>` : ""}${explanation.plan ? `<p><b>Plan:</b> ${escapeHtml(explanation.plan)}</p>` : ""}`);
     const children = (node.children || []).map((id) => byId.get(String(id))).filter(Boolean);
@@ -2414,6 +2741,8 @@
       if (lessonButton) openLesson(lessonButton.dataset.openLesson);
       const branchButton = event.target.closest("[data-open-branch]");
       if (branchButton) openBranch(branchButton.dataset.openBranch);
+      const manualButton = event.target.closest("[data-open-manual]");
+      if (manualButton) openManualRepertoire(manualButton.dataset.openManual);
       const square = event.target.closest("[data-square]");
       if (square) clickSquare(square.dataset.square);
     });
@@ -2469,7 +2798,9 @@
       } catch (error) { setText("chessnutImportStatus", error.message); }
     });
     $("trainerResetBtn")?.addEventListener("click", () => {
-      if (state.selectedLesson) openLesson(state.selectedLesson.lessonId);
+      if (state.selectedLesson && state.manualRepertoire[fenKey(state.selectedLesson.decisionFen)]?.id === state.selectedLesson.lessonId) {
+        openManualRepertoire(state.selectedLesson.lessonId);
+      } else if (state.selectedLesson) openLesson(state.selectedLesson.lessonId);
       else if (state.selectedBranch) openBranch(state.branches.indexOf(state.selectedBranch));
     });
     $("trainerNextBtn")?.addEventListener("click", () => {
@@ -2486,16 +2817,26 @@
     });
     qsa("[data-smart-preset]").forEach((button) => button.addEventListener("click", () => {
       const presets = {
-        balanced: { replies: 4, ply: 12, positions: 80, opponent: "mixed" },
-        fast: { replies: 2, ply: 8, positions: 30, opponent: "club" },
-        deep: { replies: 6, ply: 18, positions: 180, opponent: "grandmaster" },
-        realistic: { replies: 6, ply: 14, positions: 120, opponent: "mixed" },
+        balanced: { replies: 4, ply: 12, positions: 80, opponent: "mixed", moveTime: 180 },
+        fast: { replies: 2, ply: 8, positions: 30, opponent: "club", moveTime: 100 },
+        deep: { replies: 6, ply: 18, positions: 180, opponent: "grandmaster", moveTime: 700 },
+        realistic: { replies: 6, ply: 14, positions: 120, opponent: "mixed", moveTime: 350 },
       };
       const preset = presets[button.dataset.smartPreset] || presets.balanced;
       if ($("smartTheoryReplies")) $("smartTheoryReplies").value = preset.replies;
       if ($("smartTheoryMaxPly")) $("smartTheoryMaxPly").value = preset.ply;
       if ($("smartTheoryMaxPositions")) $("smartTheoryMaxPositions").value = preset.positions;
       if ($("smartTheoryOpponentAccuracy")) $("smartTheoryOpponentAccuracy").value = preset.opponent;
+      if ($("smartTheoryMoveTime")) $("smartTheoryMoveTime").value = preset.moveTime;
+      state.smartSettings = {
+        ...state.smartSettings,
+        replies: preset.replies,
+        maxPly: preset.ply,
+        maxPositions: preset.positions,
+        opponentModel: preset.opponent,
+        moveTime: preset.moveTime,
+      };
+      save();
       qsa("[data-smart-preset]").forEach((item) => item.classList.toggle("active", item === button));
       setText("smartTheoryProgress", `${button.textContent.trim()} preset applied.`);
     }));
@@ -2510,12 +2851,18 @@
     $("smartTheorySourcePicker")?.addEventListener("change", clearSmartTheoryResult);
     $("smartTheoryClearBtn")?.addEventListener("click", clearSmartTheoryResult);
     $("smartTheoryExportBtn")?.addEventListener("click", () => {
-      if (!state.smartTree) return;
+      if (!state.smartTree) {
+        setText("smartTheoryProgress", "Generate or import a Smart Theory tree before exporting JSON.");
+        return;
+      }
       download("bookup-smart-theory.json", JSON.stringify(state.smartTree, null, 2), "application/json");
+      setText("smartTheoryProgress", `Exported ${state.smartTree.nodes.length} validated nodes as JSON.`);
     });
     $("smartTheoryImportInput")?.addEventListener("change", async (event) => {
       try {
-        const imported = JSON.parse(await event.target.files[0].text());
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const imported = JSON.parse(await file.text());
         const validated = await window.BookupSmartTheory.validateTree(imported);
         state.smartTree = validated.tree;
         state.smartSelectedNodeId = state.smartTree.root_id;
@@ -2544,10 +2891,21 @@
       const base = new Chess(node.fenBefore || state.smartTree.start_fen);
       const move = base.move({ from: correction.slice(0, 2), to: correction.slice(2, 4), promotion: correction.slice(4, 5) || "q" });
       if (!move) { setText("smartTheoryStatus", "No legal correction"); return; }
-      const prefix = smartPath(node).slice(0, -1).map((item) => item.san);
-      state.branches.unshift({ id: `smart-${Date.now()}`, color: $("smartTheoryMyColor")?.value || "white", moves: [...prefix, move.san], games: 1, wins: 0, draws: 1, losses: 0, ratings: [], lastSeen: 0, examples: [] });
+      const playerColor = $("smartTheoryMyColor")?.value || "white";
+      const positionKey = fenKey(node.fenBefore);
+      state.manualRepertoire[positionKey] = {
+        id: `smart-${Date.now()}`,
+        fen: node.fenBefore,
+        uci: `${move.from}${move.to}${move.promotion || ""}`,
+        san: move.san,
+        playerColor,
+        source: "manual_repertoire",
+        savedAt: Date.now(),
+      };
       markDataDirty();
-      save(); renderAll(); refreshSmartSourcePicker(); setText("smartTheoryStatus", "Saved to repertoire");
+      save(); renderAll(); refreshSmartSourcePicker();
+      setText("smartTheoryStatus", "Saved to repertoire");
+      setText("smartTheoryProgress", `${move.san} is now saved for this exact position and will influence future Trainer and Smart Theory runs.`);
     });
     $("smartTheoryExportLichessBtn")?.addEventListener("click", () => {
       if (!state.smartTree) { setText("smartTheoryLichessHint", "Generate a tree first."); return; }
@@ -2571,6 +2929,28 @@
     });
     $("smartTheoryTreeSearch")?.addEventListener("input", renderSmartTheoryTree);
     $("smartTheoryTreeFocus")?.addEventListener("change", renderSmartTheoryTree);
+    [
+      ["smartTheoryMoveTime", "moveTime", "number"],
+      ["smartTheoryReplies", "replies", "number"],
+      ["smartTheoryMaxPly", "maxPly", "number"],
+      ["smartTheoryMaxPositions", "maxPositions", "number"],
+      ["smartTheoryFollowToleranceCp", "followToleranceCp", "number"],
+      ["smartTheoryStyleToleranceCp", "styleToleranceCp", "number"],
+      ["smartTheoryStyleMinWeight", "styleMinWeight", "number"],
+      ["smartTheoryOpponentAccuracy", "opponentModel", "value"],
+      ["smartTheoryIncludeRare", "includeRare", "checked"],
+      ["smartTheoryIncludeMistakes", "includeMistakes", "checked"],
+      ["smartTheoryIncludeBlunders", "includeBlunders", "checked"],
+      ["smartTheoryIncludeBestEngineReplies", "includeBestEngineReplies", "checked"],
+      ["smartTheoryCacheEvals", "cacheEvals", "checked"],
+    ].forEach(([id, key, kind]) => {
+      $(id)?.addEventListener("change", (event) => {
+        state.smartSettings[key] = kind === "checked"
+          ? Boolean(event.currentTarget.checked)
+          : kind === "number" ? num(event.currentTarget.value) : event.currentTarget.value;
+        save();
+      });
+    });
     $("progressSaveProjectionBtn")?.addEventListener("click", () => {
       state.customGames = clamp(num($("progressCustomGames")?.value, 538), 1, 5000);
       state.projectionMode = $("progressProjectionMode")?.value || "realistic";
@@ -2723,15 +3103,31 @@
   async function initialize() {
     load();
     bind();
+    setSmartTheoryRunning(false);
     const defaults = {
       mainPlatformInput: "chesscom", mainUsernameInput: state.username, usernameInput: state.username,
       timeClassesInput: state.settings.timeClasses.join(","), maxGamesInput: state.settings.maxGames,
       thinkTimeInput: "0.18",
       progressCustomGames: state.customGames, progressProjectionMode: state.projectionMode,
+      smartTheoryMoveTime: state.smartSettings.moveTime,
+      smartTheoryReplies: state.smartSettings.replies,
+      smartTheoryMaxPly: state.smartSettings.maxPly,
+      smartTheoryMaxPositions: state.smartSettings.maxPositions,
+      smartTheoryFollowToleranceCp: state.smartSettings.followToleranceCp,
+      smartTheoryStyleToleranceCp: state.smartSettings.styleToleranceCp,
+      smartTheoryStyleMinWeight: state.smartSettings.styleMinWeight,
+      smartTheoryOpponentAccuracy: state.smartSettings.opponentModel,
     };
     Object.entries(defaults).forEach(([id, value]) => { if ($(id)) $(id).value = String(value); });
     if ($("importAllGamesInput")) $("importAllGamesInput").checked = Boolean(state.settings.importAllGames);
     if ($("autoImportStartupInput")) $("autoImportStartupInput").checked = Boolean(state.settings.autoImportStartup);
+    [
+      ["smartTheoryIncludeRare", "includeRare"],
+      ["smartTheoryIncludeMistakes", "includeMistakes"],
+      ["smartTheoryIncludeBlunders", "includeBlunders"],
+      ["smartTheoryIncludeBestEngineReplies", "includeBestEngineReplies"],
+      ["smartTheoryCacheEvals", "cacheEvals"],
+    ].forEach(([id, key]) => { if ($(id)) $(id).checked = Boolean(state.smartSettings[key]); });
     const sessionDate = $("progressSessionForm")?.querySelector('[name="date"]');
     if (sessionDate) sessionDate.value = today();
     const restored = await restoreAnalysisCache().catch(() => false);
