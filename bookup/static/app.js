@@ -4,7 +4,6 @@ if (typeof document !== "undefined") {
   document.documentElement.dataset.bookupUi = "compact-redesign-v9";
 }
 const webMode = Boolean(defaults.web_mode);
-const brilliantTrackerEnabled = defaults.enable_brilliant_tracker !== false;
 const REVIEW_KEY = "bookup-review-stats-v1";
 const PROFILE_SCHEMA_VERSION = 24;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -111,8 +110,6 @@ const el = {
   repertoireMapWhite: document.getElementById("repertoireMapWhite"),
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
   healthDashboard: document.getElementById("healthDashboard"),
-  statsSummary: document.getElementById("statsSummaryPanel"),
-  brilliantTrackerSection: document.getElementById("brilliantTrackerSection"),
   progressStatus: document.getElementById("progressStatus"),
   progressRefresh: document.getElementById("progressRefreshBtn"),
   progressModeButtons: Array.from(document.querySelectorAll("[data-progress-mode]")),
@@ -129,24 +126,10 @@ const el = {
   progressRecommendations: document.getElementById("progressRecommendationPanel"),
   progressSessionForm: document.getElementById("progressSessionForm"),
   progressSessionList: document.getElementById("progressSessionList"),
-  brilliantTracker: document.getElementById("brilliantTrackerPanel"),
-  memoryScorePanel: document.getElementById("memoryScorePanel"),
-  driftDetectorPanel: document.getElementById("driftDetectorPanel"),
-  prepPackPanel: document.getElementById("prepPackPanel"),
-  cacheDashboard: document.getElementById("cacheDashboard"),
-  studyPlanPanel: document.getElementById("studyPlanPanel"),
-  confidenceGraphPanel: document.getElementById("confidenceGraphPanel"),
-  driftFixPanel: document.getElementById("driftFixPanel"),
-  importSpeedPanel: document.getElementById("importSpeedPanel"),
-  stockfishStatsPanel: document.getElementById("stockfishStatsPanel"),
   transpositionList: document.getElementById("transpositionList"),
   previewPanel: document.getElementById("previewPanel"),
   knownArchiveList: document.getElementById("knownArchiveList"),
   gameMoveTree: document.getElementById("gameMoveTree"),
-  theoryMove: document.getElementById("theoryMoveInput"),
-  theoryPly: document.getElementById("theoryPlyInput"),
-  generateTheory: document.getElementById("generateTheoryBtn"),
-  theoryOutput: document.getElementById("theoryOutput"),
   smartTheoryStartingSource: document.getElementById("smartTheoryStartingSource"),
   smartTheorySourcePickerWrap: document.getElementById("smartTheorySourcePickerWrap"),
   smartTheorySourcePicker: document.getElementById("smartTheorySourcePicker"),
@@ -161,7 +144,6 @@ const el = {
   smartTheoryStyleMinWeight: document.getElementById("smartTheoryStyleMinWeight"),
   smartTheoryMaxPly: document.getElementById("smartTheoryMaxPly"),
   smartTheoryMaxPositions: document.getElementById("smartTheoryMaxPositions"),
-  smartTheoryCustomFen: document.getElementById("smartTheoryCustomFen"),
   smartTheoryLichessStudyName: document.getElementById("smartTheoryLichessStudyName"),
   smartTheoryLichessStudyId: document.getElementById("smartTheoryLichessStudyId"),
   smartTheoryLichessChapterName: document.getElementById("smartTheoryLichessChapterName"),
@@ -169,7 +151,6 @@ const el = {
   smartTheoryChapterStrategy: document.getElementById("smartTheoryChapterStrategy"),
   smartTheoryMaxChapters: document.getElementById("smartTheoryMaxChapters"),
   smartTheoryMinChapterMoves: document.getElementById("smartTheoryMinChapterMoves"),
-  smartTheoryOpeningFocus: document.getElementById("smartTheoryOpeningFocus"),
   smartTheoryAutoSyncStudy: document.getElementById("smartTheoryAutoSyncStudy"),
   smartTheoryReplaceChapters: document.getElementById("smartTheoryReplaceChapters"),
   smartTheoryLichessToken: document.getElementById("smartTheoryLichessToken"),
@@ -210,20 +191,6 @@ const el = {
   smartTheoryTreeFocus: document.getElementById("smartTheoryTreeFocus"),
   smartTheoryTreeSearch: document.getElementById("smartTheoryTreeSearch"),
   smartTheoryTree: document.getElementById("smartTheoryTree"),
-  theoryPresetPanel: document.getElementById("theoryPresetPanel"),
-  opponentSimulatorPanel: document.getElementById("opponentSimulatorPanel"),
-  trapFinderPanel: document.getElementById("trapFinderPanel"),
-  repertoireExportPanel: document.getElementById("repertoireExportPanel"),
-  urgentList: document.getElementById("urgentList"),
-  sidelineList: document.getElementById("sidelineList"),
-  suggestionList: document.getElementById("suggestionList"),
-  mistakeList: document.getElementById("mistakeList"),
-  mistakeHeatmap: document.getElementById("mistakeHeatmap"),
-  mistakeTimeline: document.getElementById("mistakeTimeline"),
-  reviewSchedule: document.getElementById("reviewSchedule"),
-  smartRetryPanel: document.getElementById("smartRetryPanel"),
-  premoveQuizPanel: document.getElementById("premoveQuizPanel"),
-  databaseTrainingList: document.getElementById("databaseTrainingList"),
   lessonListDue: document.getElementById("lessonListDue"),
   lessonListNew: document.getElementById("lessonListNew"),
   lessonQueueMeta: document.getElementById("lessonQueueMeta"),
@@ -281,9 +248,6 @@ const state = {
   knownArchive: [],
   lessonIndex: -1,
   activeLessonId: "",
-  brilliantProgressRange: "90",
-  brilliantProgressTimeClass: "",
-  brilliantProgressPointIndex: null,
   boardOrientation: "white",
   trainingCursor: 0,
   lessonMistakes: 0,
@@ -330,9 +294,6 @@ const state = {
   reviewStats: {},
   games: [],
   gameMoveTree: null,
-  theoryResult: null,
-  repertoireExportText: "",
-  manualDriftChoices: {},
   analysisProgressTimer: 0,
   analysisProgressValue: 0,
   analysisStatusTimer: 0,
@@ -340,7 +301,6 @@ const state = {
   progressMode: defaults.progress_mode || "rapid",
   analysisStatusPollStartedAt: 0,
   autoImportRunning: false,
-  prepPackText: "",
   smartTheoryJobId: "",
   smartTheoryTree: null,
   smartTheorySelectedNodeId: "",
@@ -396,7 +356,6 @@ async function init() {
   }
   if (el.smartTheoryMaxChapters) el.smartTheoryMaxChapters.value = "62";
   if (el.smartTheoryMinChapterMoves) el.smartTheoryMinChapterMoves.value = "40";
-  if (el.smartTheoryOpeningFocus) el.smartTheoryOpeningFocus.value = "inferred_style";
   if (el.smartTheoryAutoSyncStudy) el.smartTheoryAutoSyncStudy.checked = Boolean(defaults.bookup_auto_study_sync);
   if (el.smartTheoryReplaceChapters) el.smartTheoryReplaceChapters.checked = true;
   if (el.smartTheoryLichessStudyId) el.smartTheoryLichessStudyId.value = String(defaults.bookup_study_id || "");
@@ -438,7 +397,6 @@ async function init() {
     }
   });
   el.realignGenerate?.addEventListener("click", () => { void generateRealignPlan(); });
-  el.generateTheory?.addEventListener("click", () => { void generateTheoryLine(); });
   el.smartTheoryGenerate?.addEventListener("click", () => { void runSmartTheoryGeneration(); });
   el.smartTheoryStop?.addEventListener("click", () => { void stopSmartTheoryGeneration(); });
   el.smartTheoryClear?.addEventListener("click", clearSmartTheoryState);
@@ -472,7 +430,6 @@ async function init() {
     el.smartTheoryLichessStudyId,
     el.smartTheoryChapterStrategy,
     el.smartTheoryAutoSyncStudy,
-    el.smartTheoryOpeningFocus,
     el.smartTheoryIncludeBestEngineReplies,
     el.smartTheoryExpectedMoveConfidenceCp,
     el.smartTheoryStyleMoveConfidenceCp,
@@ -553,30 +510,6 @@ async function init() {
       saveManualRepertoireMove(makeRepertoire);
       return;
     }
-    const exportPrepButton = target.closest("[data-export-prep-pack]");
-    if (exportPrepButton instanceof HTMLElement) {
-      exportPreparationPack(exportPrepButton);
-      return;
-    }
-    const exportRepertoireButton = target.closest("[data-export-repertoire]");
-    if (exportRepertoireButton instanceof HTMLElement) {
-      exportRepertoireLines(exportRepertoireButton);
-      return;
-    }
-    const driftChoiceButton = target.closest("[data-drift-choice]");
-    const driftChoice = driftChoiceButton instanceof HTMLElement ? driftChoiceButton.dataset.driftChoice : "";
-    if (driftChoice) {
-      saveDriftChoice(driftChoice, driftChoiceButton.dataset.driftAction || "adopt", driftChoiceButton);
-      return;
-    }
-    const theorySeedButton = target.closest("[data-theory-seed]");
-    const theorySeed = theorySeedButton instanceof HTMLElement ? theorySeedButton.dataset.theorySeed : "";
-    if (theorySeed) {
-      if (el.theoryMove) el.theoryMove.value = theorySeed;
-      setActiveTab("theory");
-      void generateTheoryLine();
-      return;
-    }
     const openFenButton = target.closest("[data-open-fen]");
     const openFen = openFenButton instanceof HTMLElement ? openFenButton.dataset.openFen : "";
     if (openFen) {
@@ -617,9 +550,6 @@ async function init() {
   document.addEventListener("pointercancel", clearDragState);
 
   syncImportScope();
-  if (!brilliantTrackerEnabled && el.brilliantTrackerSection) {
-    el.brilliantTrackerSection.hidden = true;
-  }
   renderCoords();
   renderBoard(START_FEN, { animate: false });
   const requestedTab = new URLSearchParams(window.location.search).get("tab");
@@ -1471,17 +1401,6 @@ function stockfishStatsFromStatus(status) {
     live_positions: Array.isArray(status.live_positions) ? status.live_positions : [],
     scan_active_workers: Number(status.scan_active_workers ?? 0),
     scan_active_slots: Array.isArray(status.scan_active_slots) ? status.scan_active_slots : [],
-    brilliant_games_done: Number(status.brilliant_games_done ?? 0),
-    brilliant_games_total: Number(status.brilliant_games_total ?? 0),
-    brilliant_games_left: Number(status.brilliant_games_left ?? 0),
-    brilliant_moves_scanned: Number(status.moves_scanned ?? 0),
-    brilliant_moves_classified: Number(status.classified_moves ?? 0),
-    brilliant_player_moves_total: Number(status.player_moves_total ?? status.moves_scanned ?? 0),
-    brilliant_total_game_moves: Number(status.total_game_moves ?? 0),
-    brilliant_opponent_moves_ignored: Number(status.opponent_moves_ignored ?? 0),
-    brilliant_moves_outside_scan_window: Number(status.moves_outside_scan_window ?? 0),
-    engine_cache_hits: Number(status.cache_hits ?? 0),
-    engine_live_hits: Number(status.live_hits ?? 0),
   };
 }
 
@@ -1494,7 +1413,6 @@ function analysisPhaseLabel(phase) {
     indexing: "Indexing",
     position_index: "Preparing engine",
     stockfish_positions: "Analyzing",
-    brilliant_scan: "Classifying",
     complete: "Complete",
     failed: "Failed",
   };
@@ -1508,10 +1426,6 @@ function analysisWorkSummary(stats) {
   const indexed = Number(stats.positions_indexed || 0);
   const done = Number(stats.positions_analyzed || 0);
   const total = Number(stats.positions_total || 0);
-  const scanDone = Number(stats.brilliant_games_done || 0);
-  const scanTotal = Number(stats.brilliant_games_total || 0);
-  const classified = Number(stats.brilliant_moves_classified || 0);
-  const scanned = Number(stats.brilliant_player_moves_total || stats.brilliant_moves_scanned || 0);
   if (["loading_games", "fetch_archives", "fetch_games"].includes(phase)) {
     return gamesTotal ? `${gamesDone}/${gamesTotal} games` : "Loading games";
   }
@@ -1520,11 +1434,6 @@ function analysisWorkSummary(stats) {
   }
   if (phase === "position_index") {
     return `${indexed} positions indexed`;
-  }
-  if (phase === "brilliant_scan") {
-    if (scanTotal) return `${scanDone}/${scanTotal} games scanned`;
-    if (scanned) return `${classified}/${scanned} moves classified`;
-    return "Classifying moves";
   }
   if (phase === "stockfish_positions" || total) {
     return `${done}${total ? `/${total}` : ""} positions`;
@@ -1539,15 +1448,6 @@ function analysisPrimaryCard(stats) {
     const total = Number(stats.games_total || 0);
     return ["Games", total ? `${done}/${total}` : "--"];
   }
-  if (phase === "brilliant_scan") {
-    const scanDone = Number(stats.brilliant_games_done || 0);
-    const scanTotal = Number(stats.brilliant_games_total || 0);
-    if (scanTotal) return ["Games scanned", `${scanDone}/${scanTotal}`];
-    const scanned = Number(stats.brilliant_moves_scanned || 0);
-    const playerMoves = Number(stats.brilliant_player_moves_total || scanned || 0);
-    const classified = Number(stats.brilliant_moves_classified || 0);
-    return ["Your moves", playerMoves ? `${classified}/${playerMoves}` : "--"];
-  }
   return ["Positions/sec", formatRate(stats.positions_per_second)];
 }
 
@@ -1559,19 +1459,6 @@ function analysisRemainingCard(stats) {
     const done = Number(stats.games_done || 0);
     const total = Number(stats.games_total || 0);
     return ["Games left", total ? Math.max(0, total - done) : "--"];
-  }
-  if (phase === "brilliant_scan") {
-    const backendGamesLeft = Number(stats.brilliant_games_left ?? stats.games_left ?? NaN);
-    if (Number.isFinite(backendGamesLeft) && backendGamesLeft > 0) return ["Games left", backendGamesLeft];
-    const backendMovesLeft = Number(stats.moves_left ?? NaN);
-    if (Number.isFinite(backendMovesLeft) && backendMovesLeft > 0) return ["Moves left", backendMovesLeft];
-    const scanDone = Number(stats.brilliant_games_done || 0);
-    const scanTotal = Number(stats.brilliant_games_total || 0);
-    if (scanTotal) return ["Games left", Math.max(0, scanTotal - scanDone)];
-    const scanned = Number(stats.brilliant_moves_scanned || 0);
-    const playerMoves = Number(stats.brilliant_player_moves_total || scanned || 0);
-    const classified = Number(stats.brilliant_moves_classified || 0);
-    return ["Moves left", playerMoves ? Math.max(0, playerMoves - classified) : "--"];
   }
   const backendPositionsLeft = Number(stats.positions_left ?? NaN);
   if (Number.isFinite(backendPositionsLeft) && backendPositionsLeft >= 0) return ["Positions left", backendPositionsLeft || 0];
@@ -1596,84 +1483,11 @@ function analysisEtaText(stats) {
   if (stats.phase === "stockfish_positions") {
     return Number(stats.positions_analyzed || 0) ? "Calculating" : "Starting";
   }
-  if (stats.phase === "brilliant_scan") return "Calculating";
   return "Working";
 }
 
-function renderStockfishStats(stats, options = {}) {
-  const live = Boolean(options.live);
-  const node = live ? null : el.stockfishStatsPanel;
-  if (!stats) {
-    if (!live && node) {
-      node.className = "stack empty";
-      node.textContent = "Run analysis to see Stockfish throughput, ETA, CPU, and memory.";
-    }
-    renderAnalysisPreviewPanel(null);
-    return;
-  }
-  const phase = stats.phase || "idle";
-  const isEnginePhase = phase === "stockfish_positions" || phase === "brilliant_scan";
-  const memory = Number(stats.memory_mb || 0);
-  const freeMemory = Number(stats.system_available_ram_mb || 0);
-  const totalMemory = Number(stats.system_ram_mb || 0);
-  const activeWorkers = phase === "brilliant_scan" || phase === "stockfish_positions"
-    ? Number(stats.scan_active_workers || stats.active_workers || 0)
-    : Number(stats.active_workers || 0);
-  const workers = Number(stats.workers || 1);
-  const hasLiveCpu = stats.cpu_percent != null && (isEnginePhase || activeWorkers > 0 || Number(stats.jobs_started || 0) > 0);
-  const cpu = hasLiveCpu ? stats.cpu_percent : stats.cpu_budget_percent;
-  const cpuLabel = hasLiveCpu ? "Stockfish CPU" : "CPU budget";
-  const cpuCoreText = hasLiveCpu && stats.cpu_cores != null
-    ? `${Number(stats.cpu_cores).toFixed(1)}/${Number(stats.system_threads || 0)}`
-    : `${Number(stats.threads || 0)}/${Number(stats.system_threads || 0)} planned`;
-  const workerCard = isEnginePhase
-    ? ["Active workers", `${activeWorkers}/${workers}`]
-    : ["Stockfish workers", `${workers} ready`];
-  const throughputCard = phase === "stockfish_positions"
-    ? ["Positions/sec", formatRate(stats.positions_per_second)]
-    : phase === "brilliant_scan"
-      ? ["Games/sec", formatRate(stats.games_per_second || stats.items_per_second)]
-      : ["Index rate", formatRate(stats.items_per_second)];
-  const memoryText = memory > 0
-    ? `${memory.toFixed(memory >= 100 ? 0 : 1)} MB`
-    : `${Number(stats.estimated_hash_mb || stats.hash_mb || 0)} MB hash`;
-  const hashLimit = Number(stats.hash_limit_mb || 0);
-  const primaryCard = analysisPrimaryCard(stats);
-  const remainingCard = analysisRemainingCard(stats);
-  const cards = [
-    throughputCard,
-    primaryCard,
-    remainingCard,
-    ["ETA", analysisEtaText(stats)],
-    workerCard,
-    [cpuLabel, cpu == null ? "--" : `${Number(cpu).toFixed(1)}%`],
-    ["CPU cores", cpuCoreText],
-    ["Memory", memoryText],
-    ["Configured workers", workers],
-    ["Threads", `${Number(stats.threads || 0)} total`],
-    ["Hash budget", `${Number(stats.hash_mb || 0)} MB`],
-    ["Depth / MultiPV", `${Number(stats.depth || 0)} / ${Number(stats.multipv || 0)}`],
-    ["Classified", `${Number(stats.brilliant_moves_classified || 0)}/${Number(stats.brilliant_player_moves_total || stats.brilliant_moves_scanned || 0)}`],
-  ];
-  if (!live && node) {
-    node.className = "stack stockfish-stats-panel";
-    node.innerHTML = `
-      <div class="stockfish-status-head">
-        <span>${escapeHtml(analysisPhaseLabel(phase))}</span>
-        <strong>${escapeHtml(analysisWorkSummary(stats))}</strong>
-        <small>${escapeHtml(stats.message || (stats.active ? "Stockfish is working..." : "Analysis cache is ready."))}</small>
-      </div>
-      <div class="speed-grid stockfish-speed-grid">
-        ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}
-      </div>
-      <div class="line-note">
-        Elapsed ${formatDuration(stats.elapsed_sec)} · ${Number(stats.worker_threads || 0)} thread${Number(stats.worker_threads || 0) === 1 ? "" : "s"} per worker · ${Number(stats.worker_hash_mb || 0)} MB hash per worker.
-        ${freeMemory ? ` Windows reports ${Math.round(freeMemory)} MB free${totalMemory ? ` of ${Math.round(totalMemory)} MB` : ""}.` : ""}
-        ${hashLimit ? ` Safe hash ceiling: ${hashLimit} MB.` : ""}
-      </div>
-    `;
-  }
-  renderAnalysisPreviewPanel(stats);
+function renderStockfishStats(stats) {
+  renderAnalysisPreviewPanel(stats || null);
 }
 
 function renderAnalysisPreviewPanel(stats) {
@@ -1686,7 +1500,7 @@ function renderAnalysisPreviewPanel(stats) {
   const activeSlots = new Set(Array.isArray(stats?.scan_active_slots) ? stats.scan_active_slots.map((slot) => Number(slot)) : []);
   const active = Boolean(stats?.active);
   const rawPhase = stats?.phase || "";
-  const liveBoardPhase = rawPhase === "brilliant_scan" || rawPhase === "stockfish_positions";
+  const liveBoardPhase = rawPhase === "stockfish_positions";
   const hasPreviewContent = previews.some(Boolean);
   if (!stats || (!active && !hasPreviewContent)) {
     node.className = "analysis-preview-panel empty";
@@ -1708,14 +1522,14 @@ function renderAnalysisPreviewPanel(stats) {
     return;
   }
   const remainingCard = analysisRemainingCard(stats);
-  const renderedActiveWorkers = rawPhase === "brilliant_scan" || rawPhase === "stockfish_positions"
+  const renderedActiveWorkers = rawPhase === "stockfish_positions"
     ? Math.max(Number(stats.scan_active_workers || stats.active_workers || 0), activeSlots.size)
     : Number(stats.active_workers || 0);
-  const gamesDone = Number(stats.games_done || stats.brilliant_games_done || 0);
-  const gamesTotal = Number(stats.games_total || stats.brilliant_games_total || 0);
+  const gamesDone = Number(stats.games_done || 0);
+  const gamesTotal = Number(stats.games_total || 0);
   const positionDone = Number(stats.positions_analyzed || 0);
   const positionTotal = Number(stats.positions_total || 0);
-  const gameRate = ["loading_games", "fetch_archives", "fetch_games", "indexing", "brilliant_scan"].includes(rawPhase)
+  const gameRate = ["loading_games", "fetch_archives", "fetch_games", "indexing"].includes(rawPhase)
     ? Number(stats.games_per_second || stats.items_per_second || 0)
     : 0;
   const headerCards = [
@@ -2174,7 +1988,6 @@ async function bootstrapLocalState() {
       state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
       state.manualNeedsWork = payload.training_summary?.manual_needs_work || [];
       state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
-      state.manualDriftChoices = payload.training_summary?.manual_drift_choices || {};
       state.games = payload.games || [];
       renderProfile(state.payload);
       setProgress(
@@ -2216,7 +2029,6 @@ function renderProfile(payload) {
   state.gameMoveTree = profile.game_move_tree || profile.move_tree || null;
   state.manualNeedsWork = (payload.training_summary?.manual_needs_work || []);
   state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
-  state.manualDriftChoices = payload.training_summary?.manual_drift_choices || {};
   refreshSmartTheorySourcePicker();
   rebuildQueue();
   const trainedKnownCount = Object.values(state.reviewStats || {})
@@ -2235,36 +2047,9 @@ function renderProfile(payload) {
   renderFirstMoves(profile.first_move_repertoire || {});
   renderRepertoireMap(profile.repertoire_map || {});
   renderHealthDashboard(profile.health_dashboard || null);
-  renderStatsSummary(profile, payload);
-  if (brilliantTrackerEnabled) {
-    renderBrilliantTracker(profile.brilliant_tracker || null);
-  }
-  renderMemoryScores(profile.memory_scores || null);
-  renderOpeningDrift(profile.opening_drift || null);
-  renderPrepPack(profile.prep_pack || null);
-  renderStudyPlan(profile.study_plan || null);
-  renderConfidenceGraph(profile.confidence_graph || null);
-  renderDriftFixes(profile.drift_fixes || null);
-  renderImportSpeed(profile.import_speed_report || null);
-  renderStockfishStats(profile.stockfish_stats || null);
-  void refreshCacheDashboard();
   renderKnownArchive(profile.known_line_archive || []);
   renderTranspositionGroups(profile.transposition_groups || []);
   renderGameMoveTree(state.gameMoveTree);
-  renderImproveList(el.urgentList, state.queueDue, "No due lines right now.");
-  renderImproveList(el.sidelineList, state.queueNew, "No fresh lines waiting right now.");
-  renderSuggestions(profile.repertoire_updates || []);
-  renderMistakes(profile.opening_mistakes || []);
-  renderMistakeHeatmap(profile.mistake_heatmap || null);
-  renderMistakeTimeline(profile.mistake_timeline || null);
-  renderReviewSchedule(profile.review_schedule || null);
-  renderSmartRetry(profile.smart_retry || null);
-  renderPremoveQuiz(profile.premove_quiz || null);
-  renderDatabaseTraining(profile.database_training || []);
-  renderTheoryPresets(profile.theory_v2 || null);
-  renderOpponentSimulator(profile.opponent_simulator || null);
-  renderTrapFinder(profile.blunder_traps || null);
-  renderRepertoireExport(profile.repertoire_export || null);
   renderQueue();
   clearPreview();
 
@@ -2275,11 +2060,11 @@ function renderProfile(payload) {
 }
 
 function renderFirstMoves(data) {
-  renderFirstMoveColumn(el.firstMoveWhite, data.white || {});
-  renderFirstMoveColumn(el.firstMoveBlack, data.black || {});
+  renderFirstMoveColumn(el.firstMoveWhite, data.white || {}, "you open with");
+  renderFirstMoveColumn(el.firstMoveBlack, data.black || {}, "opponent opens with");
 }
 
-function renderFirstMoveColumn(node, repertoire) {
+function renderFirstMoveColumn(node, repertoire, relationship) {
   const items = repertoire.items || [];
   if (!items.length) {
     node.className = "stack empty";
@@ -2294,7 +2079,7 @@ function renderFirstMoveColumn(node, repertoire) {
           <div class="line-title">${index + 1}. ${escapeHtml(item.move)}</div>
           <div class="line-badge">${item.pct}% | ${item.count}x</div>
         </div>
-        <div class="line-note">This move starts ${item.count} of your imported games on this side.</div>
+        <div class="line-note">${escapeHtml(relationship)} · ${item.count} imported game${item.count === 1 ? "" : "s"}</div>
       </article>
     `)
     .join("");
@@ -2360,7 +2145,7 @@ function renderHealthDashboard(dashboard) {
       return {
         meaning: "How much of your repertoire is truly memorized.",
         formula: "Known lines / total tracked lines.",
-        action: "Raise this by finishing clean runs in Study Lines.",
+        action: "Raise this by finishing clean runs in Train.",
       };
     }
     if (label.includes("review load")) {
@@ -2373,7 +2158,7 @@ function renderHealthDashboard(dashboard) {
     return {
       meaning: "A quick health signal for your current repertoire state.",
       formula: "Computed from your imported games + review queue state.",
-      action: "Use Needs Work and Study Lines to improve this metric.",
+      action: "Use Train to improve this metric.",
     };
   };
   el.healthDashboard.className = "health-dashboard";
@@ -2432,59 +2217,6 @@ function renderHealthDashboard(dashboard) {
           </button>
         `).join("") || "<p>Known lines unlock once you repeatedly play the best move.</p>"}
       </article>
-    </div>
-  `;
-}
-
-function renderStatsSummary(profile, payload) {
-  if (!el.statsSummary) return;
-  const summary = profile?.summary || {};
-  const progress = profile?.rating_progress || {};
-  const record = summary.record || "0W 0D 0L";
-  const games = Number(payload?.games_imported ?? progress.total_games ?? 0);
-  const winRate = typeof summary.win_rate === "number" ? `${summary.win_rate}%` : "--";
-  const scoreRate = typeof summary.score_rate === "number" ? `${summary.score_rate}%` : "--";
-  const currentRange = progress?.ranges?.["90"] || progress?.ranges?.["30"] || progress?.ranges?.["all"] || null;
-  const ratingNow = currentRange?.rating_end ?? progress.rating_end ?? "--";
-  const ratingDelta = currentRange?.delta ?? 0;
-  const split = (progress.time_class_breakdown || []).slice(0, 4);
-  if (!games && !progress.available) {
-    el.statsSummary.className = "stats-summary-panel empty";
-    el.statsSummary.textContent = "Import rated Chess.com games to unlock W/D/L, rating form, time-control splits, and brilliant tracking.";
-    return;
-  }
-  el.statsSummary.className = "stats-summary-panel";
-  el.statsSummary.innerHTML = `
-    <div class="stats-card-grid">
-      <article class="stats-card rating">
-        <span>Current rating</span>
-        <strong>${escapeHtml(ratingNow)}</strong>
-        <p>${Number(ratingDelta) >= 0 ? "+" : ""}${escapeHtml(ratingDelta)} over selected range</p>
-      </article>
-      <article class="stats-card">
-        <span>Record</span>
-        <strong>${escapeHtml(record)}</strong>
-        <p>${escapeHtml(winRate)} wins · ${escapeHtml(scoreRate)} score</p>
-      </article>
-      <article class="stats-card">
-        <span>Games indexed</span>
-        <strong>${escapeHtml(games)}</strong>
-        <p>${Number(summary.positions_indexed || 0)} positions · ${Number(summary.trainable_positions || 0)} trainable</p>
-      </article>
-      <article class="stats-card">
-        <span>Line state</span>
-        <strong>${Number(summary.known_lines || 0)}</strong>
-        <p>${Number(summary.urgent_lines || 0)} due · ${Number(summary.positions || 0)} analyzed lessons</p>
-      </article>
-    </div>
-    <div class="stats-time-split">
-      ${split.length ? split.map((item) => `
-        <div class="stats-split-row">
-          <strong>${escapeHtml(item.label || item.key || "time control")}</strong>
-          <span>${Number(item.games || 0)} games · ${Number(item.win_rate || 0)}% wins</span>
-          <b>${escapeHtml(item.rating_current ?? "--")}</b>
-        </div>
-      `).join("") : "<p>No rated time-control split available yet.</p>"}
     </div>
   `;
 }
@@ -2881,729 +2613,12 @@ function signedNumber(value) {
   return `${numeric >= 0 ? "+" : ""}${formatNumber(numeric)}`;
 }
 
-function renderBrilliantTracker(tracker) {
-  if (!el.brilliantTracker) return;
-  const high = tracker?.high_confidence || tracker?.recent_brilliants || [];
-  const games = tracker?.games || [];
-  const watch = tracker?.watchlist || [];
-  const bestGame = tracker?.best_game || games[0] || null;
-  const summary = tracker?.summary || {};
-  const progress = tracker?.progress || null;
-  const hasScanData = Boolean(progress?.available || Number(summary.games_scanned || 0) || Number(summary.moves_scanned || 0));
-  if (!high.length && !watch.length && !games.length && !hasScanData) {
-    el.brilliantTracker.className = "brilliant-tracker-panel empty";
-    el.brilliantTracker.textContent = "No Brilliant moves are cached from your games yet. Bookup scans your imported positions with Stockfish and only stores near-best good piece sacrifices that stay sound.";
-    return;
-  }
-  el.brilliantTracker.className = "brilliant-tracker-panel";
-  el.brilliantTracker.innerHTML = `
-    <div class="brilliant-summary-grid">
-      <article><span>Total brilliants</span><strong>${Number(summary.total_brilliants || high.length)}</strong><p>Confirmed Brilliant moves found in your imported games.</p></article>
-      <article><span>Games with brilliants</span><strong>${Number(summary.games_with_brilliants || games.length)}</strong><p>Imported games where at least one Brilliant appeared.</p></article>
-      <article><span>Best game</span><strong>${bestGame ? `${Number(bestGame.brilliants || 0)}×` : "0×"}</strong><p>${escapeHtml(bestGame ? `${bestGame.opponent || "Opponent"} · ${bestGame.date_label || ""}` : "No Brilliant game found yet.")}</p></article>
-      <article><span>Your moves scanned</span><strong>${Number(summary.classified_moves || 0)}/${Number(summary.player_moves_total || summary.moves_scanned || 0)}</strong><p>${Number(summary.games_scanned || 0)} games · ${Number(summary.opponent_moves_ignored || 0)} opponent moves ignored · ${Number(summary.not_top_candidate_moves || 0)} ruled out outside MultiPV.</p></article>
-    </div>
-    ${renderBrilliantClassificationStatus(tracker)}
-    ${renderBrilliantProgress(progress)}
-    <div class="brilliant-tracker-grid">
-      <section>
-        <h3>Recent Brilliant Moves</h3>
-        ${renderBrilliantTrackerList(high, "No confirmed Brilliant moves from your games yet.")}
-      </section>
-      <section>
-        <h3>Games With Brilliants</h3>
-        ${renderBrilliantGameList(games, "No game-level Brilliant hits yet.")}
-      </section>
-    </div>
-    ${watch.length ? `
-      <section class="brilliant-watchlist">
-        <h3>Repertoire Watchlist</h3>
-        ${renderBrilliantTrackerList(watch, "No Great/Best tactical candidates cached yet.")}
-      </section>
-    ` : ""}
-  `;
-  bindBrilliantProgressEvents();
-}
-
-function renderBrilliantClassificationStatus(tracker) {
-  const status = tracker?.classification_status || {};
-  const summary = tracker?.summary || {};
-  const engine = status.engine || {};
-  const stored = status.stored_with_profile || summary.stored_with_profile;
-  const duringImport = status.classified_during_import || summary.classified_during_import;
-  return `
-    <section class="brilliant-scan-status">
-      <div>
-        <span class="line-badge">Classification proof</span>
-        <h3>Brilliant scan runs during profile import</h3>
-        <p>Results are saved inside the local profile cache. Bookup checks cached candidate lines first, then directly classifies the actual move you played if it was not already in the top candidate set.</p>
-      </div>
-      <div class="brilliant-scan-grid">
-        <article><span>Stored</span><strong>${stored ? "Yes" : "No"}</strong><small>Profile cache payload</small></article>
-        <article><span>Import pass</span><strong>${duringImport ? "Yes" : "No"}</strong><small>${escapeHtml(status.scope || "all imported games")}</small></article>
-        <article><span>Your move scan</span><strong>${Number(status.classified_moves || summary.classified_moves || 0)}/${Number(status.player_moves_total || summary.player_moves_total || status.moves_scanned || summary.moves_scanned || 0)}</strong><small>${Number(status.total_game_moves || summary.total_game_moves || 0)} total game moves seen</small></article>
-        <article><span>Candidate cache/live</span><strong>${Number(status.candidate_cache_hits || summary.candidate_cache_hits || 0)}/${Number(status.candidate_live_hits || summary.candidate_live_hits || 0)}</strong><small>top-line cache / live</small></article>
-        <article><span>Ruled out</span><strong>${Number(status.not_top_candidate_moves || summary.not_top_candidate_moves || 0)}</strong><small>not in current top MultiPV</small></article>
-        <article><span>Engine skips</span><strong>${Number(status.skipped_live_budget || summary.skipped_live_budget || 0)}</strong><small>positions without candidate lines</small></article>
-        <article><span>Depth</span><strong>${Number(engine.depth || 0) || "--"}</strong><small>Stockfish depth</small></article>
-        <article><span>MultiPV</span><strong>${Number(engine.multipv || 0) || "--"}</strong><small>candidate lines</small></article>
-        <article><span>Think time</span><strong>${engine.think_time_sec == null ? "--" : `${Number(engine.think_time_sec)}s`}</strong><small>per live scan</small></article>
-        <article><span>Scope</span><strong>${Number(status.scan_ply_limit || summary.scan_ply_limit || 0)}</strong><small>opening plies per game</small></article>
-      </div>
-    </section>
-  `;
-}
-
-function renderBrilliantProgress(progress) {
-  if (!progress?.available || !progress.ranges || !Object.keys(progress.ranges).length) {
-    return `
-      <section class="brilliant-progress-panel empty">
-        ${escapeHtml(progress?.message || "Import dated games to chart Brilliant moves over time.")}
-      </section>
-    `;
-  }
-  const splitPayloads = progress.time_class_progress || {};
-  const splitKeys = [];
-  (progress.time_class_breakdown || []).forEach((item) => {
-    const key = String(item.key || item.label || "").trim();
-    if (key && splitPayloads[key] && !splitKeys.includes(key)) splitKeys.push(key);
-  });
-  Object.keys(splitPayloads).forEach((key) => {
-    if (!splitKeys.includes(key)) splitKeys.push(key);
-  });
-  const defaultTimeKey = progress.default_time_class && splitKeys.includes(progress.default_time_class)
-    ? progress.default_time_class
-    : (splitKeys[0] || "");
-  if (splitKeys.length && (!state.brilliantProgressTimeClass || !splitKeys.includes(state.brilliantProgressTimeClass))) {
-    state.brilliantProgressTimeClass = defaultTimeKey;
-  }
-  if (!splitKeys.length) state.brilliantProgressTimeClass = "";
-  const activeTimeKey = splitKeys.length && splitKeys.includes(state.brilliantProgressTimeClass)
-    ? state.brilliantProgressTimeClass
-    : "";
-  const activeProgress = activeTimeKey ? (splitPayloads[activeTimeKey] || progress) : progress;
-  const timeClassLabel = activeTimeKey
-    ? activeProgress.time_class_label || activeTimeKey.replace(/_/g, " ")
-    : "All imported games";
-  const ranges = activeProgress.ranges || {};
-  const rangeOrder = ["7", "30", "90", "365", "all"].filter((key) => ranges[key]);
-  if (!rangeOrder.includes(state.brilliantProgressRange)) {
-    state.brilliantProgressRange = activeProgress.default_range || progress.default_range || rangeOrder[0] || "90";
-  }
-  const activeKey = ranges[state.brilliantProgressRange] ? state.brilliantProgressRange : rangeOrder[0];
-  const range = ranges[activeKey] || {};
-  const points = Array.isArray(range.points) ? range.points : [];
-  const graphPoints = points
-    .map((point, index) => ({
-      ...point,
-      index,
-      graphValue: Number(point.graph_value ?? point.brilliants ?? 0),
-      result_tone: Number(point.brilliants || 0) > 1 ? "win" : (Number(point.brilliants || 0) === 1 ? "draw" : "idle"),
-    }))
-    .filter((point) => Number.isFinite(point.graphValue));
-  const selectedIndex = pickBrilliantProgressIndex(graphPoints);
-  const selected = graphPoints[selectedIndex] || graphPoints[graphPoints.length - 1] || points[points.length - 1] || null;
-  const chart = buildRatingProgressChart(graphPoints, selected?.index, {
-    dense: graphPoints.length > 130,
-    baselineValue: 0,
-    valueLabel: "Brilliants",
-    minSpread: Math.max(8, Number(range.best_day?.brilliants || 0) + 2),
-    robustDomain: false,
-  });
-  return `
-    <section class="brilliant-progress-panel">
-      <div class="rating-progress-head brilliant-progress-head">
-        <div>
-          <div class="line-badge">Brilliant tracker</div>
-          <h3>${escapeHtml(range.label || "Brilliant timeline")} · ${escapeHtml(timeClassLabel)}</h3>
-          <p>${Number(range.total_brilliants || 0)} Brilliant${Number(range.total_brilliants || 0) === 1 ? "" : "s"} across ${Number(range.games || 0)} game${Number(range.games || 0) === 1 ? "" : "s"} from ${escapeHtml(range.start_date || "")} to ${escapeHtml(range.end_date || "")}</p>
-        </div>
-        <div class="progress-filter-stack">
-          <div class="progress-range-tabs" role="tablist" aria-label="Brilliant range">
-            ${rangeOrder.map((key) => `
-              <button class="progress-range-btn ${key === activeKey ? "active" : ""}" type="button" data-brilliant-range="${escapeHtml(key)}">
-                ${escapeHtml(ranges[key]?.label || key)}
-              </button>
-            `).join("")}
-          </div>
-          ${splitKeys.length ? `<div class="progress-range-tabs compact" role="tablist" aria-label="Brilliant time-control split">
-            ${splitKeys.map((key) => {
-              const payload = splitPayloads[key] || {};
-              const label = payload.time_class_label || key.replace(/_/g, " ");
-              const total = payload.total_brilliants || 0;
-              return `
-                <button class="progress-range-btn ${key === activeTimeKey ? "active" : ""}" type="button" data-brilliant-time-class="${escapeHtml(key)}">
-                  ${escapeHtml(label)} <span>${Number(total || 0)}</span>
-                </button>
-              `;
-            }).join("")}
-          </div>` : ""}
-        </div>
-      </div>
-      <div class="progress-metric-grid brilliant-metric-grid">
-        <article><span>Brilliants</span><strong>${Number(range.total_brilliants || 0)}</strong><small>${Number(range.games_with_brilliants || 0)} games with at least one</small></article>
-        <article><span>Best day</span><strong>${Number(range.best_day?.brilliants || 0)}</strong><small>${escapeHtml(range.best_day?.label || "No Brilliant day yet")}</small></article>
-        <article><span>Games scanned</span><strong>${Number(range.games || 0)}</strong><small>${Number(range.brilliants_per_game || 0).toFixed(3)} Brilliants per game</small></article>
-        <article><span>Busiest day</span><strong>${Number(range.busiest_day?.games || 0)}</strong><small>${escapeHtml(range.busiest_day?.label || "No games in range")}</small></article>
-      </div>
-      <div class="rating-chart-wrap">
-        <div class="rating-chart brilliant-chart ${chart.dense ? "dense" : ""}">
-          ${chart.svg}
-          <div class="rating-point-layer">
-            ${chart.points.map((point) => `
-              <button
-                class="rating-point brilliant-point ${Number(point.graphValue || 0) > 0 ? "hot" : "idle"} ${point.sourceIndex === selected?.index ? "active" : ""}"
-                type="button"
-                style="left:${point.x}%; top:${point.y}%"
-                title="${escapeHtml(point.title)}"
-                data-brilliant-index="${point.sourceIndex}"
-                aria-label="${escapeHtml(point.title)}"
-              ></button>
-            `).join("")}
-          </div>
-          <div class="rating-result-ribbon" aria-hidden="true">
-            ${chart.resultTicks.map((tick) => `
-              <span
-                class="rating-result-tick ${Number(tick.graphValue || 0) > 0 ? "win" : "idle"}"
-                style="left:${tick.x}%"
-                title="${escapeHtml(tick.title)}"
-              ></span>
-            `).join("")}
-          </div>
-          <div class="rating-chart-legend brilliant-legend">
-            <span><i class="brilliant-hot"></i>Brilliant day</span>
-            <span><i class="brilliant-quiet"></i>No Brilliant</span>
-          </div>
-          <div class="rating-axis top">${chart.maxLabel}</div>
-          <div class="rating-axis bottom">${chart.minLabel}</div>
-          <div class="rating-axis baseline">Brilliants / day</div>
-        </div>
-        <div class="progress-highlight brilliant-highlight" data-brilliant-highlight>
-          ${renderBrilliantProgressHighlight(selected, range)}
-        </div>
-      </div>
-      <div class="progress-insights brilliant-insights">
-        ${renderBrilliantProgressInsight("Best Brilliant day", range.best_day)}
-        ${renderBrilliantProgressInsight("Busiest imported day", range.busiest_day)}
-        ${renderBrilliantBreakdown(activeProgress.time_class_breakdown || progress.time_class_breakdown || [])}
-      </div>
-    </section>
-  `;
-}
-
-function pickBrilliantProgressIndex(graphPoints) {
-  if (!graphPoints.length) return -1;
-  const requested = Number(state.brilliantProgressPointIndex);
-  if (Number.isInteger(requested)) {
-    const found = graphPoints.findIndex((point) => Number(point.index) === requested);
-    if (found >= 0) return found;
-  }
-  for (let index = graphPoints.length - 1; index >= 0; index -= 1) {
-    if (Number(graphPoints[index].brilliants || 0) > 0) return index;
-  }
-  return graphPoints.length - 1;
-}
-
-function renderBrilliantProgressHighlight(point, range) {
-  if (!point) {
-    return "<strong>No day selected</strong><span>Hover a chart marker to inspect Brilliant games for that day.</span>";
-  }
-  const gameLinks = renderBrilliantProgressGameLinks(point.game_links || []);
-  return `
-    <div>
-      <span class="line-badge">${escapeHtml(point.label || point.date || "Selected day")}</span>
-      <strong>${Number(point.brilliants || 0)} Brilliant${Number(point.brilliants || 0) === 1 ? "" : "s"}</strong>
-      <p>${Number(point.games || 0)} games · ${Number(point.games_with_brilliants || 0)} games with Brilliants · ${escapeHtml(point.record || "")}</p>
-    </div>
-    <div class="progress-highlight-grid">
-      <span><b>${Number(point.brilliants || 0)}</b> Brilliant moves</span>
-      <span><b>${Number(point.games || 0)}</b> games</span>
-      <span><b>${Number(point.wins || 0)}</b> wins</span>
-      <span><b>${Number(point.losses || 0)}</b> losses</span>
-    </div>
-    ${gameLinks || "<small>No Brilliant games on this day yet.</small>"}
-  `;
-}
-
-function renderBrilliantProgressGameLinks(items) {
-  if (!Array.isArray(items) || !items.length) return "";
-  return `
-    <div class="progress-game-list brilliant-progress-games">
-      ${items.slice(0, 8).map((item) => {
-        const content = `
-          <span class="progress-game-dot brilliant"></span>
-          <b>${escapeHtml(item.opponent || "Unknown opponent")}</b>
-          <small>${Number(item.brilliants || 0)} Brilliant${Number(item.brilliants || 0) === 1 ? "" : "s"} · ${escapeHtml(item.time_class || "unknown")} · ${escapeHtml(item.color || "")} · ${escapeHtml(item.result || "")}</small>
-        `;
-        return item.url
-          ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${content}</a>`
-          : `<span>${content}</span>`;
-      }).join("")}
-    </div>
-  `;
-}
-
-function renderBrilliantProgressInsight(label, item) {
-  if (!item) {
-    return `
-      <article class="progress-insight">
-        <span>${escapeHtml(label)}</span>
-        <strong>Waiting for data</strong>
-        <small>No Brilliant activity in this range yet.</small>
-      </article>
-    `;
-  }
-  return `
-    <article class="progress-insight">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(item.label || item.date || "")}</strong>
-      <small>${Number(item.brilliants || 0)} Brilliant${Number(item.brilliants || 0) === 1 ? "" : "s"} · ${Number(item.games || 0)} games · ${escapeHtml(item.record || "")}</small>
-    </article>
-  `;
-}
-
-function renderBrilliantBreakdown(items) {
-  if (!Array.isArray(items) || !items.length) {
-    return `
-      <article class="progress-insight">
-        <span>Time-control split</span>
-        <strong>No split yet</strong>
-        <small>Rated game imports will populate this.</small>
-      </article>
-    `;
-  }
-  return `
-    <article class="progress-insight breakdown">
-      <span>Time-control split</span>
-      <strong>${items.reduce((sum, item) => sum + Number(item.brilliants || 0), 0)} total</strong>
-      <small>${items.slice(0, 4).map((item) => `${escapeHtml(item.label || item.key || "games")}: ${Number(item.brilliants || 0)} / ${Number(item.games || 0)} games`).join(" · ")}</small>
-    </article>
-  `;
-}
-
-function bindBrilliantProgressEvents() {
-  if (!el.brilliantTracker) return;
-  el.brilliantTracker.querySelectorAll("[data-brilliant-range]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.brilliantProgressRange = button.dataset.brilliantRange || "90";
-      state.brilliantProgressPointIndex = null;
-      if (brilliantTrackerEnabled) renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
-    });
-  });
-  el.brilliantTracker.querySelectorAll("[data-brilliant-time-class]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.brilliantProgressTimeClass = button.dataset.brilliantTimeClass || "";
-      state.brilliantProgressPointIndex = null;
-      if (brilliantTrackerEnabled) renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
-    });
-  });
-  el.brilliantTracker.querySelectorAll("[data-brilliant-index]").forEach((button) => {
-    const update = () => {
-      state.brilliantProgressPointIndex = Number(button.dataset.brilliantIndex);
-      if (brilliantTrackerEnabled) renderBrilliantTracker(state.payload?.profile?.brilliant_tracker || null);
-    };
-    button.addEventListener("click", update);
-    button.addEventListener("focus", update);
-    button.addEventListener("mouseenter", update);
-  });
-}
-
-function renderBrilliantTrackerList(items, emptyText) {
-  if (!Array.isArray(items) || !items.length) return `<p class="line-note">${escapeHtml(emptyText)}</p>`;
-  return items.slice(0, 10).map((item) => `
-    <article class="brilliant-card ${escapeHtml(classificationKey(item.classification))}">
-      <div class="brilliant-card-head">
-        <div>
-          <strong>${escapeHtml(item.move || item.san || "")}</strong>
-          <span>${escapeHtml(item.role || item.time_class || "game move")} · ${escapeHtml(item.opponent ? `vs ${item.opponent}` : item.line_label || "Repertoire position")}</span>
-        </div>
-        ${classificationBadge(item.classification, "compact")}
-      </div>
-      <p>${escapeHtml(item.reason || item.classification?.reason || "Cached engine candidate from your repertoire.")}</p>
-      ${item.pgn_path ? `<p class="brilliant-path">${escapeHtml(item.pgn_path)}</p>` : ""}
-      <div class="chip-row">
-        ${item.lesson_id ? `<button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>` : ""}
-        ${item.game_url ? `<a class="launch-btn" href="${escapeHtml(item.game_url)}" target="_blank" rel="noopener noreferrer">Open game</a>` : ""}
-      </div>
-    </article>
-  `).join("");
-}
-
-function renderBrilliantGameList(items, emptyText) {
-  if (!Array.isArray(items) || !items.length) return `<p class="line-note">${escapeHtml(emptyText)}</p>`;
-  return items.slice(0, 24).map((game) => `
-    <article class="brilliant-card brilliant-game-card">
-      <div class="brilliant-card-head">
-        <div>
-          <strong>${Number(game.brilliants || 0)} Brilliant${Number(game.brilliants || 0) === 1 ? "" : "s"}</strong>
-          <span>${escapeHtml(game.date_label || "Imported game")} · ${escapeHtml(game.time_class || "unknown")} · ${escapeHtml(game.result || "")}</span>
-        </div>
-        ${game.game_url ? `<a class="launch-btn" href="${escapeHtml(game.game_url)}" target="_blank" rel="noopener noreferrer">Open game</a>` : ""}
-      </div>
-      <p>Against ${escapeHtml(game.opponent || "opponent")} as ${escapeHtml(game.player_color || "your color")}.</p>
-      ${game.pgn_path ? `<p class="brilliant-path">${escapeHtml(game.pgn_path)}</p>` : ""}
-    </article>
-  `).join("");
-}
-
-function buildRatingProgressChart(graphPoints, selectedSourceIndex, options = {}) {
-  if (!graphPoints.length) {
-    return {
-      svg: "<div class=\"rating-chart-empty\">No rating points in this range yet.</div>",
-      points: [],
-      resultTicks: [],
-      minLabel: "--",
-      maxLabel: "--",
-      baselineLabel: "--",
-      dense: false,
-    };
-  }
-
-  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-  const isValueChart = Boolean(options.valueLabel);
-  const values = graphPoints
-    .map((point) => Number(point.graphValue))
-    .filter((value) => Number.isFinite(value));
-  const sortedValues = [...values].sort((a, b) => a - b);
-  const percentile = (pct) => {
-    if (!sortedValues.length) return 0;
-    const position = clamp(pct, 0, 1) * (sortedValues.length - 1);
-    const lower = Math.floor(position);
-    const upper = Math.ceil(position);
-    if (lower === upper) return sortedValues[lower];
-    return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * (position - lower);
-  };
-  let domainValues = sortedValues;
-  if (!isValueChart && options.robustDomain !== false && sortedValues.length >= 12) {
-    const p10 = percentile(0.1);
-    const p90 = percentile(0.9);
-    const spread = Math.max(1, p90 - p10);
-    const fence = Math.max(90, spread * 0.85);
-    const trimmed = sortedValues.filter((value) => value >= p10 - fence && value <= p90 + fence);
-    if (trimmed.length >= Math.max(8, Math.floor(sortedValues.length * 0.7))) {
-      domainValues = trimmed;
-    }
-  }
-
-  let minValue = domainValues.length ? Math.min(...domainValues) : 0;
-  let maxValue = domainValues.length ? Math.max(...domainValues) : 1;
-  const requestedMinSpread = Number(options.minSpread);
-  const minSpread = Number.isFinite(requestedMinSpread)
-    ? requestedMinSpread
-    : (isValueChart ? Math.max(6, maxValue - minValue) : 240);
-  if (maxValue - minValue < minSpread) {
-    const center = (maxValue + minValue) / 2;
-    minValue = center - minSpread / 2;
-    maxValue = center + minSpread / 2;
-  }
-  const padding = isValueChart
-    ? Math.max(1, Math.ceil((maxValue - minValue) * 0.08))
-    : Math.max(25, Math.ceil((maxValue - minValue) * 0.1));
-  minValue = Math.floor(minValue - padding);
-  maxValue = Math.ceil(maxValue + padding);
-  if (isValueChart && Number(options.baselineValue) === 0) {
-    minValue = Math.min(0, minValue);
-  }
-  const span = maxValue - minValue || 1;
-  const toX = (index) => graphPoints.length === 1 ? 50 : (index / (graphPoints.length - 1)) * 100;
-  const toY = (value) => clamp(88 - ((Number(value) - minValue) / span) * 72, 6, 96);
-  const pointTitle = (point) => {
-    const pieces = [point.label || point.date || "Day"];
-    if (isValueChart) {
-      pieces.push(`${Number(point.graphValue || 0)} ${options.valueLabel}`);
-    } else {
-      pieces.push(`${point.rating_graph ?? point.rating ?? "--"} rating`);
-    }
-    if (point.result) pieces.push(point.result);
-    if (point.opponent) pieces.push(`vs ${point.opponent}`);
-    if (point.opening) pieces.push(point.opening);
-    if (point.summary) pieces.push(point.summary);
-    return pieces.filter(Boolean).join(" · ");
-  };
-  const coords = graphPoints.map((point, index) => ({
-    x: Number(toX(index).toFixed(3)),
-    y: Number(toY(point.graphValue).toFixed(3)),
-    sourceIndex: point.index,
-    tone: point.result_tone || "idle",
-    graphValue: point.graphValue,
-    title: pointTitle(point),
-  }));
-
-  const smoothPath = (points) => {
-    if (!points.length) return "";
-    if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-    let path = `M ${points[0].x} ${points[0].y}`;
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const p0 = points[Math.max(0, index - 1)];
-      const p1 = points[index];
-      const p2 = points[index + 1];
-      const p3 = points[Math.min(points.length - 1, index + 2)];
-      const cp1x = p1.x + (p2.x - p0.x) / 6;
-      const cp1y = p1.y + (p2.y - p0.y) / 6;
-      const cp2x = p2.x - (p3.x - p1.x) / 6;
-      const cp2y = p2.y - (p3.y - p1.y) / 6;
-      path += ` C ${Number(cp1x.toFixed(3))} ${Number(cp1y.toFixed(3))}, ${Number(cp2x.toFixed(3))} ${Number(cp2y.toFixed(3))}, ${p2.x} ${p2.y}`;
-    }
-    return path;
-  };
-
-  const lineStep = Math.max(1, Math.ceil(coords.length / 420));
-  const pathCoords = coords.filter((_point, index) => index % lineStep === 0 || index === coords.length - 1);
-  const linePath = smoothPath(pathCoords);
-  const areaPath = pathCoords.length
-    ? `${linePath} L ${pathCoords[pathCoords.length - 1].x} 98 L ${pathCoords[0].x} 98 Z`
-    : "";
-  const selected = coords.find((point) => Number(point.sourceIndex) === Number(selectedSourceIndex));
-  const selectedLine = selected ? `<line class="rating-selected-line" x1="${selected.x}" x2="${selected.x}" y1="8" y2="96"></line>` : "";
-  const baselineValue = Number.isFinite(Number(options.baselineValue))
-    ? Number(options.baselineValue)
-    : Number(graphPoints[0]?.graphValue);
-  const baselineY = Number.isFinite(baselineValue) ? Number(toY(baselineValue).toFixed(3)) : null;
-  const baselineLine = baselineY == null
-    ? ""
-    : `<line class="rating-baseline-line" x1="0" x2="100" y1="${baselineY}" y2="${baselineY}"></line>`;
-  const dense = Boolean(options.dense);
-  const markerLimit = dense ? 80 : 160;
-  const markerStep = Math.max(1, Math.ceil(coords.length / markerLimit));
-  const markerPoints = coords.filter((point, index) => (
-    index % markerStep === 0 ||
-    index === 0 ||
-    index === coords.length - 1 ||
-    point.tone !== "idle" ||
-    Number(point.sourceIndex) === Number(selectedSourceIndex)
-  ));
-  const playedCoords = coords
-    .map((point, index) => ({ ...point, games: Number(graphPoints[index]?.games || 0) }))
-    .filter((point) => point.games > 0);
-  const tickLimit = dense ? 86 : 120;
-  const tickStep = Math.max(1, Math.ceil(playedCoords.length / tickLimit));
-  const resultTicks = playedCoords.filter((point, index) => (
-    index % tickStep === 0 ||
-    index === playedCoords.length - 1 ||
-    Number(point.sourceIndex) === Number(selectedSourceIndex)
-  ));
-  return {
-    svg: `
-      <svg viewBox="0 0 100 104" preserveAspectRatio="none" aria-hidden="true">
-        ${baselineLine}
-        <path class="rating-area" d="${areaPath}"></path>
-        <path class="rating-line-halo" d="${linePath}"></path>
-        <path class="rating-line" d="${linePath}"></path>
-        ${selectedLine}
-      </svg>
-    `,
-    points: markerPoints,
-    resultTicks,
-    minLabel: String(Math.round(minValue)),
-    maxLabel: String(Math.round(maxValue)),
-    baselineLabel: Number.isFinite(baselineValue) ? String(Math.round(baselineValue)) : "--",
-    dense,
-  };
-}
-
-function renderTimeClassBreakdown(items) {
-  const top = items.slice(0, 3);
-  return `
-    <article class="progress-insight">
-      <span>Time controls</span>
-      <strong>${top.length ? escapeHtml(top.map((item) => item.label).join(" / ")) : "No split yet"}</strong>
-      <small>${top.length ? escapeHtml(top.map((item) => `${item.label}: ${item.games}`).join(" · ")) : "Import games to see the mix."}</small>
-    </article>
-  `;
-}
-
-function renderMemoryScores(memory) {
-  if (!el.memoryScorePanel) return;
-  if (!memory || (!memory.fragile_count && !memory.building_count && !memory.strong_count)) {
-    el.memoryScorePanel.className = "stack empty";
-    el.memoryScorePanel.textContent = "Train imported lines more than once to build memory scores for fragile, building, and strong positions.";
-    return;
-  }
-  const fragile = memory.fragile_lines || [];
-  const strong = memory.strong_lines || [];
-  el.memoryScorePanel.className = "stack";
-  el.memoryScorePanel.innerHTML = `
-    <div class="memory-score-hero">
-      <strong>${Number(memory.average || 0).toFixed(0)}</strong>
-      <span>average memory score</span>
-    </div>
-    <div class="memory-buckets">
-      <span class="lesson-chip needs-work">${Number(memory.fragile_count || 0)} fragile</span>
-      <span class="lesson-chip new">${Number(memory.building_count || 0)} building</span>
-      <span class="lesson-chip known">${Number(memory.strong_count || 0)} strong</span>
-    </div>
-    <div class="mini-card-list">
-      ${fragile.slice(0, 4).map((item) => `
-        <button class="mini-card fragile" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-          <strong>${escapeHtml(item.line_label)}</strong>
-          <span>${Number(item.score || 0)} memory · train ${escapeHtml(item.recommended_move || "")}</span>
-        </button>
-      `).join("") || "<div class=\"line-note\">No fragile memory lines right now.</div>"}
-      ${strong.slice(0, 2).map((item) => `
-        <button class="mini-card strong" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-          <strong>${escapeHtml(item.line_label)}</strong>
-          <span>${Number(item.score || 0)} memory · ${escapeHtml(item.recommended_move || "")}</span>
-        </button>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderOpeningDrift(drift) {
-  if (!el.driftDetectorPanel) return;
-  const sections = drift?.sections || [];
-  if (!sections.length) {
-    el.driftDetectorPanel.className = "stack empty";
-    el.driftDetectorPanel.textContent = "Import games to compare recent first moves with your long-term repertoire.";
-    return;
-  }
-  const alerts = drift?.alerts || [];
-  el.driftDetectorPanel.className = "stack";
-  el.driftDetectorPanel.innerHTML = `
-    <div class="drift-alert ${alerts.length ? "active" : "quiet"}">
-      <strong>${alerts.length ? `${alerts.length} repertoire drift signal${alerts.length === 1 ? "" : "s"}` : "No major drift"}</strong>
-      <span>${alerts.length ? "Recent first moves changed compared with your larger sample." : "Recent games still match your usual first-move profile."}</span>
-    </div>
-    ${sections.map((section) => `
-      <article class="drift-section">
-        <div class="line-card-header">
-          <div class="line-title">${section.color === "black" ? "Black" : "White"} first moves</div>
-          <div class="line-badge">${Number(section.recent_games || 0)} recent / ${Number(section.games || 0)} games</div>
-        </div>
-        ${(section.moves || []).slice(0, 5).map((move) => `
-          <div class="drift-row ${escapeHtml(move.tone || "stable")}">
-            <strong>${escapeHtml(move.move || "")}</strong>
-            <span>${Number(move.recent_pct || 0).toFixed(1)}% recent</span>
-            <span>${Number(move.overall_pct || 0).toFixed(1)}% overall</span>
-            <b>${Number(move.drift || 0) >= 0 ? "+" : ""}${Number(move.drift || 0).toFixed(1)}%</b>
-          </div>
-        `).join("") || "<div class=\"line-note\">No moves from this side yet.</div>"}
-      </article>
-    `).join("")}
-  `;
-}
-
-function prepPackToText(pack) {
-  if (!pack) return "";
-  const lines = [pack.title || "Bookup preparation pack", ""];
-  const addSection = (title, items, formatter) => {
-    lines.push(title);
-    if (!items?.length) {
-      lines.push("- Nothing here yet.");
-    } else {
-      items.forEach((item, index) => lines.push(`${index + 1}. ${formatter(item)}`));
-    }
-    lines.push("");
-  };
-  addSection("Focus lines", pack.focus_lines || [], (item) => `${item.line_label}: play ${item.train}${item.instead_of ? ` instead of ${item.instead_of}` : ""}. ${item.continuation || ""}`);
-  addSection("New later", pack.next_up || [], (item) => `${item.line_label}: ${item.move}. ${item.continuation || ""}`);
-  addSection("Common replies", pack.common_replies || [], (item) => `${item.line_label}: against ${item.reply || "common reply"}, answer ${item.response || "the prepared move"}.`);
-  addSection("Maintenance", pack.maintenance || [], (item) => `${item.line_label}: ${item.move} (${item.repeat_count || 0} repeats).`);
-  return lines.join("\n");
-}
-
-function renderPrepPack(pack) {
-  if (!el.prepPackPanel) return;
-  const focus = pack?.focus_lines || [];
-  const nextUp = pack?.next_up || [];
-  const common = pack?.common_replies || [];
-  const maintenance = pack?.maintenance || [];
-  if (!focus.length && !nextUp.length && !common.length && !maintenance.length) {
-    el.prepPackPanel.className = "stack empty";
-    el.prepPackPanel.textContent = "Import games or save repertoire lines to generate a compact study pack.";
-    state.prepPackText = "";
-    return;
-  }
-  state.prepPackText = prepPackToText(pack);
-  el.prepPackPanel.className = "stack";
-  el.prepPackPanel.innerHTML = `
-    <div class="prep-pack-actions">
-      <span class="line-badge">Focus ${focus.length} · Replies ${common.length}</span>
-      <button class="launch-btn" type="button" data-export-prep-pack="true">Export prep pack</button>
-    </div>
-    ${focus.slice(0, 4).map((item) => `
-      <button class="mini-card prep" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-        <strong>${escapeHtml(item.line_label || "Focus line")}</strong>
-        <span>Play ${escapeHtml(item.train || "")}${item.instead_of ? ` instead of ${escapeHtml(item.instead_of)}` : ""}</span>
-      </button>
-    `).join("")}
-    ${common.slice(0, 3).map((item) => `
-      <div class="mini-card database">
-        <strong>${escapeHtml(item.reply || "Common reply")}</strong>
-        <span>${escapeHtml(item.line_label || "")} · answer ${escapeHtml(item.response || "")}</span>
-      </div>
-    `).join("")}
-  `;
-}
-
-async function refreshCacheDashboard() {
-  if (!el.cacheDashboard) return;
-  try {
-    const username = state.payload?.username || resolveConfiguredUsername();
-    if (!username) {
-      el.cacheDashboard.className = "stack empty";
-      el.cacheDashboard.textContent = "Choose your main Chess.com username in Setup to load local cache stats.";
-      return;
-    }
-    const response = await fetch(`/api/cache-stats?username=${encodeURIComponent(username)}`);
-    const stats = await response.json();
-    if (!response.ok) throw new Error(stats.error || "Cache stats unavailable.");
-    const mb = Number(stats.total_bytes || 0) / (1024 * 1024);
-    el.cacheDashboard.className = "stack";
-    el.cacheDashboard.innerHTML = `
-      <div class="cache-meter">
-        <strong>${Number(stats.engine_entries || 0)}</strong>
-        <span>cached engine analyses</span>
-      </div>
-      <div class="chip-row">
-        <span class="lesson-chip">Profiles ${Number(stats.profile_entries || 0)}</span>
-        <span class="lesson-chip">Games ${Number(stats.game_entries || 0)}</span>
-        <span class="lesson-chip">${mb.toFixed(2)} MB</span>
-      </div>
-      <div class="line-note">Repeated positions reuse this cache instead of asking Stockfish again.</div>
-    `;
-  } catch {
-    el.cacheDashboard.className = "stack empty";
-    el.cacheDashboard.textContent = "Cache stats are unavailable, but analysis caching will still work when Stockfish returns results.";
-  }
-}
-
 function renderTranspositionGroups(groups) {
   if (!el.transpositionList) return;
   const section = el.transpositionList.closest("section") || el.transpositionList.parentElement;
   if (section) section.hidden = true;
   el.transpositionList.className = "stack empty";
   el.transpositionList.innerHTML = "";
-}
-
-function renderMistakeHeatmap(heatmap) {
-  if (!el.mistakeHeatmap) return;
-  const squares = heatmap?.squares || [];
-  if (!squares.length) {
-    el.mistakeHeatmap.className = "heatmap-panel empty";
-    el.mistakeHeatmap.textContent = "No repeated mistake clusters yet. One-off misses stay out of this heatmap.";
-    return;
-  }
-  el.mistakeHeatmap.className = "heatmap-panel";
-  el.mistakeHeatmap.innerHTML = `
-    <div class="heatmap-grid">
-      ${squares.map((item) => `
-        <article class="heatmap-square" style="--heat:${Math.max(8, Math.min(100, Number(item.intensity || 0)))}%">
-          <strong>${escapeHtml(item.square)}</strong>
-          <span>${Number(item.score || 0).toFixed(0)} pressure</span>
-          <small>${Number(item.sources || 0)} from · ${Number(item.targets || 0)} to</small>
-        </article>
-      `).join("")}
-    </div>
-    <div class="heatmap-lines">
-      ${(heatmap.top_lines || []).map((item) => `
-        <button class="health-line" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-          <strong>${escapeHtml(item.line_label)}</strong>
-          <span>${escapeHtml(item.your_repeated_move)} should become ${escapeHtml(item.recommended_move)} · ${Number(item.repeat_mistake_count || 0)} repeats</span>
-        </button>
-      `).join("")}
-    </div>
-  `;
 }
 
 function formatReviewTime(timestamp) {
@@ -3616,427 +2631,6 @@ function formatReviewTime(timestamp) {
   if (days < 30) return `${days} days ago`;
   const months = Math.floor(days / 30);
   return months === 1 ? "1 month ago" : `${months} months ago`;
-}
-
-function timelineProgressLabel(item, review) {
-  if (!review || !Number(review.seen || 0)) return "untrained";
-  if (review.last_result === "right" && Number(review.streak || 0) >= 2) return "improving";
-  if (review.last_result === "right") return "recently fixed";
-  if (review.last_result === "wrong") return "still missing";
-  return "in progress";
-}
-
-function renderMistakeTimeline(timeline) {
-  if (!el.mistakeTimeline) return;
-  const items = timeline?.items || [];
-  if (!items.length) {
-    el.mistakeTimeline.className = "timeline-panel empty";
-    el.mistakeTimeline.textContent = "No repeated mistake history yet. Bookup only adds positions here after they repeat.";
-    return;
-  }
-  const summary = timeline.summary || {};
-  el.mistakeTimeline.className = "timeline-panel";
-  el.mistakeTimeline.innerHTML = `
-    <div class="timeline-summary">
-      <article><strong>${Number(summary.tracked || items.length)}</strong><span>tracked problems</span></article>
-      <article><strong>${Number(summary.urgent || 0)}</strong><span>urgent</span></article>
-      <article><strong>${Number(summary.active || 0)}</strong><span>active</span></article>
-      <article><strong>${Number(summary.watch || 0)}</strong><span>watch</span></article>
-    </div>
-    <div class="timeline-list">
-      ${items.map((item) => {
-        const review = state.reviewStats[item.lesson_id] || null;
-        const progress = timelineProgressLabel(item, review);
-        const result = item.result_breakdown || {};
-        return `
-          <article class="timeline-item ${escapeHtml(item.severity || "watch")} ${escapeHtml(progress.replaceAll(" ", "-"))}">
-            <div class="timeline-spine">
-              <span class="timeline-dot"></span>
-              <span class="timeline-line"></span>
-            </div>
-            <div class="timeline-card">
-              <div class="line-card-header">
-                <div>
-                  <div class="line-title">${escapeHtml(item.line_label || item.opening_name || "Repeated position")}</div>
-                  <div class="tree-meta">
-                    First seen ${escapeHtml(item.first_seen_label || "unknown")} · last seen ${escapeHtml(item.last_seen_label || "unknown")}
-                  </div>
-                </div>
-                <div class="line-badge ${escapeHtml(item.severity || "")}">${escapeHtml(progress)}</div>
-              </div>
-              <div class="timeline-move-row">
-                <span>You play <strong>${escapeHtml(item.your_repeated_move || "?")}</strong></span>
-                <span>Train <strong>${escapeHtml(item.recommended_move || "?")}</strong></span>
-                <span>${Number(item.repeat_mistake_count || 0)} repeats</span>
-              </div>
-              <div class="timeline-metrics">
-                <span>${Number(item.span_games || 0)} games between first and latest repeat</span>
-                <span>${Number(item.value_lost_cp || 0).toFixed(0)}cp lost</span>
-                <span>${Number(result.wins || 0)}W ${Number(result.draws || 0)}D ${Number(result.losses || 0)}L</span>
-                <span>last worked ${formatReviewTime(review?.last_seen_at)}</span>
-              </div>
-              <div class="timeline-actions">
-                <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work this line</button>
-                ${item.position_identifier ? `<a class="launch-btn" href="${escapeHtml(item.position_identifier)}" target="_blank" rel="noopener noreferrer">Open position</a>` : ""}
-              </div>
-            </div>
-          </article>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
-function renderReviewSchedule(schedule) {
-  if (!el.reviewSchedule) return;
-  const groups = [
-    { key: "due", title: "Due", detail: "Ready now", items: schedule?.due_today || [] },
-    { key: "later", title: "Later", detail: "Cooling down", items: schedule?.new_later || [] },
-    { key: "known", title: "Known", detail: "Archive", items: schedule?.known_archive || [] },
-  ];
-  const total = groups.reduce((sum, group) => sum + group.items.length, 0);
-  if (!total) {
-    el.reviewSchedule.className = "review-schedule compact-review-schedule empty";
-    el.reviewSchedule.innerHTML = `<div class="compact-empty">Review schedule appears once lines enter your queues.</div>`;
-    return;
-  }
-  el.reviewSchedule.className = "review-schedule compact-review-schedule";
-  el.reviewSchedule.innerHTML = `
-    <div class="review-summary-strip">
-      ${groups.map((group) => `<span><strong>${group.items.length}</strong>${escapeHtml(group.title)}</span>`).join("")}
-    </div>
-    <div class="review-bucket-grid">
-      ${groups.map((group) => `
-        <article class="review-bucket ${escapeHtml(group.key)}">
-          <div class="review-bucket-head">
-            <div>
-              <strong>${escapeHtml(group.title)}</strong>
-              <span>${escapeHtml(group.detail)}</span>
-            </div>
-            <b>${group.items.length}</b>
-          </div>
-          <div class="review-row-list">
-            ${group.items.length ? group.items.slice(0, 6).map((item) => `
-              <button class="review-row" type="button" data-work-line="${escapeHtml(item.lesson_id || "")}">
-                <span>${escapeHtml(item.line_label || item.opening_name || "Review line")}</span>
-                <small>${escapeHtml(item.recommended_move || item.best_reply || item.move || item.interval || "")} · ${Math.round(Number(item.confidence || 0))}</small>
-              </button>
-            `).join("") : `<div class="review-row muted">Empty</div>`}
-            ${group.items.length > 6 ? `<div class="review-more">+${group.items.length - 6} more</div>` : ""}
-          </div>
-        </article>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderStudyPlan(plan) {
-  if (!el.studyPlanPanel) return;
-  const blocks = plan?.blocks || [];
-  if (!blocks.length) {
-    el.studyPlanPanel.className = "stack empty";
-    el.studyPlanPanel.textContent = "Import games to build a short study session plan.";
-    return;
-  }
-  el.studyPlanPanel.className = "stack";
-  const counts = plan.counts || {};
-  const countCards = [
-    ["Due", counts.due],
-    ["Repair", counts.repair],
-    ["Replies", counts.database_replies],
-    ["New", counts.new],
-  ];
-  const quickActions = (plan.quick_actions || []).filter((action) => action.lesson_id);
-  el.studyPlanPanel.innerHTML = `
-    <div class="study-plan-summary">
-      <div>
-        <strong>${Number(plan.estimated_minutes || 0)} min</strong>
-        <span>${escapeHtml(plan.summary || "Today's training plan is ready.")}</span>
-      </div>
-      <div class="study-plan-counts">
-        ${countCards.map(([label, value]) => `
-          <span><b>${Number(value || 0)}</b>${escapeHtml(label)}</span>
-        `).join("")}
-      </div>
-      ${quickActions.length ? `
-        <div class="chip-row">
-          ${quickActions.map((action) => `
-            <button class="launch-btn compact" type="button" data-work-line="${escapeHtml(action.lesson_id)}">${escapeHtml(action.label || "Start")}</button>
-          `).join("")}
-        </div>
-      ` : ""}
-    </div>
-    ${blocks.map((block) => `
-      <article class="plan-block ${escapeHtml(block.kind || "")}">
-        <div class="line-card-header">
-          <div>
-            <div class="line-title">${escapeHtml(block.title || "Study block")}</div>
-            <div class="line-note">${escapeHtml(block.goal || "")}</div>
-          </div>
-          <span class="line-badge">${Number(block.minutes || 0)} min</span>
-        </div>
-        <div class="study-plan-items">
-          ${(block.items || []).slice(0, 5).map((item) => {
-            const title = item.line_label || item.opponent_reply || "Study item";
-            const move = item.recommended_move || item.response || "";
-            const classification = item.classification_label || item.classification?.label || "";
-            const metric = item.popularity ? `${Number(item.popularity || 0)}% database` : `${Math.round(Number(item.confidence || 0))} confidence`;
-            const note = item.note || item.reason || "";
-            const body = `
-              <div class="plan-item-main">
-                <strong>${escapeHtml(title)}</strong>
-                <span>${escapeHtml(move ? `Play ${move}` : "Open this line")}</span>
-              </div>
-              <div class="plan-item-meta">
-                ${classification ? `<span class="classification-chip tiny">${escapeHtml(classification)}</span>` : ""}
-                <span>${escapeHtml(metric)}</span>
-                ${Number(item.repeat_mistake_count || 0) ? `<span>${Number(item.repeat_mistake_count || 0)} misses</span>` : ""}
-              </div>
-              ${note ? `<div class="plan-item-note">${escapeHtml(note)}</div>` : ""}
-            `;
-            return item.lesson_id ? `
-              <button class="plan-item" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-                ${body}
-              </button>
-            ` : `<div class="plan-item muted">${body}</div>`;
-          }).join("") || `<div class="line-note">${escapeHtml(block.empty || "Nothing needed in this block yet.")}</div>`}
-        </div>
-      </article>
-    `).join("")}
-  `;
-}
-
-function renderConfidenceGraph(graph) {
-  if (!el.confidenceGraphPanel) return;
-  const buckets = graph?.buckets || [];
-  if (!buckets.length) {
-    el.confidenceGraphPanel.className = "stack empty";
-    el.confidenceGraphPanel.textContent = "Import games to map line-confidence distribution.";
-    return;
-  }
-  el.confidenceGraphPanel.className = "stack";
-  el.confidenceGraphPanel.innerHTML = `
-    <div class="confidence-total">${Number(graph.total || 0)} analyzed repertoire positions</div>
-    <div class="confidence-bars">
-      ${buckets.map((bucket) => `
-        <div class="confidence-row ${escapeHtml(bucket.tone || "")}">
-          <span>${escapeHtml(bucket.label)}</span>
-          <div class="confidence-bar"><b style="width:${Math.max(3, Number(bucket.pct || 0))}%"></b></div>
-          <strong>${Number(bucket.count || 0)}</strong>
-        </div>
-      `).join("")}
-    </div>
-    <div class="mini-card-list">
-      ${(graph.slipping_lines || []).slice(0, 3).map((item) => `
-        <button class="mini-card fragile" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-          <strong>${escapeHtml(item.line_label)}</strong>
-          <span>${Math.round(Number(item.confidence || 0))} confidence · ${escapeHtml(item.recommended_move || "")}</span>
-        </button>
-      `).join("") || `<div class="line-note">No slipping repeated lines.</div>`}
-    </div>
-  `;
-}
-
-function renderDriftFixes(fixes) {
-  if (!el.driftFixPanel) return;
-  const actions = fixes?.actions || [];
-  if (!actions.length) {
-    el.driftFixPanel.className = "stack empty";
-    el.driftFixPanel.textContent = fixes?.summary || "No first-move drift needs action.";
-    return;
-  }
-  el.driftFixPanel.className = "stack";
-  el.driftFixPanel.innerHTML = `
-    <div class="line-note">${escapeHtml(fixes.summary || "")}</div>
-    ${actions.map((action) => {
-      const saved = state.manualDriftChoices?.[action.id] || "";
-      return `
-        <article class="drift-fix-card">
-          <div class="line-card-header">
-            <div>
-              <div class="line-title">${escapeHtml(action.move)} as ${escapeHtml(action.color)}</div>
-              <div class="tree-meta">${Number(action.recent_pct || 0)}% recent · ${Number(action.overall_pct || 0)}% overall · ${Number(action.drift || 0)} drift</div>
-            </div>
-            ${saved ? `<span class="line-badge known">${escapeHtml(saved)}</span>` : ""}
-          </div>
-          <div class="chip-row">
-            <button class="launch-btn" type="button" data-drift-choice="${escapeHtml(action.id)}" data-drift-action="adopt">${escapeHtml(action.adopt_text)}</button>
-            <button class="ghost-btn" type="button" data-drift-choice="${escapeHtml(action.id)}" data-drift-action="repair">${escapeHtml(action.repair_text)}</button>
-          </div>
-        </article>
-      `;
-    }).join("")}
-  `;
-}
-
-function renderImportSpeed(report) {
-  if (!el.importSpeedPanel) return;
-  if (!report) {
-    el.importSpeedPanel.className = "stack empty";
-    el.importSpeedPanel.textContent = "Import games to review speed and cache diagnostics.";
-    return;
-  }
-  const cards = [
-    ["Games indexed", report.games_indexed],
-    ["Positions indexed", report.positions_indexed],
-    ["Repeated positions", report.repeated_positions],
-    ["Analyzed", report.positions_analyzed],
-    ["Lessons", report.lessons_created],
-    ["Skipped by filter", report.positions_skipped],
-  ];
-  el.importSpeedPanel.className = "stack";
-  el.importSpeedPanel.innerHTML = `
-    <div class="speed-grid">
-      ${cards.map(([label, value]) => `<div class="speed-card"><span>${escapeHtml(label)}</span><strong>${Number(value || 0)}</strong></div>`).join("")}
-    </div>
-    <div class="line-note">${escapeHtml(report.cache_key || "engine cache")}</div>
-    ${(report.notes || []).map((note) => `<div class="line-note">- ${escapeHtml(note)}</div>`).join("")}
-  `;
-}
-
-function renderSmartRetry(retry) {
-  if (!el.smartRetryPanel) return;
-  const deck = retry?.deck || [];
-  if (!deck.length) {
-    el.smartRetryPanel.className = "stack empty";
-    el.smartRetryPanel.textContent = "Complete review attempts to create smart retry cards from repeated misses.";
-    return;
-  }
-  el.smartRetryPanel.className = "stack";
-  el.smartRetryPanel.innerHTML = deck.slice(0, 10).map((item) => `
-    <button class="line-card retry-card" type="button" data-work-line="${escapeHtml(item.lesson_id)}">
-      <div class="line-card-header">
-        <div class="line-title">${escapeHtml(item.line_label)}</div>
-        <span class="line-badge needs-work">${escapeHtml(item.retry_interval || "retry")}</span>
-      </div>
-      <div class="line-note">${escapeHtml(item.reason || "")}</div>
-      <div class="line-preview">Play ${escapeHtml(item.recommended_move || "")}</div>
-    </button>
-  `).join("");
-}
-
-function renderPremoveQuiz(quiz) {
-  if (!el.premoveQuizPanel) return;
-  const cards = quiz?.cards || [];
-  if (!cards.length) {
-    el.premoveQuizPanel.className = "stack empty";
-    el.premoveQuizPanel.textContent = "Pre-move quiz cards appear after import.";
-    return;
-  }
-  el.premoveQuizPanel.className = "stack";
-  el.premoveQuizPanel.innerHTML = cards.slice(0, 10).map((item) => `
-    <article class="quiz-card">
-      <strong>${escapeHtml(item.prompt || "What would you play here?")}</strong>
-      <div class="line-note">Answer: ${escapeHtml(item.answer || "")}</div>
-      <div class="chip-row">
-        <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Try on board</button>
-      </div>
-    </article>
-  `).join("");
-}
-
-function renderTheoryPresets(theory) {
-  if (!el.theoryPresetPanel) return;
-  const seeds = theory?.seeds || [];
-  if (!seeds.length) {
-    el.theoryPresetPanel.className = "theory-seed-grid empty";
-    el.theoryPresetPanel.innerHTML = `<div class="compact-empty">Import games to suggest theory seeds.</div>`;
-    return;
-  }
-  el.theoryPresetPanel.className = "theory-seed-grid";
-  el.theoryPresetPanel.innerHTML = seeds.slice(0, 10).map((seed) => `
-    <button class="mini-card theory-seed compact" type="button" data-theory-seed="${escapeHtml(seed.move || "")}">
-      <strong>${escapeHtml(seed.label || "Generate theory")}</strong>
-      <span>${escapeHtml(seed.line_label || "")} · ${escapeHtml(seed.move || "")}</span>
-    </button>
-  `).join("");
-}
-
-function renderOpponentSimulator(simulator) {
-  if (!el.opponentSimulatorPanel) return;
-  const scenarios = simulator?.scenarios || [];
-  if (!scenarios.length) {
-    el.opponentSimulatorPanel.className = "stack empty";
-    el.opponentSimulatorPanel.textContent = "Import games to build opponent simulator scenarios.";
-    return;
-  }
-  el.opponentSimulatorPanel.className = "stack";
-  el.opponentSimulatorPanel.innerHTML = scenarios.slice(0, 8).map((scenario) => `
-    <article class="line-card simulator-card">
-      <div class="line-card-header">
-        <div class="line-title">${escapeHtml(scenario.line_label || "Scenario")}</div>
-        <span class="line-badge">${Number(scenario.popularity || 0)}%</span>
-      </div>
-      <div class="line-note">Opponent tries <strong>${escapeHtml(scenario.opponent_reply || "common reply")}</strong>; answer <strong>${escapeHtml(scenario.response || "")}</strong>.</div>
-      <button class="launch-btn" type="button" data-work-line="${escapeHtml(scenario.lesson_id)}">Practice scenario</button>
-    </article>
-  `).join("");
-}
-
-function renderTrapFinder(traps) {
-  if (!el.trapFinderPanel) return;
-  const items = traps?.items || [];
-  if (!items.length) {
-    el.trapFinderPanel.className = "stack empty";
-    el.trapFinderPanel.textContent = "No high-signal trap candidates yet.";
-    return;
-  }
-  el.trapFinderPanel.className = "stack";
-  el.trapFinderPanel.innerHTML = items.slice(0, 8).map((item) => `
-    <article class="line-card trap-card">
-      <div class="line-card-header">
-        <div>
-          <div class="line-title">${escapeHtml(item.line_label || "Trap")}</div>
-          <div class="tree-meta">Trigger: ${escapeHtml(item.trigger || "common reply")}</div>
-        </div>
-        <span class="line-badge needs-work">${Number(item.value_lost_cp || 0) || Number(item.frequency || 0)}</span>
-      </div>
-      <div class="line-note">Punish with <strong>${escapeHtml(item.punish_with || "")}</strong>. ${escapeHtml(item.why || "")}</div>
-      <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work trap</button>
-    </article>
-  `).join("");
-}
-
-function renderRepertoireExport(exportPayload) {
-  if (!el.repertoireExportPanel) return;
-  state.repertoireExportText = exportPayload?.text || "";
-  if (!state.repertoireExportText) {
-    el.repertoireExportPanel.className = "stack empty";
-    el.repertoireExportPanel.textContent = "Import games to prepare a repertoire export.";
-    return;
-  }
-  el.repertoireExportPanel.className = "stack";
-  el.repertoireExportPanel.innerHTML = `
-    <div class="line-note">${Number(exportPayload.line_count || 0)} prepared lines ready to export.</div>
-    <button class="launch-btn" type="button" data-export-repertoire="true">Download repertoire export</button>
-  `;
-}
-
-function renderDatabaseTraining(items) {
-  if (!el.databaseTrainingList) return;
-  if (!items.length) {
-    el.databaseTrainingList.className = "stack empty";
-    el.databaseTrainingList.textContent = "Import games with database context to prepare against common replies.";
-    return;
-  }
-  el.databaseTrainingList.className = "stack";
-  el.databaseTrainingList.innerHTML = items.slice(0, 8).map((item) => {
-    const reply = item.top_database_reply || {};
-    const moves = item.database_moves || [];
-    return `
-      <article class="line-card response-builder-card">
-        <div class="line-card-header">
-          <div>
-            <div class="line-title">${escapeHtml(item.line_label)}</div>
-            <div class="tree-meta">Most common reply: ${escapeHtml(reply.san || reply.uci || "unknown")} · ${Number(reply.popularity || 0)}%</div>
-          </div>
-          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Train it</button>
-        </div>
-        <div class="line-note">Recommended response: <strong>${escapeHtml(item.recommended_move)}</strong></div>
-        <div class="chip-row">${moves.map((move) => `<span class="lesson-chip">${escapeHtml(move.san || move.uci)} ${Number(move.popularity || 0)}%</span>`).join("")}</div>
-      </article>
-    `;
-  }).join("");
 }
 
 function renderGameMoveTree(tree) {
@@ -4904,7 +3498,7 @@ function renderFreeStudyWorkspace() {
       el.studyDatabaseMoves.textContent = databaseError
         || (explorerEnabled
           ? "No database moves were returned for this exact position yet."
-          : "Add a Lichess token in Setup or Study Lines for richer database move coverage.");
+          : "Add a Lichess token in Setup or Train for richer database move coverage.");
     } else {
       el.studyDatabaseMoves.className = "stack";
       el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
@@ -5037,7 +3631,7 @@ function renderStudyWorkspace() {
       el.studyDatabaseMoves.textContent = databaseError
         || (explorerEnabled
           ? "No database moves were returned for this exact position yet."
-          : "Add a Lichess token in Setup or Study Lines for richer database move coverage.");
+          : "Add a Lichess token in Setup or Train for richer database move coverage.");
     } else {
       el.studyDatabaseMoves.className = "stack";
       el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
@@ -5141,72 +3735,6 @@ function renderQueueExplainer(lesson, variant = "full") {
   `;
 }
 
-function renderImproveList(node, items, emptyText) {
-  if (!items.length) {
-    node.className = "stack empty";
-    node.textContent = emptyText;
-    return;
-  }
-  node.className = "stack compact-work-list";
-  node.innerHTML = items
-    .map((item) => {
-      const candidatePreview = (item.candidate_lines || [])
-        .slice(0, 5)
-        .map((line) => renderCandidateLineSummary(line))
-        .join("");
-      const repeated = Number(item.repeat_mistake_count || 0);
-      return `
-      <article class="line-card compact-work-card">
-        <div class="line-card-header">
-          <div>
-            <div class="line-title">${escapeHtml(item.line_label || item.opening_name)}</div>
-            <div class="tree-meta">${escapeHtml(item.opening_name || "")}</div>
-          </div>
-          <div class="line-badge ${statusClass(item.line_status)}">${labelForStatus(item.line_status)}</div>
-        </div>
-        <div class="compact-line-summary">
-          <span>Train <strong>${escapeHtml(item.best_reply)}</strong>${classificationBadge(item.recommended_classification, "inline")}</span>
-          <span>${Number(item.frequency || 0)}x</span>
-          <span>${Math.round(Number(item.priority || 0))} priority</span>
-          <span>${describeEdge(item.value_lost_cp)}</span>
-          ${repeated ? `<span>${repeated} misses</span>` : ""}
-        </div>
-        <div class="compact-candidate-row">${candidatePreview || "No candidate lines available."}</div>
-        ${renderQueueExplainer(item, "compact")}
-        <div class="line-preview compact">${escapeHtml(item.continuation_san || "")}</div>
-        <div class="line-note compact">${escapeHtml(item.explanation || "")}</div>
-        <div class="chip-row">
-          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>
-          ${item.position_identifier ? `<a class="launch-btn" href="${escapeHtml(item.position_identifier)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
-        </div>
-      </article>
-    `;
-    })
-    .join("");
-}
-
-function renderSuggestions(items) {
-  if (!items.length) {
-    el.suggestionList.className = "stack empty";
-    el.suggestionList.textContent = "No repertoire updates yet.";
-    return;
-  }
-  el.suggestionList.className = "stack";
-  el.suggestionList.innerHTML = items
-    .map((item) => `
-      <article class="suggestion-card">
-        <div class="line-title">${escapeHtml(item.title)}</div>
-        <div class="line-note">${escapeHtml(item.detail)}</div>
-        ${item.line ? `<div class="line-preview">${escapeHtml(item.line)}</div>` : ""}
-        <div class="chip-row">
-          ${item.lesson_id ? `<button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>` : ""}
-          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
-        </div>
-      </article>
-    `)
-    .join("");
-}
-
 async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMoveSan = "", yourMoveCount = 0) {
   const response = await fetch("/api/position-insight", {
     method: "POST",
@@ -5237,89 +3765,6 @@ async function fetchDatabaseContext(fen, playUci = []) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load database moves.");
   return payload;
-}
-
-async function generateTheoryLine() {
-  if (!el.generateTheory || !el.theoryOutput) return;
-  const moveUci = String(el.theoryMove?.value || "").trim();
-  const plies = Math.max(1, Math.min(30, Number(el.theoryPly?.value || 10)));
-  el.generateTheory.disabled = true;
-  el.theoryOutput.className = "theory-output theory-output-compact loading";
-  el.theoryOutput.innerHTML = `<div class="line-note">Generating ${plies} best moves from the current board position...</div>`;
-  try {
-    const response = await fetch("/api/generate-theory", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...currentStudySettingsPayload(),
-        fen: normalizeFen(state.boardFen || START_FEN),
-        move_uci: moveUci,
-        plies,
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not generate theory.");
-    state.theoryResult = payload;
-    renderTheoryResult(payload);
-  } catch (error) {
-    el.theoryOutput.className = "theory-output theory-output-compact empty";
-    el.theoryOutput.textContent = error.message || "Could not generate theory.";
-  } finally {
-    el.generateTheory.disabled = false;
-  }
-}
-
-function renderTheoryResult(result) {
-  if (!el.theoryOutput) return;
-  const steps = Array.isArray(result?.steps) ? result.steps : [];
-  if (!steps.length) {
-    el.theoryOutput.className = "theory-output theory-output-compact empty";
-    el.theoryOutput.textContent = "No engine theory line was generated from this position.";
-    return;
-  }
-  el.theoryOutput.className = "theory-output theory-output-compact";
-  const seed = result.seed_move
-    ? `<div class="theory-seed compact">After ${escapeHtml(result.seed_move.san)} (${escapeHtml(result.seed_move.uci)})</div>`
-    : `<div class="theory-seed compact">From the current board position</div>`;
-  const line = steps.map((step) => step.san).join(" ");
-  el.theoryOutput.innerHTML = `
-    ${seed}
-    <div class="theory-line theory-line-compact">${escapeHtml(line)}</div>
-    <div class="theory-step-list compact">
-      ${steps.map((step) => renderTheoryStep(step)).join("")}
-    </div>
-    <div class="chip-row">
-      <button class="launch-btn study-link-btn utility" type="button" data-copy-study="fen">Copy current FEN</button>
-      ${result.position_identifier ? `<a class="launch-btn study-link-btn" href="${escapeHtml(result.position_identifier)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.position_identifier_label || "Open on Lichess")}</a>` : ""}
-    </div>
-  `;
-}
-
-function renderTheoryStep(step) {
-  const candidates = Array.isArray(step?.candidate_lines) ? step.candidate_lines.slice(0, 3) : [];
-  const db = Array.isArray(step?.database_moves) ? step.database_moves.slice(0, 3) : [];
-  const dbMarkup = db.map((move) => `<span>${escapeHtml(move.san || move.uci || "")} ${Number(move.popularity || 0).toFixed(1)}%</span>`).join("");
-  return `
-    <article class="theory-step compact">
-      <div class="theory-step-head">
-        <div>
-          <div class="theory-step-title">${Number(step?.ply || 0)}. ${escapeHtml(step?.san || "")} ${classificationBadge(step?.classification, "compact")}</div>
-          <div class="tree-meta">${escapeHtml(step?.side || "")} to move | ${formatEval(step?.eval_cp_white ?? 0)}</div>
-        </div>
-        <span class="line-badge">${escapeHtml(step?.uci || "")}</span>
-      </div>
-      <div class="theory-mini-grid">
-        <div>
-          <span>Engine</span>
-          <div class="theory-chip-line">${candidates.map((line) => renderCandidateLineSummary(line)).join("") || `<small class="theory-empty-chip">No alternatives</small>`}</div>
-        </div>
-        <div>
-          <span>Database</span>
-          <div class="theory-chip-line">${dbMarkup || `<small class="theory-empty-chip">No database data</small>`}</div>
-        </div>
-      </div>
-    </article>
-  `;
 }
 
 function buildLessonInsight(lesson) {
@@ -5362,7 +3807,7 @@ function addLessonToNeedsWork(lessonId) {
     saveReviewStats(state.payload.username);
     void persistReviewStats(state.payload.username);
   }
-  setActiveTab("needs-work");
+  setActiveTab("trainer");
 }
 
 function saveManualRepertoireMove(lessonId) {
@@ -5399,89 +3844,6 @@ function saveManualRepertoireMove(lessonId) {
     note.textContent = message;
     el.previewPanel.appendChild(note);
   }
-}
-
-function saveDriftChoice(choiceId, action, button) {
-  if (!choiceId) return;
-  state.manualDriftChoices[choiceId] = action === "repair" ? "repair" : "adopt";
-  if (state.payload?.username) {
-    saveReviewStats(state.payload.username);
-    void persistReviewStats(state.payload.username);
-  }
-  if (button instanceof HTMLElement) {
-    const original = button.textContent;
-    button.textContent = "Saved";
-    window.setTimeout(() => { button.textContent = original || "Saved"; }, 1000);
-  }
-  renderDriftFixes(state.payload?.profile?.drift_fixes || null);
-}
-
-function exportPreparationPack(button) {
-  const text = state.prepPackText || prepPackToText(state.payload?.profile?.prep_pack || null);
-  if (!text) return;
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `bookup-prep-pack-${new Date().toISOString().slice(0, 10)}.txt`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  button.textContent = "Exported";
-  setTimeout(() => { button.textContent = "Export prep pack"; }, 1400);
-}
-
-function exportRepertoireLines(button) {
-  const text = state.repertoireExportText || state.payload?.profile?.repertoire_export?.text || "";
-  if (!text) return;
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = state.payload?.profile?.repertoire_export?.filename || `bookup-repertoire-${new Date().toISOString().slice(0, 10)}.txt`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  if (button instanceof HTMLElement) {
-    button.textContent = "Downloaded";
-    setTimeout(() => { button.textContent = "Download repertoire export"; }, 1400);
-  }
-}
-
-function renderMistakes(items) {
-  const repeatedItems = items.filter((item) => (item.repeat_mistake_count || 0) >= 2);
-  if (!repeatedItems.length) {
-    el.mistakeList.className = "stack empty";
-    el.mistakeList.textContent = "No opening mistakes to review right now.";
-    return;
-  }
-  el.mistakeList.className = "stack compact-review-grid";
-  el.mistakeList.innerHTML = repeatedItems
-    .map((item, index) => `
-      <article class="mistake-card compact-review-card">
-        <div class="mistake-header">
-          <div>
-            <div class="mistake-title">${index + 1}. ${escapeHtml(item.line_label || item.opening_name)}</div>
-            <div class="tree-meta">${escapeHtml(item.opening_name || "")}</div>
-          </div>
-          <div class="line-badge needs-work">Needs work</div>
-        </div>
-        <div class="mistake-copy">
-          You usually play <strong>${escapeHtml(item.played)}</strong>${classificationBadge(item.played_classification, "inline")},
-          but the best continuation is <strong>${escapeHtml(item.best_move)}</strong>${classificationBadge(item.recommended_classification, "inline")}.
-        </div>
-        <div class="line-note">Repeated mistake count: ${item.repeat_mistake_count || 0}</div>
-        <div class="line-note">${escapeHtml(item.explanation)}</div>
-        <div class="line-preview">${escapeHtml(item.continuation_san || "")}</div>
-        <div class="chip-row">
-          <button class="launch-btn" type="button" data-work-line="${escapeHtml(item.lesson_id)}">Work on line</button>
-          ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
-        </div>
-      </article>
-    `)
-    .join("");
 }
 
 function rebuildQueue() {
@@ -7037,8 +5399,6 @@ function recordReview(lessonId, correct) {
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
-    renderMistakeTimeline(state.payload?.profile?.mistake_timeline || null);
-    renderReviewSchedule(state.payload?.profile?.review_schedule || null);
     void persistReviewStats(state.payload.username);
   }
 }
@@ -7067,8 +5427,6 @@ function recordLessonCompletion(lessonId, clean) {
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
-    renderMistakeTimeline(state.payload?.profile?.mistake_timeline || null);
-    renderReviewSchedule(state.payload?.profile?.review_schedule || null);
     void persistReviewStats(state.payload.username);
   }
 }
@@ -7109,7 +5467,6 @@ function buildReviewSummary() {
     clean_completed_runs: cleanCompleted,
     manual_needs_work: state.manualNeedsWork,
     manual_repertoire: state.manualRepertoire,
-    manual_drift_choices: state.manualDriftChoices,
     last_saved_at: new Date().toISOString(),
   };
 }
@@ -7558,12 +5915,10 @@ function setSmartTheoryControlsRunning(running) {
     el.smartTheoryStyleMinWeight,
     el.smartTheoryMaxPly,
     el.smartTheoryMaxPositions,
-    el.smartTheoryCustomFen,
     el.smartTheoryLichessStudyId,
     el.smartTheoryLichessChapterName,
     el.smartTheoryLichessOrientation,
     el.smartTheoryChapterStrategy,
-    el.smartTheoryOpeningFocus,
     el.smartTheoryAutoSyncStudy,
     el.smartTheoryLichessToken,
     el.smartTheoryIncludeRare,

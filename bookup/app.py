@@ -33,7 +33,6 @@ from .analysis import (
     configure_lichess,
     database_context_for_board,
     generate_smart_theory_tree,
-    generate_theory_line,
     validate_smart_theory_tree,
 )
 from .chessnut_bridge import default_chessnut_db_path, extract_chessnut_games_as_pgn
@@ -60,12 +59,11 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 24
+PROFILE_SCHEMA_VERSION = 26
 GAMES_CACHE_SCHEMA_VERSION = 20
 ENGINE_DEFAULTS_VERSION = 7
 MAX_SAFE_PARALLEL_WORKERS = 8
 WEB_MODE = False
-ENABLE_BRILLIANT_TRACKER = True
 ENGINE_LOCK = threading.Lock()
 LIVE_ENGINE_SESSION: EnginePool | None = None
 LIVE_ENGINE_KEY = ""
@@ -2582,7 +2580,6 @@ def build_defaults_payload(config: dict) -> dict:
             maximum=8.0,
         ),
         "web_mode": WEB_MODE,
-        "enable_brilliant_tracker": ENABLE_BRILLIANT_TRACKER,
     }
 
 
@@ -2605,10 +2602,9 @@ def resolve_username(preferred: object = "", config: dict | None = None) -> str:
     return primary_chesscom_username(config)
 
 
-def configure_runtime_mode(*, web_mode: bool, enable_brilliant_tracker: bool) -> None:
-    global WEB_MODE, ENABLE_BRILLIANT_TRACKER
+def configure_runtime_mode(*, web_mode: bool) -> None:
+    global WEB_MODE
     WEB_MODE = bool(web_mode)
-    ENABLE_BRILLIANT_TRACKER = bool(enable_brilliant_tracker)
 
 
 def profile_request_key(
@@ -2633,10 +2629,7 @@ def profile_request_key(
                 "multipv": settings.multipv,
                 "think_time_sec": settings.think_time_sec,
             },
-            "runtime": {
-                "web_mode": WEB_MODE,
-                "brilliant_tracker": ENABLE_BRILLIANT_TRACKER,
-            },
+            "runtime": {"web_mode": WEB_MODE},
         },
         sort_keys=True,
     )
@@ -2707,25 +2700,7 @@ def profile_response_payload(
 
 
 def browser_profile_view(profile_data: dict | None) -> dict | None:
-    if profile_data is None:
-        return None
-    if ENABLE_BRILLIANT_TRACKER:
-        return profile_data
-    profile_copy = dict(profile_data)
-    profile_copy["brilliant_tracker"] = {
-        "enabled": False,
-        "summary": {
-            "moves_scanned": 0,
-            "classified_moves": 0,
-            "cached_hits": 0,
-            "live_hits": 0,
-        },
-        "high_confidence": [],
-        "watchlist": [],
-        "games": [],
-        "message": "Brilliant Tracker is disabled in browser mode.",
-    }
-    return profile_copy
+    return profile_data
 
 
 def _safe_number(value: object, default: float = 0.0) -> float:
@@ -3197,21 +3172,6 @@ def auto_import_status() -> tuple:
     )
 
 
-@app.get("/api/cache-stats")
-def cache_stats() -> tuple:
-    username = resolve_username(request.args.get("username", ""))
-    if not username:
-        return jsonify(
-            {
-                "engine_entries": 0,
-                "profile_entries": 0,
-                "game_entries": 0,
-                "total_bytes": 0,
-            }
-        )
-    return jsonify(STORE.cache_stats(username))
-
-
 @app.get("/api/progress")
 def progress_state() -> tuple:
     config = migrate_engine_defaults(load_config())
@@ -3485,7 +3445,6 @@ def profile() -> tuple:
             games,
             engine,
             progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
-            enable_brilliant_tracker=ENABLE_BRILLIANT_TRACKER,
         )
         finish_analysis_status(ok=True, message="Analysis complete.")
     except FileNotFoundError:
@@ -3591,7 +3550,6 @@ def import_pgn() -> tuple:
             games,
             engine,
             progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
-            enable_brilliant_tracker=ENABLE_BRILLIANT_TRACKER,
         )
         finish_analysis_status(ok=True, message="PGN analysis complete.")
     except FileNotFoundError:
@@ -3696,7 +3654,6 @@ def import_chessnut() -> tuple:
             games,
             engine,
             progress_callback=lambda **patch: update_analysis_status(settings=settings, engine=engine, **patch),
-            enable_brilliant_tracker=ENABLE_BRILLIANT_TRACKER,
         )
         finish_analysis_status(ok=True, message="NewChessnut OTB import complete.")
     except FileNotFoundError:
@@ -3826,60 +3783,6 @@ def database_moves() -> tuple:
     configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     return jsonify(database_context_for_board(board, play_uci=play_uci, limit=8))
-
-
-@app.post("/api/generate-theory")
-def generate_theory() -> tuple:
-    payload = request.get_json(force=True)
-    fen = str(payload.get("fen", "")).strip()
-    if fen == "startpos":
-        fen = chess.STARTING_FEN
-    if not fen:
-        return jsonify({"error": "FEN is required."}), 400
-    try:
-        board = chess.Board(fen)
-    except ValueError:
-        return jsonify({"error": "Invalid FEN."}), 400
-    seed_move_uci = str(payload.get("move_uci", "") or payload.get("seed_move_uci", "")).strip()
-    try:
-        plies = int(payload.get("plies", 10) or 10)
-    except (TypeError, ValueError):
-        plies = 10
-
-    config = load_config()
-    settings = request_engine_settings(payload, config)
-    # Keep the legacy linear theory generator responsive regardless of heavy
-    # global import settings. This path extends one line, so one worker is enough.
-    try:
-        override_time = float(payload.get("engine_movetime_sec", payload.get("think_time_sec", settings.think_time_sec)) or settings.think_time_sec)
-    except (TypeError, ValueError):
-        override_time = settings.think_time_sec
-    settings = EngineSettings(
-        path=settings.path,
-        depth=max(10, min(24, int(settings.depth))),
-        threads=max(1, min(8, int(settings.threads))),
-        hash_mb=max(256, min(4096, int(settings.hash_mb))),
-        multipv=max(1, min(5, int(settings.multipv))),
-        think_time_sec=max(0.05, min(5.0, float(override_time))),
-        parallel_workers=1,
-    )
-    try:
-        engine = shared_engine_for(settings)
-        theory = generate_theory_line(
-            board,
-            engine,
-            seed_move_uci=seed_move_uci,
-            plies=plies,
-            time_sec=settings.think_time_sec,
-        )
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except FileNotFoundError:
-        return jsonify({"error": "The Stockfish executable could not be opened."}), 400
-    except Exception as exc:
-        return jsonify({"error": f"Theory generation failed: {exc}"}), 500
-
-    return jsonify(theory)
 
 
 @app.post("/api/smart-theory/resolve-source")
@@ -4560,7 +4463,7 @@ def review_progress() -> tuple:
 
 
 def run_app() -> None:
-    configure_runtime_mode(web_mode=False, enable_brilliant_tracker=True)
+    configure_runtime_mode(web_mode=False)
     if webview is None:
         run_browser_app()
         return
@@ -4578,7 +4481,7 @@ def run_app() -> None:
         webview.start()
     except Exception as exc:
         print(f"Bookup desktop webview failed; opening browser fallback instead: {exc}", file=sys.stderr)
-        configure_runtime_mode(web_mode=True, enable_brilliant_tracker=False)
+        configure_runtime_mode(web_mode=True)
         webbrowser.open(url, new=2)
         try:
             while True:
@@ -4609,7 +4512,7 @@ def _start_local_server(port: int) -> str:
 
 
 def run_browser_app() -> None:
-    configure_runtime_mode(web_mode=True, enable_brilliant_tracker=False)
+    configure_runtime_mode(web_mode=True)
     url = _start_local_server(8877)
     webbrowser.open(url, new=2)
     try:

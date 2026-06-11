@@ -63,24 +63,6 @@
     });
   }
 
-  function consolidateRepertoire() {
-    const tree = byId("gameMoveTree");
-    const repertoire = document.querySelector('[data-tab-panel="repertoire-map"]');
-    if (!tree || !repertoire) return;
-    const sourceCard = tree.closest(".card") || tree.parentElement;
-    if (!sourceCard) return;
-    const sourceSection = document.createElement("section");
-    sourceSection.className = "section-block product-repertoire-tree";
-    sourceSection.innerHTML = `
-      <div class="section-label">Repertoire Tree</div>
-      <h2 class="section-title">Navigate the lines from your imported games</h2>
-    `;
-    sourceSection.appendChild(sourceCard);
-    const health = repertoire.querySelector(".section-block");
-    if (health?.nextSibling) repertoire.insertBefore(sourceSection, health.nextSibling);
-    else repertoire.appendChild(sourceSection);
-  }
-
   function labelHonestAccuracy() {
     document.querySelectorAll(".progress-stat-card span, .progress-metric-grid article span").forEach((label) => {
       if (label.textContent.trim() === "Accuracy") label.textContent = "Bookup local accuracy";
@@ -127,7 +109,6 @@
     annotateEdition();
     compactHeader();
     consolidateNavigation();
-    consolidateRepertoire();
     repairLegacyTab();
     labelHonestAccuracy();
     setBoardSize();

@@ -7,6 +7,7 @@ Run from repo root:
 from __future__ import annotations
 
 import sys
+import io
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bookup.analysis import _move_reaction_for_board, generate_smart_theory_tree
+from bookup.analysis import _first_move_repertoire, _move_reaction_for_board, generate_smart_theory_tree
 from bookup.app import DATA_DIR, app, import_games_from_pgn_text
+from bookup.chesscom import ImportedGame
 from bookup.progress_tracker import progress_path
 
 
@@ -37,14 +39,9 @@ def _sample_profile_payload() -> dict:
             "needs_work": 0,
             "known_positions": 1,
         },
-        "lesson_dashboard": {
-            "lessons": [],
-            "stats_cards": [],
-            "queued_lessons": [],
-            "confidence_graph": {"total": 0, "buckets": []},
-        },
-        "heatmap": [],
-        "review_schedule": [],
+        "trainer_queue_due": [],
+        "trainer_queue_new": [],
+        "known_line_archive": [],
     }
 
 
@@ -65,10 +62,6 @@ def test_basic_endpoints() -> None:
 
         status = client.get("/api/analysis-status")
         _check("analysis_status_200", status.status_code == 200, status.status_code)
-
-        cache = client.get("/api/cache-stats")
-        _check("cache_stats_200", cache.status_code == 200, cache.status_code)
-
 
 def test_board_and_trainer_paths() -> None:
     with app.test_client() as client:
@@ -131,6 +124,24 @@ def test_board_and_trainer_paths() -> None:
         _check("manual_repertoire_visible_in_state", isinstance(manual, dict) and "smoke-pos" in manual, manual)
 
 
+def test_black_first_move_is_opponent_choice() -> None:
+    pgn = """[Event "Black perspective"]\n[White "Opponent"]\n[Black "Input user"]\n[Result "0-1"]\n\n1. e4 d6 2. d4 Nf6 0-1"""
+    game = chess.pgn.read_game(io.StringIO(pgn))
+    _check("black_first_move_fixture_parsed", game is not None)
+    imported = ImportedGame(
+        url="",
+        time_class="rapid",
+        player_color="black",
+        result="0-1",
+        opponent="Opponent",
+        pgn=pgn,
+        game=game,
+    )
+    first_moves = _first_move_repertoire([imported], "black")
+    _check("black_first_move_is_opponent_e4", first_moves.get("items", [{}])[0].get("move") == "e4", first_moves)
+    _check("black_first_move_perspective", first_moves.get("perspective") == "opponent", first_moves)
+
+
 def test_realign_and_database_paths() -> None:
     start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     with app.test_client() as client, patch(
@@ -156,18 +167,9 @@ def test_realign_and_database_paths() -> None:
 
 def test_engine_wrapped_endpoints() -> None:
     with app.test_client() as client, patch("bookup.app.shared_engine_for", return_value=object()), patch(
-        "bookup.app.generate_theory_line",
-        return_value={"moves": ["e4", "e5"], "line_uci": ["e2e4", "e7e5"]},
-    ), patch(
         "bookup.app.build_position_insight",
         return_value={"recommended": {"uci": "e2e4", "san": "e4"}, "engine_lines": []},
     ):
-        theory = client.post(
-            "/api/generate-theory",
-            json={"fen": "startpos", "move_uci": "e2e4", "plies": 6, "engine_movetime_sec": 0.1},
-        )
-        _check("generate_theory_200", theory.status_code == 200, theory.status_code)
-
         insight = client.post(
             "/api/position-insight",
             json={"fen": "startpos", "play_uci": [], "your_move_uci": "e2e4"},
@@ -383,12 +385,10 @@ def _snapshot_style_lines(limit: int = 36) -> list[dict]:
     if not isinstance(profile, dict):
         return []
     lessons: list[dict] = []
-    review_schedule = profile.get("review_schedule")
-    if isinstance(review_schedule, dict):
-        for key in ("due_today", "new_later", "known_archive"):
-            value = review_schedule.get(key)
-            if isinstance(value, list):
-                lessons.extend(item for item in value if isinstance(item, dict))
+    for key in ("trainer_queue_due", "trainer_queue_new", "known_line_archive"):
+        value = profile.get(key)
+        if isinstance(value, list):
+            lessons.extend(item for item in value if isinstance(item, dict))
     for opening in profile.get("repertoire_tree") or []:
         if not isinstance(opening, dict):
             continue
@@ -546,6 +546,7 @@ def test_profile_and_import_pgn_paths() -> None:
 def main() -> None:
     test_basic_endpoints()
     test_board_and_trainer_paths()
+    test_black_first_move_is_opponent_choice()
     test_realign_and_database_paths()
     test_engine_wrapped_endpoints()
     test_settings_smart_theory_roundtrip()

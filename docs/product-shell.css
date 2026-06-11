@@ -203,19 +203,6 @@ svg {
   box-shadow: inset 3px 0 0 var(--product-accent);
 }
 
-.workspace-tab[data-tab-target="needs-work"],
-.workspace-tab[data-tab-target="theory"],
-.workspace-tab[data-tab-target="review"],
-.workspace-panel[data-tab-panel="needs-work"],
-.workspace-panel[data-tab-panel="theory"],
-.workspace-panel[data-tab-panel="review"] {
-  display: none !important;
-}
-
-.workspace-panel[data-tab-panel="stats"] > .section-block:not(.progress-cockpit-section) {
-  display: none !important;
-}
-
 .move-tree-node summary,
 .move-tree-row {
   display: flex;

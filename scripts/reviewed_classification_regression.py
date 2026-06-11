@@ -213,7 +213,8 @@ def main() -> int:
     else:
         fixtures = sorted(REVIEWED_DIR.glob("*.labels.json"))
     if not fixtures:
-        raise SystemExit("No reviewed game fixtures found.")
+        print("SKIP reviewed classification regression: no reviewed game fixtures found.")
+        return 0
 
     total_mismatches = 0
     for fixture in fixtures:

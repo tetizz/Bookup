@@ -57,13 +57,10 @@
   <main class="app-shell">
     <nav class="workspace-tabs">
       <button class="workspace-tab active" data-tab-target="setup">Setup</button>
-      <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire Map</button>
+      <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire</button>
+      <button class="workspace-tab" data-tab-target="trainer">Train</button>
       <button class="workspace-tab" data-tab-target="stats">Progress</button>
-      <button class="workspace-tab" data-tab-target="needs-work">Needs Work</button>
-      <button class="workspace-tab" data-tab-target="trainer">Train Positions</button>
-      <button class="workspace-tab" data-tab-target="theory">Theory</button>
-      <button class="workspace-tab" data-tab-target="smart-theory">Smart Theory Generator</button>
-      <button class="workspace-tab" data-tab-target="review">Review</button>
+      <button class="workspace-tab" data-tab-target="smart-theory">Smart Theory</button>
     </nav>
 
     <section class="workspace-panel active" data-tab-panel="setup">
@@ -263,6 +260,15 @@
         <h2 class="section-title">Different paths into the same position</h2>
         <div id="transpositionList" class="stack empty">Import games to detect shared positions and transpositions.</div>
       </section>
+
+      <section class="section-block product-repertoire-tree">
+        <div class="section-label">Repertoire Tree</div>
+        <h2 class="section-title">Navigate the lines from your imported games</h2>
+        <article class="card">
+          <p class="summary-copy">This exact-position tree separates games where you played White from games where you played Black. Select any branch to open it on the training board.</p>
+          <div id="gameMoveTree" class="move-tree empty">Import games to build your move tree.</div>
+        </article>
+      </section>
     </section>
 
     <section class="workspace-panel" data-tab-panel="stats">
@@ -408,183 +414,6 @@
         </div>
       </section>
 
-      <section class="section-block">
-        <div class="section-label">Game Split</div>
-        <h2 class="section-title">Results and time-control mix from imported games</h2>
-        <div id="statsSummaryPanel" class="stats-summary-panel empty">Import rated games to see your W/D/L, score rate, and time-control split.</div>
-      </section>
-
-      <section id="brilliantTrackerSection" class="section-block">
-        <div class="section-label">Best Move Tracker</div>
-        <h2 class="section-title">Repeated positions where your usual move already matches Stockfish</h2>
-        <div id="brilliantTrackerPanel" class="brilliant-tracker-panel empty">Run analysis to identify repeated best moves.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Training Intelligence</div>
-        <h2 class="section-title">Memory, drift, and cache health</h2>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Line Memory Score</h3>
-            <div id="memoryScorePanel" class="stack empty">Import games to score line memory and retention.</div>
-          </article>
-          <article class="card">
-            <h3>Opening Drift Detector</h3>
-            <div id="driftDetectorPanel" class="stack empty">Import games to compare recent first moves with your long-term repertoire.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Preparation Pack</h3>
-            <div id="prepPackPanel" class="stack empty">Import games to assemble a compact study pack.</div>
-          </article>
-          <article class="card">
-            <h3>Engine Cache</h3>
-            <div id="cacheDashboard" class="stack empty">Cache diagnostics are ready after Bookup loads the local workspace.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Study Plan Generator</h3>
-            <div id="studyPlanPanel" class="stack empty">Import games to build a short study session plan.</div>
-          </article>
-          <article class="card">
-            <h3>Confidence Graph</h3>
-            <div id="confidenceGraphPanel" class="stack empty">Import games to map line-confidence distribution.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card">
-            <h3>Drift Fixes</h3>
-            <div id="driftFixPanel" class="stack empty">Import games to review adopt-or-repair choices for drifting first moves.</div>
-          </article>
-          <article class="card">
-            <h3>Import Speed Dashboard</h3>
-            <div id="importSpeedPanel" class="stack empty">Import games to review speed and cache diagnostics.</div>
-          </article>
-        </div>
-        <div class="split-grid intelligence-grid">
-          <article class="card stockfish-stats-card">
-            <h3>Stockfish Runtime</h3>
-            <div id="stockfishStatsPanel" class="stack empty">Run analysis to see analyzed positions and offline engine-cache reuse.</div>
-          </article>
-          <article class="card">
-            <h3>Background Analysis</h3>
-            <p class="summary-copy">Bookup runs Stockfish in an isolated browser worker and reuses cached positions so repeated imports do not re-analyze the same board.</p>
-          </article>
-        </div>
-      </section>
-    </section>
-
-    <section class="workspace-panel" data-tab-panel="needs-work">
-      <section class="section-block">
-        <div class="section-label">Due Today</div>
-        <div id="urgentList" class="stack empty">Due lines appear here when a review is ready.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">New Later</div>
-        <div id="sidelineList" class="stack empty">Fresh lines appear here after import.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Suggested Upgrades</div>
-        <div id="suggestionList" class="stack empty">Import games to surface repertoire upgrade candidates.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Mistake Heatmap</div>
-        <h2 class="section-title">Squares where repeated problems cluster</h2>
-        <div id="mistakeHeatmap" class="heatmap-panel empty">Import games to map repeated-mistake square pressure.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Mistake Timeline</div>
-        <h2 class="section-title">When each repeated problem started and whether it is improving</h2>
-        <div id="mistakeTimeline" class="timeline-panel empty">Import games to chart repeated-mistake history.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Spaced Review</div>
-        <h2 class="section-title">Maintenance schedule</h2>
-        <div id="reviewSchedule" class="stack empty">Review schedule appears once lines enter the queue.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Smart Retry</div>
-        <h2 class="section-title">Repeat the exact positions that are not sticking yet</h2>
-        <div id="smartRetryPanel" class="stack empty">Retry cards appear once Bookup finds missed lines.</div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-label">Pre-Move Quiz</div>
-        <h2 class="section-title">Quick prompts before you enter the trainer</h2>
-        <div id="premoveQuizPanel" class="stack empty">Pre-move quiz cards appear after import.</div>
-      </section>
-    </section>
-
-    <section class="workspace-panel" data-tab-panel="review">
-      <section class="section-block">
-        <div class="section-label">Review</div>
-        <h2 class="section-title">Repeated positions that still need correction</h2>
-        <div id="mistakeList" class="stack empty">Opening mistakes appear after import.</div>
-      </section>
-    </section>
-
-    <section class="workspace-panel" data-tab-panel="theory">
-      <div class="theory-layout">
-        <section class="card">
-          <div class="section-label">Imported Games Theory Tree</div>
-          <h2 class="section-title">Your games as a practical move tree</h2>
-          <p class="summary-copy">This tree is built from your imported games only. It separates games where you played White from games where you played Black, labels your moves versus opponent replies, and opens the exact position on the analysis board when you click a node.</p>
-          <div id="gameMoveTree" class="move-tree empty">Import games to build your move tree.</div>
-        </section>
-
-        <aside class="card theory-generator-card">
-          <div class="section-label">Theory Generator</div>
-          <h2 class="section-title">Generate the next best moves</h2>
-          <p class="summary-copy">Use the current analysis-board position, optionally enter a move like <span class="mono-inline">e2e4</span>, then let Stockfish extend the best theory line.</p>
-          <div class="form-grid theory-form-grid">
-            <label class="field">
-              <span>First move to test (optional)</span>
-              <input id="theoryMoveInput" type="text" placeholder="e2e4">
-            </label>
-            <label class="field">
-              <span>Best moves to generate</span>
-              <input id="theoryPlyInput" type="number" min="1" max="30" value="10">
-            </label>
-          </div>
-          <div class="chip-row">
-            <button id="generateTheoryBtn" class="launch-btn" type="button">Generate Theory</button>
-          </div>
-          <div id="theoryOutput" class="theory-output empty">Generate a move to create theory.</div>
-
-          <div class="section-divider"></div>
-          <div class="section-label">Theory Presets</div>
-          <h2 class="section-title compact-title">One-click seeds from your repertoire</h2>
-          <div id="theoryPresetPanel" class="stack empty">Import games to suggest theory seeds.</div>
-
-          <div class="section-divider"></div>
-          <div class="section-label">Response Builder</div>
-          <h2 class="section-title compact-title">Prepare against common replies</h2>
-          <div id="databaseTrainingList" class="stack empty">Import games to rank database-weighted training replies.</div>
-
-          <div class="section-divider"></div>
-          <div class="section-label">Opponent Simulator</div>
-          <h2 class="section-title compact-title">Practice the moves people actually play</h2>
-          <div id="opponentSimulatorPanel" class="stack empty">Import games to build opponent simulator scenarios.</div>
-
-          <div class="section-divider"></div>
-          <div class="section-label">Blunder Trap Finder</div>
-          <h2 class="section-title compact-title">Common replies with concrete punishments</h2>
-          <div id="trapFinderPanel" class="stack empty">Import games to surface trap candidates.</div>
-
-          <div class="section-divider"></div>
-          <div class="section-label">Repertoire Export</div>
-          <h2 class="section-title compact-title">Save your prepared lines</h2>
-          <div id="repertoireExportPanel" class="stack empty">Import games to prepare a repertoire export.</div>
-        </aside>
-      </div>
     </section>
 
     <section class="workspace-panel" data-tab-panel="trainer">
@@ -719,7 +548,7 @@
             <div class="smart-panel-heading"><span>01</span><div><strong>Starting source</strong><small>Choose exactly where theory begins.</small></div></div>
             <label class="field compact"><span>Source</span><select id="smartTheoryStartingSource"><option value="current_board">Current board</option><option value="saved_line">Saved line</option><option value="imported_game">Imported game</option><option value="my_repertoire">My repertoire</option></select></label>
             <label id="smartTheorySourcePickerWrap" class="field compact smart-source-picker"><span>Item</span><select id="smartTheorySourcePicker"><option value="">Select an item</option></select></label>
-            <div id="smartTheorySourcePreview" class="smart-source-preview">Current Study Lines board will be used.</div>
+            <div id="smartTheorySourcePreview" class="smart-source-preview">The current board position will be used.</div>
             <label class="field compact"><span>I play</span><select id="smartTheoryMyColor"><option value="white">White</option><option value="black">Black</option></select></label>
             <label class="field compact"><span>Opponent model</span><select id="smartTheoryOpponentAccuracy"><option value="mixed">Mixed realistic</option><option value="grandmaster">Grandmaster</option><option value="strong_club">Strong club</option><option value="club">Club</option><option value="beginner_intermediate">Beginner / intermediate</option></select></label>
             <details class="smart-advanced-settings"><summary>Generation settings</summary><div class="smart-theory-controls">

@@ -18,7 +18,7 @@
     [601, 700, 48, 6, 46], [701, 800, 47, 6, 47], [801, 900, 46, 6, 48],
     [901, 1000, 45, 6, 49],
   ];
-  const ALL_TABS = ["setup", "repertoire-map", "stats", "needs-work", "trainer", "theory", "smart-theory", "review"];
+  const ALL_TABS = ["setup", "repertoire-map", "trainer", "stats", "smart-theory"];
   const cloudCache = new Map();
   const explorerCache = new Map();
   const state = {
@@ -65,13 +65,11 @@
     loading: false,
     activeTab: "setup",
     dirtyTabs: new Set(ALL_TABS),
-    weakCache: null,
     positionIndex: null,
     saveTimer: 0,
     positionRequestId: 0,
     resizeTimer: 0,
     tabFrame: 0,
-    intelligenceTimer: 0,
     importController: null,
     importMeta: null,
     cacheKey: "local",
@@ -335,7 +333,6 @@
 
   function markDataDirty() {
     state.branches.forEach((branch, index) => { branch._index = index; });
-    state.weakCache = null;
     state.positionIndex = null;
     ALL_TABS.forEach((tab) => state.dirtyTabs.add(tab));
   }
@@ -1037,56 +1034,6 @@
     )).join("") || "No true FEN transpositions found in this import.", !transpositions.length);
   }
 
-  function weakBranches() {
-    if (state.weakCache) return state.weakCache;
-    state.weakCache = [...state.branches].sort((a, b) => {
-      const aa = branchResult(a);
-      const bb = branchResult(b);
-      return (bb.lossRate * Math.log2(bb.total + 1)) - (aa.lossRate * Math.log2(aa.total + 1));
-    });
-    return state.weakCache;
-  }
-
-  function renderNeedsWork() {
-    const urgent = state.lessons.filter(lessonNeedsWork).sort((a, b) => b.priority - a.priority);
-    const later = urgent.filter((lesson) => lesson.valueLostCp < 100).slice(0, 16);
-    setHtml("urgentList", urgent.slice(0, 20).map((lesson) => lessonCard(lesson)).join("") || "No repeated best-move misses were found.", !urgent.length);
-    setHtml("sidelineList", later.map((lesson) => lessonCard(lesson)).join("") || "No lower-priority exact positions yet.", !later.length);
-    setHtml("suggestionList", urgent.slice(0, 10).map((lesson) => card(
-      lesson.recommendedMove,
-      `Replace ${escapeHtml(lesson.yourRepeatedMove)} with ${escapeHtml(lesson.recommendedMove)} after ${escapeHtml(lesson.lineLabel)}. Rehearse ${escapeHtml(lesson.continuationSan || "the resulting position")}.`,
-      `${lesson.classification?.label || "miss"} · priority ${Math.round(lesson.priority)}`
-    )).join("") || "Import games to surface exact move upgrades.", !urgent.length);
-    const squares = new Map();
-    urgent.forEach((lesson) => {
-      const move = String(lesson.yourRepeatedMoveUci || "");
-      [move.slice(0, 2), move.slice(2, 4)].filter(Boolean).forEach((square) => {
-        squares.set(square, (squares.get(square) || 0) + Math.max(1, num(lesson.repeatMistakeCount)));
-      });
-    });
-    const heat = [...squares.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
-    setHtml("mistakeHeatmap", heat.length ? `<div class="heatmap-grid">${heat.map(([square, hits]) => `<div class="heatmap-cell"><strong>${square}</strong><span>${count(hits)}</span></div>`).join("")}</div>` : "No repeated-mistake squares yet.", !heat.length);
-    setHtml("mistakeTimeline", urgent.slice(0, 8).map((lesson) => card(
-      new Date((lesson.lastSeenTime || Date.now() / 1000) * 1000).toLocaleDateString(),
-      `${escapeHtml(lesson.yourRepeatedMove)} → ${escapeHtml(lesson.recommendedMove)}`,
-      `${count(lesson.repeatMistakeCount)} repeats`
-    )).join("") || "No repeated mistakes yet.", !urgent.length);
-    renderReviewSchedule();
-    setHtml("smartRetryPanel", urgent.slice(0, 8).map((lesson) => lessonCard(lesson)).join("") || "No retry positions yet.", !urgent.length);
-    setHtml("premoveQuizPanel", urgent.slice(0, 6).map((lesson, index) => card(
-      `After ${lesson.lineLabel}, what is best?`,
-      `<button class="ghost-btn" data-reveal="${index}" type="button">Reveal answer</button><span class="quiz-answer" hidden>${escapeHtml(lesson.recommendedMove)} · ${escapeHtml(lesson.continuationSan || "")}</span>`,
-      "exact-position recall"
-    )).join("") || "No position quizzes yet.", !urgent.length);
-  }
-
-  function renderReviewSchedule() {
-    const items = state.reviews.filter((item) => item.lessonId).slice().sort((a, b) => String(a.due).localeCompare(String(b.due))).slice(0, 25);
-    setHtml("reviewSchedule", items.map((item) => card(item.line, `${item.result === "known" ? "Clean position" : "Retry needed"} · next review ${item.due}`, item.result)).join("") || "Review schedule appears once exact positions enter the queue.", !items.length);
-    const waiting = dueLessons();
-    setHtml("mistakeList", waiting.map((lesson) => lessonCard(lesson)).join("") || "No missed positions are waiting.", !waiting.length);
-  }
-
   function renderMoveTree() {
     if (!state.branches.length) {
       setHtml("gameMoveTree", "Import games to build your move tree.", true);
@@ -1108,24 +1055,6 @@
         <div class="tree-node-list">${depth < 6 ? renderNode(data._children, depth + 1) : ""}</div>
       </details>`).join("");
     setHtml("gameMoveTree", renderNode(root));
-  }
-
-  function renderTheoryTools() {
-    const top = state.branches.slice(0, 10);
-    setHtml("theoryPresetPanel", top.map((branch) => `<button class="ghost-btn" data-open-branch="${branch._index}" type="button">${escapeHtml(branch.moves.slice(0, 5).join(" "))}</button>`).join("") || "Import games to suggest theory seeds.", !top.length);
-    const replyMap = {};
-    state.branches.forEach((branch) => {
-      const reply = branch.moves[1] || "";
-      if (reply) replyMap[reply] = (replyMap[reply] || 0) + branch.games;
-    });
-    const replies = Object.entries(replyMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
-    setHtml("databaseTrainingList", replies.map(([move, games]) => card(move, `${games} imported games`, "common reply")).join("") || "No reply data yet.", !replies.length);
-    setHtml("opponentSimulatorPanel", replies.slice(0, 5).map(([move, games]) => card(`Opponent plays ${move}`, `Practice your prepared answer against a reply seen ${games} times.`, "simulator")).join("") || "No simulator scenarios yet.", !replies.length);
-    const traps = weakBranches().filter((branch) => branch.wins > branch.losses && branch.games >= 2).slice(0, 6);
-    setHtml("trapFinderPanel", traps.map((branch) => card(branch.moves.slice(0, 8).join(" "), `${branch.wins} wins in ${branch.games} games. Verify tactically with cloud analysis before relying on it.`, "practical chance")).join("") || "No repeated practical chances found.", !traps.length);
-    setHtml("repertoireExportPanel", state.branches.length
-      ? `<div class="chip-row"><button id="downloadPgnBtn" class="launch-btn" type="button">Download repertoire PGN</button><button id="downloadJsonBtn" class="ghost-btn" type="button">Download Bookup JSON</button></div><p class="line-note">${count(state.branches.length)} branches ready. Exports contain no tokens.</p>`
-      : "Import games to prepare a repertoire export.", !state.branches.length);
   }
 
   function renderProgress() {
@@ -1566,63 +1495,6 @@
     )).join("") || "No local progress sessions yet.", !items.length);
   }
 
-  function renderIntelligence() {
-    const weak = state.lessons.filter(lessonNeedsWork).sort((a, b) => b.priority - a.priority);
-    const knownCount = state.reviews.filter((item) => item.lessonId && item.result === "known").length;
-    const missedCount = state.reviews.filter((item) => item.lessonId && item.result === "missed").length;
-    const totalReviews = knownCount + missedCount;
-    setHtml("statsSummaryPanel", (() => {
-      const data = importedStats();
-      return data.total ? `<div class="analysis-landscape-metrics"><article><span>Games</span><strong>${count(data.total)}</strong></article><article><span>Record</span><strong>${data.wins}W ${data.draws}D ${data.losses}L</strong></article><article><span>Score</span><strong>${percent(data.score)}</strong></article><article><span>Controls</span><strong>${[...new Set(state.games.map((game) => game.timeClass))].join(", ")}</strong></article></div>` : "Import games to see the split.";
-    })(), !state.branches.length);
-    setHtml("memoryScorePanel", card("Retention", totalReviews ? percent(knownCount / totalReviews * 100) : "--", `${knownCount} clean · ${missedCount} missed`));
-    const recentFirst = state.games.slice(-30).map((game) => game.moves[0]);
-    const allFirst = state.games.map((game) => game.moves[0]);
-    const recentTop = mostCommon(recentFirst);
-    const allTop = mostCommon(allFirst);
-    setHtml("driftDetectorPanel", card(recentTop || "No data", recentTop && allTop && recentTop !== allTop ? `Recent first move differs from your long-term ${allTop}. Decide whether to adopt or repair it.` : "Recent first-move choices match the long-term repertoire.", "opening drift"));
-    setHtml("prepPackPanel", weak.slice(0, 5).map((lesson) => lessonCard(lesson, false)).join("") || "Import games to assemble a preparation pack.", !weak.length);
-    setHtml("cacheDashboard", card(
-      "Offline analysis cache",
-      `${count(state.games.length)} normalized games, ${count(state.lessons.length)} exact-position lessons, and ${count(state.reviews.filter((item) => item.lessonId).length)} position reviews are stored on this device.`,
-      state.importMeta?.fingerprint ? `fingerprint ${state.importMeta.fingerprint}` : "IndexedDB + local settings"
-    ));
-    setHtml("studyPlanPanel", [
-      card("10 min", "Recall the best move in the top three due positions.", "warm-up"),
-      card("20 min", "Train repeated best-move misses on the exact-position board.", "main work"),
-      card("10 min", "Generate one database-backed theory continuation.", "extend"),
-    ].join(""));
-    const confidence = [
-      ["High", state.lessons.filter((lesson) => lesson.confidence >= 70).length],
-      ["Medium", state.lessons.filter((lesson) => lesson.confidence >= 40 && lesson.confidence < 70).length],
-      ["Low", state.lessons.filter((lesson) => lesson.confidence < 40).length],
-    ];
-    setHtml("confidenceGraphPanel", confidence.map(([label, value]) => goalRow(label, value, Math.max(1, state.lessons.length))).join(""));
-    setHtml("driftFixPanel", card(recentTop || "No drift data", recentTop && allTop && recentTop !== allTop ? `Either add ${recentTop} as a deliberate branch or return to ${allTop}.` : "No first-move repair is currently indicated.", "adopt or repair"));
-    setHtml("importSpeedPanel", card("Browser import", `${importedStats().total} games indexed into ${state.analysisMeta?.candidates || 0} repeated positions.`, "direct public API"));
-    setHtml("stockfishStatsPanel", card(
-      "Browser Stockfish",
-      state.analysisMeta
-        ? `${count(state.analysisMeta.analyzed)} positions analyzed now · ${count(state.analysisMeta.cacheHits)} restored from the offline engine cache.`
-        : "Run an import to analyze repeated positions locally.",
-      "Stockfish 18 lite"
-    ));
-    const bestMoves = state.lessons.filter((lesson) => lesson.yourRepeatedMoveUci === lesson.recommendedMoveUci);
-    setHtml("brilliantTrackerPanel", bestMoves.length
-      ? bestMoves.slice(0, 8).map((lesson) => card(
-          lesson.recommendedMove,
-          `Your repeated move matches Stockfish across ${count(lesson.frequency)} visits to this exact position.`,
-          lesson.openingName || lesson.lineLabel
-        )).join("")
-      : "No repeated position in the current analysis sample has your most-played move matching Stockfish yet.", !bestMoves.length);
-  }
-
-  function mostCommon(values) {
-    const map = {};
-    values.filter(Boolean).forEach((value) => { map[value] = (map[value] || 0) + 1; });
-    return Object.entries(map).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
-  }
-
   function renderBoard() {
     const chess = state.trainer.chess;
     const orientation = state.trainer.orientation;
@@ -1895,7 +1767,7 @@
         note: clean ? "Clean exact-position repetition" : `${state.trainer.mistakes} incorrect attempt(s)`,
       });
       save();
-      markTabsDirty("setup", "repertoire-map", "needs-work", "trainer", "review", "stats");
+      markTabsDirty("setup", "repertoire-map", "trainer", "stats", "smart-theory");
       setText("trainerFeedback", clean
         ? `Position complete. Next review is ${dueDate.toLocaleDateString()}.`
         : "Position complete after a correction. It is due again tomorrow.");
@@ -1916,7 +1788,7 @@
       note: clean ? "Clean board repetition" : `${state.trainer.mistakes} mismatch(es)`,
     });
     save();
-    markTabsDirty("setup", "repertoire-map", "needs-work", "trainer", "review", "stats");
+    markTabsDirty("setup", "repertoire-map", "trainer", "stats", "smart-theory");
     setText("trainerFeedback", clean ? "Line complete. Clean repetition saved." : "Line complete. It has been scheduled for a near-term retry.");
     renderQueue();
   }
@@ -2053,7 +1925,6 @@
     if (explorerResult.status === "fulfilled" && explorerResult.value) state.database = explorerResult.value;
     renderPositionData();
     renderBoard();
-    if (state.activeTab === "stats") renderIntelligence();
   }
 
   function renderPositionData() {
@@ -2092,44 +1963,12 @@
     setHtml("lessonListNew", fresh.map((lesson) => lessonCard(lesson)).join("") || "No new repeated mistakes are waiting.", !fresh.length);
   }
 
-  function repertoirePgn() {
-    return state.branches.map((branch, index) => {
-      const tokens = [];
-      branch.moves.forEach((move, ply) => {
-        if (ply % 2 === 0) tokens.push(`${Math.floor(ply / 2) + 1}.`);
-        tokens.push(move);
-      });
-      return `[Event "Bookup Web Line ${index + 1}"]\n[Site "https://tetizz.github.io/Bookup/"]\n[Date "${today().replaceAll("-", ".")}"]\n[Round "-"]\n[White "${branch.color === "white" ? state.username : "Repertoire opponent"}"]\n[Black "${branch.color === "black" ? state.username : "Repertoire opponent"}"]\n[Result "*"]\n\n${tokens.join(" ")} *`;
-    }).join("\n\n");
-  }
-
   function download(name, content, type = "text/plain") {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url; link.download = name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  async function generateTheory() {
-    const requestedMove = String($("theoryMoveInput")?.value || "").trim();
-    const plies = clamp(num($("theoryPlyInput")?.value, 10), 1, 20);
-    const chess = new Chess(state.trainer.chess.fen());
-    if (requestedMove && !chess.move(requestedMove, { sloppy: true })) {
-      setHtml("theoryOutput", `Move ${escapeHtml(requestedMove)} is not legal in the current board position.`, false);
-      return;
-    }
-    setHtml("theoryOutput", "Querying the public opening database...");
-    const generated = [];
-    for (let ply = 0; ply < plies; ply += 1) {
-      const payload = await positionData(chess.fen());
-      const choice = payload.moves?.[0] || await cloudChoice(chess.fen());
-      if (!choice) break;
-      const move = chess.move(choice.san || choice.uci, { sloppy: true });
-      if (!move) break;
-      generated.push({ san: move.san, games: num(choice.white) + num(choice.draws) + num(choice.black), opening: payload.opening?.name || "", source: choice.source || payload.source });
-    }
-    setHtml("theoryOutput", generated.length ? generated.map((item, index) => card(`${index + 1}. ${item.san}`, item.games ? `${count(item.games)} real imported/database games` : "Top public cloud-evaluation continuation", item.opening || item.source || "verified continuation")).join("") : "No real database or cloud continuation exists for this position.", !generated.length);
   }
 
   function sansToUci(moves, startFen = new Chess().fen()) {
@@ -2433,24 +2272,11 @@
       renderMoveTree();
     } else if (name === "stats") {
       renderProgress();
-      clearTimeout(state.intelligenceTimer);
-      state.intelligenceTimer = window.setTimeout(() => {
-        state.intelligenceTimer = 0;
-        if (state.activeTab === "stats") renderIntelligence();
-        else state.dirtyTabs.add("stats");
-      }, 80);
-    } else if (name === "needs-work") {
-      renderNeedsWork();
     } else if (name === "trainer") {
       renderQueue();
       renderBoard();
-    } else if (name === "theory") {
-      renderMoveTree();
-      renderTheoryTools();
     } else if (name === "smart-theory" && state.smartTree) {
       renderSmartTheory();
-    } else if (name === "review") {
-      renderReviewSchedule();
     }
     state.dirtyTabs.delete(name);
   }
@@ -2590,11 +2416,6 @@
       if (branchButton) openBranch(branchButton.dataset.openBranch);
       const square = event.target.closest("[data-square]");
       if (square) clickSquare(square.dataset.square);
-      const reveal = event.target.closest("[data-reveal]");
-      if (reveal) reveal.parentElement.querySelector(".quiz-answer")?.removeAttribute("hidden");
-      const exportName = state.username || "player";
-      if (event.target.closest("#downloadPgnBtn")) download(`bookup-${exportName}-repertoire.pgn`, repertoirePgn(), "application/x-chess-pgn");
-      if (event.target.closest("#downloadJsonBtn")) download(`bookup-${exportName}.json`, JSON.stringify({ version: 1, username: state.username, branches: state.branches, reviews: state.reviews }, null, 2), "application/json");
     });
     $("analyzeBtn")?.addEventListener("click", refreshAll);
     $("progressRefreshBtn")?.addEventListener("click", refreshAll);
@@ -2663,7 +2484,6 @@
       setText("studySettingsStatus", "Browser analysis settings applied. Tokens remain in memory only and are never saved.");
       requestPositionData();
     });
-    $("generateTheoryBtn")?.addEventListener("click", () => generateTheory().catch((error) => setHtml("theoryOutput", escapeHtml(error.message))));
     qsa("[data-smart-preset]").forEach((button) => button.addEventListener("click", () => {
       const presets = {
         balanced: { replies: 4, ply: 12, positions: 80, opponent: "mixed" },
