@@ -34,6 +34,7 @@ from .analysis import (
     database_context_for_board,
     generate_smart_theory_tree,
     generate_theory_line,
+    validate_smart_theory_tree,
 )
 from .chessnut_bridge import default_chessnut_db_path, extract_chessnut_games_as_pgn
 from .chesscom import ImportedGame, fetch_archives, fetch_games, infer_time_class, normalize_time_classes
@@ -1755,15 +1756,10 @@ def _is_missing_study_error(exc: Exception) -> bool:
     return ("404" in text and "study" in text) or "not found" in text
 
 
-def _normalize_opening_focus(raw: object, fallback: str = "kings_indian_systems") -> str:
-    value = str(raw or "").strip().lower()
-    if value == "kings_indian":
-        # Backward compatibility with old single-mode setting.
-        value = "kings_indian_defense"
-    allowed = {"auto", "kings_indian_defense", "kings_indian_attack", "kings_indian_systems", "pirc_defense"}
-    if value not in allowed:
-        return fallback
-    return value
+def _normalize_opening_focus(raw: object, fallback: str = "inferred_style") -> str:
+    # Opening families are inferred from the selected source. Legacy KIA/KID/Pirc
+    # settings remain readable but can no longer force unrelated moves.
+    return "inferred_style"
 
 
 def _normalize_bool(raw: object, fallback: bool = True) -> bool:
@@ -1874,6 +1870,133 @@ def _smart_job_payload(job_id: str, job: dict[str, object]) -> dict[str, object]
     }
 
 
+def _resolve_smart_theory_source(payload: dict[str, object]) -> dict[str, object]:
+    source = payload.get("source_context")
+    source = source if isinstance(source, dict) else {}
+    source_type = str(
+        source.get("type")
+        or payload.get("starting_source")
+        or "current_board"
+    ).strip().lower()
+    aliases = {
+        "imported_pgn": "imported_game",
+        "starting_position": "current_board",
+        "selected_move": "current_board",
+    }
+    source_type = aliases.get(source_type, source_type)
+    allowed = {"current_board", "saved_line", "imported_game", "my_repertoire"}
+    if source_type not in allowed:
+        raise ValueError("Starting source must be Current board, Saved line, Imported game, or My repertoire.")
+    source_id = str(source.get("id") or payload.get("source_id") or "").strip()
+    if source_type != "current_board" and not source_id:
+        raise ValueError(f"Select a specific {source_type.replace('_', ' ')} before generating.")
+    imported_pgn = str(source.get("pgn") or "").strip()
+    imported_moves: list[str] = []
+    imported_fen = ""
+    if source_type == "imported_game" and imported_pgn:
+        try:
+            imported_game = chess.pgn.read_game(io.StringIO(imported_pgn))
+        except Exception as exc:
+            raise ValueError("The selected imported game could not be parsed.") from exc
+        if imported_game is None:
+            raise ValueError("The selected imported game contains no readable PGN game.")
+        imported_board = imported_game.board()
+        imported_fen = imported_board.fen()
+        for move in imported_game.mainline_moves():
+            if move not in imported_board.legal_moves:
+                raise ValueError("The selected imported game contains an illegal move.")
+            imported_moves.append(move.uci())
+            imported_board.push(move)
+    raw_fen = str(source.get("fen") or imported_fen or payload.get("fen") or chess.STARTING_FEN).strip()
+    if raw_fen == "startpos":
+        raw_fen = chess.STARTING_FEN
+    try:
+        board = chess.Board(raw_fen)
+    except ValueError as exc:
+        raise ValueError("The selected Smart Theory source has an invalid starting position.") from exc
+    raw_moves = source.get("moves_uci")
+    if source_type == "imported_game" and imported_moves and (not isinstance(raw_moves, list) or not raw_moves):
+        raw_moves = imported_moves
+    if not isinstance(raw_moves, list):
+        raw_moves = (
+            imported_moves
+            if imported_moves
+            else payload.get("user_book_line_uci")
+            if isinstance(payload.get("user_book_line_uci"), list)
+            else []
+        )
+    moves_uci: list[str] = []
+    cursor = board.copy(stack=False)
+    for index, raw_move in enumerate(raw_moves[:160]):
+        move_uci = str(raw_move or "").strip().lower()
+        if not move_uci:
+            continue
+        try:
+            move = chess.Move.from_uci(move_uci)
+        except ValueError as exc:
+            raise ValueError(f"Source move {index + 1} is not valid UCI: {move_uci}.") from exc
+        if move not in cursor.legal_moves:
+            raise ValueError(f"Source move {index + 1} ({move_uci}) is illegal from the preceding source position.")
+        moves_uci.append(move_uci)
+        cursor.push(move)
+    player_color = "black" if str(source.get("player_color") or payload.get("my_color") or "white").lower() == "black" else "white"
+    label = str(source.get("label") or {
+        "current_board": "Current board",
+        "saved_line": "My saved line",
+        "imported_game": "My imported game",
+        "my_repertoire": "My repertoire",
+    }[source_type]).strip()
+    fingerprint_payload = {
+        "schema": 2,
+        "type": source_type,
+        "id": source_id,
+        "fen": board.fen(),
+        "moves_uci": moves_uci,
+        "player_color": player_color,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "type": source_type,
+        "id": source_id,
+        "label": label,
+        "fen": board.fen(),
+        "moves_uci": moves_uci,
+        "player_color": player_color,
+        "fingerprint": fingerprint,
+    }
+
+
+def _smart_theory_tree_cache_key(board_fen: str, payload: dict[str, object], settings: EngineSettings) -> str:
+    cache_payload = {
+        "schema": 2,
+        "fen": chess.Board(board_fen).fen(),
+        "source_fingerprint": str(payload.get("source_fingerprint", "") or ""),
+        "my_color": str(payload.get("my_color", "white") or "white"),
+        "opponent_accuracy": str(payload.get("opponent_accuracy", "mixed") or "mixed"),
+        "depth": int(settings.depth),
+        "multipv": int(settings.multipv),
+        "time_sec": float(settings.think_time_sec),
+        "workers": int(settings.parallel_workers),
+        "max_ply": int(payload.get("max_ply", 40) or 40),
+        "max_positions": int(payload.get("max_positions", 900) or 900),
+        "opponent_replies": int(payload.get("opponent_replies", 6) or 6),
+        "expected_move_confidence_cp": int(payload.get("expected_move_confidence_cp", 125) or 125),
+        "style_move_confidence_cp": int(payload.get("style_move_confidence_cp", 90) or 90),
+        "style_preferred_min_weight": float(payload.get("style_preferred_min_weight", 1.2) or 1.2),
+        "include_rare_sidelines": bool(payload.get("include_rare_sidelines", True)),
+        "include_opponent_mistakes": bool(payload.get("include_opponent_mistakes", True)),
+        "include_opponent_blunders": bool(payload.get("include_opponent_blunders", False)),
+        "include_best_engine_replies": bool(payload.get("include_best_engine_replies", True)),
+        "avoid_absurd_moves": bool(payload.get("avoid_absurd_moves", True)),
+    }
+    digest = hashlib.sha256(
+        json.dumps(cache_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"smart-theory-tree-v2:{digest}"
+
+
 def _run_smart_theory_job(
     *,
     job_id: str,
@@ -1891,6 +2014,12 @@ def _run_smart_theory_job(
                 return
             if not job.get("cancelled") and phase == "stopping":
                 phase = "analyzing"
+            if phase == "complete":
+                phase = "analyzing"
+                message = "Validating and finalizing the Smart Theory tree..."
+            elif phase == "stopped":
+                phase = "stopping"
+                message = "Finalizing the partial Smart Theory tree..."
             job["status"] = phase
             job["message"] = message
             job["positions_done"] = int(done)
@@ -1953,9 +2082,9 @@ def _run_smart_theory_job(
             return {"status": "error", "error": "No study ID available for background sync."}
         chapter_name = str(payload.get("chapter_name", "") or "").strip() or "Bookup Smart Theory"
         orientation = "black" if str(payload.get("orientation", "white") or "white").strip().lower() == "black" else "white"
-        chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "first_move")) or "first_move").strip().lower()
+        chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "single")) or "single").strip().lower()
         if chapter_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
-            chapter_strategy = "first_move"
+            chapter_strategy = "single"
         max_chapters = _normalize_int_range(payload.get("max_chapters", 62), fallback=62, minimum=1, maximum=80)
         min_chapter_moves = _normalize_int_range(payload.get("min_chapter_moves", 40 if chapter_strategy == "deep_focus" else 0), fallback=40 if chapter_strategy == "deep_focus" else 0, minimum=0, maximum=80)
         extend_with_engine_tail = _normalize_bool(payload.get("extend_with_engine_tail", True), fallback=True)
@@ -2059,13 +2188,35 @@ def _run_smart_theory_job(
         board = chess.Board(board_fen)
         configure_lichess(lichess_token)
         engine = shared_engine_for(settings)
-        result = generate_smart_theory_tree(
-            board,
-            engine,
-            payload=payload,
-            is_cancelled=_cancelled,
-            status_callback=_status_update,
-        )
+        tree_cache_key = _smart_theory_tree_cache_key(board_fen, payload, settings)
+        cached_tree_payload = STORE.load_engine_cache(tree_cache_key) if bool(payload.get("cache_evaluations", False)) else {}
+        cached_result = cached_tree_payload.get("smart_theory_tree") if isinstance(cached_tree_payload, dict) else None
+        if isinstance(cached_result, dict) and int(cached_result.get("schema_version", 0) or 0) == 2:
+            result = dict(cached_result)
+            result["cache_hit"] = True
+            result["generation_seconds"] = 0.0
+            _status_update(
+                "analyzing",
+                "Restored a matching Smart Theory tree from the offline cache.",
+                int(result.get("positions_done", 0) or 0),
+                int(result.get("positions_total", 0) or 0),
+                partial_nodes=list(result.get("nodes", []) or [])[-160:],
+                partial_total_nodes=len(list(result.get("nodes", []) or [])),
+            )
+        else:
+            result = generate_smart_theory_tree(
+                board,
+                engine,
+                payload=payload,
+                is_cancelled=_cancelled,
+                status_callback=_status_update,
+            )
+            result, validation_warnings = validate_smart_theory_tree(result)
+            if validation_warnings:
+                result["warnings"] = list(result.get("warnings") or [])[:120]
+            result["cache_hit"] = False
+            if bool(payload.get("cache_evaluations", False)) and str(result.get("status", "")).lower() == "complete":
+                STORE.save_engine_cache(tree_cache_key, {"smart_theory_tree": result})
         study_sync_result: dict[str, Any]
         try:
             study_sync_result = _background_study_sync(result)
@@ -2226,11 +2377,8 @@ def migrate_engine_defaults(config: dict) -> dict:
     if "bookup_auto_study_sync" not in migrated:
         migrated["bookup_auto_study_sync"] = True
     if not str(migrated.get("bookup_chapter_strategy", "")).strip():
-        migrated["bookup_chapter_strategy"] = "deep_focus"
-    migrated["bookup_opening_focus"] = _normalize_opening_focus(
-        migrated.get("bookup_opening_focus", ""),
-        fallback="kings_indian_systems",
-    )
+        migrated["bookup_chapter_strategy"] = "single"
+    migrated["bookup_opening_focus"] = "inferred_style"
     migrated["bookup_include_best_engine_replies"] = _normalize_bool(
         migrated.get("bookup_include_best_engine_replies", True),
         fallback=True,
@@ -2409,11 +2557,8 @@ def build_defaults_payload(config: dict) -> dict:
         "bookup_study_id": str(migrated.get("bookup_study_id", "") or "").strip(),
         "bookup_study_id_history": _normalize_study_history(migrated.get("bookup_study_id_history", [])),
         "bookup_auto_study_sync": bool(migrated.get("bookup_auto_study_sync", True)),
-        "bookup_chapter_strategy": str(migrated.get("bookup_chapter_strategy", "deep_focus") or "deep_focus").strip().lower(),
-        "bookup_opening_focus": _normalize_opening_focus(
-            migrated.get("bookup_opening_focus", "kings_indian_systems"),
-            fallback="kings_indian_systems",
-        ),
+        "bookup_chapter_strategy": str(migrated.get("bookup_chapter_strategy", "single") or "single").strip().lower(),
+        "bookup_opening_focus": "inferred_style",
         "bookup_include_best_engine_replies": _normalize_bool(
             migrated.get("bookup_include_best_engine_replies", True),
             fallback=True,
@@ -2912,14 +3057,14 @@ def save_settings() -> tuple:
     if "bookup_auto_study_sync" in payload:
         config["bookup_auto_study_sync"] = bool(payload.get("bookup_auto_study_sync"))
     if "bookup_chapter_strategy" in payload:
-        strategy = str(payload.get("bookup_chapter_strategy", "deep_focus") or "deep_focus").strip().lower()
+        strategy = str(payload.get("bookup_chapter_strategy", "single") or "single").strip().lower()
         if strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
-            strategy = "deep_focus"
+            strategy = "single"
         config["bookup_chapter_strategy"] = strategy
     if "bookup_opening_focus" in payload:
         config["bookup_opening_focus"] = _normalize_opening_focus(
-            payload.get("bookup_opening_focus", "kings_indian_systems"),
-            fallback="kings_indian_systems",
+            payload.get("bookup_opening_focus", "inferred_style"),
+            fallback="inferred_style",
         )
     if "bookup_include_best_engine_replies" in payload:
         config["bookup_include_best_engine_replies"] = _normalize_bool(
@@ -3737,18 +3882,44 @@ def generate_theory() -> tuple:
     return jsonify(theory)
 
 
+@app.post("/api/smart-theory/resolve-source")
+def resolve_smart_theory_source() -> tuple:
+    payload = request.get_json(force=True) or {}
+    try:
+        return jsonify({"source": _resolve_smart_theory_source(payload)}), 200
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/smart-theory/validate-tree")
+def validate_smart_theory_import() -> tuple:
+    payload = request.get_json(force=True) or {}
+    try:
+        tree, warnings = validate_smart_theory_tree(payload)
+        return jsonify({"tree": tree, "warnings": warnings}), 200
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.post("/api/generate-smart-theory")
 def generate_smart_theory() -> tuple:
     payload = request.get_json(force=True) or {}
-    fen = str(payload.get("fen", "")).strip()
-    if fen == "startpos":
-        fen = chess.STARTING_FEN
-    if not fen:
-        fen = chess.STARTING_FEN
     try:
+        source_context = _resolve_smart_theory_source(payload)
+        fen = str(source_context["fen"])
         board = chess.Board(fen)
-    except ValueError:
-        return jsonify({"error": "Invalid FEN."}), 400
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    payload["source_context"] = source_context
+    payload["starting_source"] = source_context["type"]
+    payload["source_id"] = source_context["id"]
+    payload["source_label"] = source_context["label"]
+    payload["source_fingerprint"] = source_context["fingerprint"]
+    payload["fen"] = source_context["fen"]
+    payload["start_play_uci"] = []
+    if source_context["type"] != "current_board":
+        payload["user_book_line_uci"] = list(source_context["moves_uci"])
+        payload["my_color"] = source_context["player_color"]
 
     config = load_config()
     if "include_best_engine_replies" not in payload:
@@ -3777,6 +3948,7 @@ def generate_smart_theory() -> tuple:
             minimum=0.2,
             maximum=8.0,
         )
+    payload["opening_focus"] = "inferred_style"
     settings = request_engine_settings(payload, config)
     # Smart Theory is tree-based, so we allow multiple workers, but clamp to
     # safe interactive limits so status polling and UI controls stay responsive.
@@ -3888,9 +4060,9 @@ def preview_smart_theory_chapters() -> tuple:
     payload = request.get_json(force=True) or {}
     config = migrate_engine_defaults(load_config())
     chapter_name = str(payload.get("chapter_name", "") or "").strip() or "Bookup Smart Theory"
-    chapter_strategy = str(payload.get("chapter_strategy", "first_move") or "first_move").strip().lower()
+    chapter_strategy = str(payload.get("chapter_strategy", "single") or "single").strip().lower()
     if chapter_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
-        chapter_strategy = "first_move"
+        chapter_strategy = "single"
     max_chapters = _normalize_int_range(payload.get("max_chapters", 62), fallback=62, minimum=1, maximum=80)
     min_chapter_moves = _normalize_int_range(payload.get("min_chapter_moves", 40 if chapter_strategy == "deep_focus" else 0), fallback=40 if chapter_strategy == "deep_focus" else 0, minimum=0, maximum=80)
     extend_with_engine_tail = _normalize_bool(payload.get("extend_with_engine_tail", True), fallback=True)
@@ -4003,9 +4175,9 @@ def export_smart_theory_to_lichess_study() -> tuple:
     orientation = str(payload.get("orientation", "white") or "white").strip().lower()
     if orientation not in {"white", "black"}:
         orientation = "white"
-    chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "first_move")) or "first_move").strip().lower()
+    chapter_strategy = str(payload.get("chapter_strategy", config.get("bookup_chapter_strategy", "single")) or "single").strip().lower()
     if chapter_strategy not in {"single", "first_move", "unknown_focus", "deep_focus"}:
-        chapter_strategy = "first_move"
+        chapter_strategy = "single"
     max_chapters = _normalize_int_range(payload.get("max_chapters", 62), fallback=62, minimum=1, maximum=80)
     min_chapter_moves = _normalize_int_range(payload.get("min_chapter_moves", 40 if chapter_strategy == "deep_focus" else 0), fallback=40 if chapter_strategy == "deep_focus" else 0, minimum=0, maximum=80)
     extend_with_engine_tail = _normalize_bool(payload.get("extend_with_engine_tail", True), fallback=True)

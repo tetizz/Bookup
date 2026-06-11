@@ -55,6 +55,7 @@ MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
 ENGINE_CACHE_SCHEMA_VERSION = 11
+SMART_THEORY_SCHEMA_VERSION = 2
 BRILLIANT_TRACKER_GAME_LIMIT = 0
 BRILLIANT_TRACKER_MAX_PLIES = 0  # 0 means no ply cap; scan every move made by the imported player.
 BRILLIANT_TRACKER_LIVE_BUDGET = 0  # 0 means no cap; every scanned move gets a current-position MultiPV gate.
@@ -155,8 +156,8 @@ def _engine_cache_key(
         "fen_key": board.epd(),
         "turn": "white" if board.turn == chess.WHITE else "black",
         "play_uci": play_uci or [],
-        "depth": int(engine.settings.depth),
-        "multipv": int(engine.settings.multipv),
+        "depth": int(getattr(engine.settings, "depth", 16) or 16),
+        "multipv": int(getattr(engine.settings, "multipv", limit) or limit),
         "limit": int(limit),
         "time_sec": time_key,
         "explorer": bool(EXPLORER_AVAILABLE),
@@ -2578,7 +2579,7 @@ def generate_smart_theory_tree(
     include_blunders = bool(request.get("include_opponent_blunders", True))
     avoid_absurd_moves = bool(request.get("avoid_absurd_moves", True))
     eco_only_mode = bool(request.get("eco_only_mode", False))
-    cache_evals = bool(request.get("cache_evaluations", True))
+    cache_evals = bool(request.get("cache_evaluations", False))
     try:
         expected_move_confidence_cp = int(request.get("expected_move_confidence_cp", 125) or 125)
     except (TypeError, ValueError):
@@ -2594,25 +2595,13 @@ def generate_smart_theory_tree(
     except (TypeError, ValueError):
         style_preferred_min_weight = 1.2
     style_preferred_min_weight = max(0.2, min(8.0, style_preferred_min_weight))
-    opening_focus = str(request.get("opening_focus", "auto") or "auto").strip().lower()
-    if opening_focus == "kings_indian":
-        # Backward compatibility for saved settings from the old single-mode
-        # King's Indian focus.
-        opening_focus = "kings_indian_defense"
-    if opening_focus not in {"auto", "kings_indian_defense", "kings_indian_attack", "kings_indian_systems", "pirc_defense"}:
-        opening_focus = "auto"
-    if opening_focus in {"kings_indian_defense", "pirc_defense"} and my_color != "black":
-        warnings_for_later = [
-            f"{opening_focus.replace('_', ' ')} is a Black-side focus, so it was treated as auto for your White repertoire."
-        ]
-        opening_focus = "auto"
-    elif opening_focus == "kings_indian_attack" and my_color != "white":
-        warnings_for_later = [
-            "King's Indian Attack is a White-side focus, so it was treated as auto for your Black repertoire."
-        ]
-        opening_focus = "auto"
-    else:
-        warnings_for_later = []
+    legacy_opening_focus = str(request.get("opening_focus", "auto") or "auto").strip().lower()
+    warnings_for_later = []
+    if legacy_opening_focus not in {"", "auto", "inferred_style"}:
+        warnings_for_later.append(
+            "Ignored the legacy opening-system override. Smart Theory now follows only the selected source and exact-position repertoire evidence."
+        )
+    opening_focus = "inferred_style"
     follow_user_line_until_out_of_book = bool(request.get("follow_user_line_until_out_of_book", True))
     start_play_uci = [str(item) for item in (request.get("start_play_uci") or []) if str(item)]
     user_book_line_uci = [str(item) for item in (request.get("user_book_line_uci") or []) if str(item)]
@@ -2674,7 +2663,6 @@ def generate_smart_theory_tree(
         if not isinstance(user_style_lines, list):
             return [], ""
         ranked_lines: list[tuple[float, int, list[str], str]] = []
-        white_systems_prefer_nf3 = my_color == "white" and opening_focus in {"kings_indian_attack", "kings_indian_systems"}
         for index, raw_line in enumerate(user_style_lines[:420]):
             if not isinstance(raw_line, dict):
                 continue
@@ -2707,42 +2695,7 @@ def generate_smart_theory_tree(
             if my_move_count <= 0:
                 continue
             score = (weight * 100.0) + (my_move_count * 8.0) - first_my_ply - (index * 0.01)
-            if white_systems_prefer_nf3:
-                first_move = str(legal_line[0] if legal_line else "").strip().lower()
-                if first_move == "g1f3":
-                    score += 10000.0
-                elif first_move == "e2e4":
-                    score -= 1000.0
             ranked_lines.append((score, index, legal_line, str(raw_line.get("source", "user_style_lines") or "user_style_lines")))
-        if not ranked_lines:
-            return [], ""
-        ranked_lines.sort(key=lambda item: item[0], reverse=True)
-        _score, _index, legal_line, source = ranked_lines[0]
-        return legal_line[:80], source
-
-    def _preferred_white_system_line_from_style_data(start_board: chess.Board) -> tuple[list[str], str]:
-        if my_color != "white" or opening_focus not in {"kings_indian_attack", "kings_indian_systems"}:
-            return [], ""
-        if not isinstance(user_style_lines, list):
-            return [], ""
-        ranked_lines: list[tuple[float, int, list[str], str]] = []
-        for index, raw_line in enumerate(user_style_lines[:420]):
-            if not isinstance(raw_line, dict):
-                continue
-            line_player_color = str(raw_line.get("player_color") or raw_line.get("source_player_color") or "").strip().lower()
-            if line_player_color in {"white", "black"} and line_player_color != "white":
-                continue
-            raw_moves = [str(item or "").strip() for item in (raw_line.get("moves_uci") or []) if str(item or "").strip()]
-            if not raw_moves:
-                continue
-            legal_line = _trim_line_to_legal_continuation(start_board, raw_moves, min_plies=1)
-            if not legal_line or str(legal_line[0]).strip().lower() != "g1f3":
-                continue
-            try:
-                weight = float(raw_line.get("weight", 1.0) or 1.0)
-            except (TypeError, ValueError):
-                weight = 1.0
-            ranked_lines.append((weight * 100.0 - (index * 0.01), index, legal_line, str(raw_line.get("source", "user_style_lines") or "user_style_lines")))
         if not ranked_lines:
             return [], ""
         ranked_lines.sort(key=lambda item: item[0], reverse=True)
@@ -2807,23 +2760,23 @@ def generate_smart_theory_tree(
             start_warnings.append(
                 f"Inferred your Smart Theory spine from {inferred_user_line_source}; first moves: {' '.join(user_book_line_uci[:8])}."
             )
-    else:
-        preferred_white_system_line, preferred_white_system_source = _preferred_white_system_line_from_style_data(root_board)
-        if (
-            preferred_white_system_line
-            and str(user_book_line_uci[0] if user_book_line_uci else "").strip().lower() == "e2e4"
-        ):
-            user_book_line_uci = preferred_white_system_line
-            inferred_user_line_source = preferred_white_system_source
-            start_warnings.append(
-                f"Switched White systems spine to Nf3 from {preferred_white_system_source}; first moves: {' '.join(user_book_line_uci[:8])}."
-            )
     user_line_source = user_book_line_uci[:] if user_book_line_uci else start_play_uci[:]
     remaining_user_line_uci: list[str] = _trim_line_to_legal_continuation(
         root_board,
         user_line_source,
         min_plies=1,
     )
+    source_move_by_fen: dict[str, str] = {}
+    source_cursor = root_board.copy(stack=False)
+    for move_uci in remaining_user_line_uci:
+        try:
+            source_move = chess.Move.from_uci(move_uci)
+        except ValueError:
+            break
+        if source_move not in source_cursor.legal_moves:
+            break
+        source_move_by_fen[_normalize_position_key(source_cursor)] = move_uci
+        source_cursor.push(source_move)
 
     eval_cache: dict[str, dict[str, Any]] = {}
     eval_cache_lock = threading.Lock()
@@ -2854,12 +2807,47 @@ def generate_smart_theory_tree(
         return str(hit.get("name", "")), str(hit.get("eco", ""))
 
     def eval_lines(b: chess.Board, multipv: int = 4) -> list[dict[str, Any]]:
-        key = f"{normalized_fen(b)}|d{engine.settings.depth}|m{multipv}|t{time_sec or engine.settings.think_time_sec}"
+        persistent_key = _engine_cache_key(
+            "smart-theory-eval",
+            b,
+            engine,
+            limit=multipv,
+            time_sec=time_sec,
+            extra={"schema": SMART_THEORY_SCHEMA_VERSION},
+        )
+        key = persistent_key
         if cache_evals:
             with eval_cache_lock:
                 if key in eval_cache:
                     cached = eval_cache[key]
                     return list(cached.get("lines", []))
+            cached = _load_engine_cache(persistent_key)
+            cached_rows = cached.get("smart_theory_lines") if isinstance(cached, dict) else None
+            if isinstance(cached_rows, list):
+                lines: list[dict[str, Any]] = []
+                for row in cached_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    pv_moves: list[chess.Move] = []
+                    for move_uci in row.get("pv_uci", []):
+                        try:
+                            pv_moves.append(chess.Move.from_uci(str(move_uci)))
+                        except ValueError:
+                            break
+                    if not pv_moves:
+                        continue
+                    lines.append(
+                        {
+                            "pv": pv_moves,
+                            "score": chess.engine.PovScore(
+                                chess.engine.Cp(int(row.get("score_white_cp", 0) or 0)),
+                                chess.WHITE,
+                            ),
+                        }
+                    )
+                with eval_cache_lock:
+                    eval_cache[key] = {"lines": lines}
+                return lines
         try:
             lines = engine.analyse(
                 b,
@@ -2873,6 +2861,18 @@ def generate_smart_theory_tree(
         if cache_evals:
             with eval_cache_lock:
                 eval_cache[key] = {"lines": list(lines)}
+            serializable_lines = []
+            for line in lines:
+                pv = [move.uci() for move in (line.get("pv") or []) if isinstance(move, chess.Move)]
+                if not pv:
+                    continue
+                serializable_lines.append(
+                    {
+                        "pv_uci": pv,
+                        "score_white_cp": score_white_cp(line, b.turn),
+                    }
+                )
+            _save_engine_cache(persistent_key, {"smart_theory_lines": serializable_lines})
         return list(lines)
 
     def score_white_cp(line: dict[str, Any], turn: bool) -> int:
@@ -2959,83 +2959,21 @@ def generate_smart_theory_tree(
             pass
         return motifs
 
-    def _kings_indian_defense_preferred_move_uci(b: chess.Board) -> str:
-        if b.turn != chess.BLACK:
-            return ""
-        # KID setup preference for Black: ...Nf6, ...g6, ...Bg7, ...d6, then ...e5.
-        for uci in ("g8f6", "g7g6", "f8g7", "d7d6", "e7e5"):
-            try:
-                move = chess.Move.from_uci(uci)
-            except ValueError:
-                continue
-            if move in b.legal_moves:
-                return uci
-        return ""
-
-    def _kings_indian_attack_preferred_move_uci(b: chess.Board) -> str:
-        if b.turn != chess.WHITE:
-            return ""
-        # KIA setup preference for White: Nf3, g3, Bg2, d3, O-O, then e4.
-        for uci in ("g1f3", "g2g3", "f1g2", "d2d3", "e1g1", "e2e4"):
-            try:
-                move = chess.Move.from_uci(uci)
-            except ValueError:
-                continue
-            if move in b.legal_moves:
-                return uci
-        return ""
-
-    def _pirc_defense_preferred_move_uci(b: chess.Board) -> str:
-        if b.turn != chess.BLACK:
-            return ""
-        # Pirc setup preference for Black in 1.e4 structures:
-        # ...d6, ...Nf6, ...g6, ...Bg7, then ...e5.
-        for uci in ("d7d6", "g8f6", "g7g6", "f8g7", "e7e5"):
-            try:
-                move = chess.Move.from_uci(uci)
-            except ValueError:
-                continue
-            if move in b.legal_moves:
-                return uci
-        return ""
-
-    def _is_e4_e5_structure_for_pirc(b: chess.Board) -> bool:
-        white_e4 = b.piece_at(chess.E4)
-        black_e5 = b.piece_at(chess.E5)
-        if white_e4 and white_e4.piece_type == chess.PAWN and white_e4.color == chess.WHITE:
-            return True
-        if black_e5 and black_e5.piece_type == chess.PAWN and black_e5.color == chess.BLACK:
-            return True
-        return False
-
-    def _kings_indian_systems_preferred_move_uci(b: chess.Board) -> str:
-        if my_color == "white":
-            return _kings_indian_attack_preferred_move_uci(b)
-        if my_color == "black":
-            if _is_e4_e5_structure_for_pirc(b):
-                return _pirc_defense_preferred_move_uci(b)
-            return _kings_indian_defense_preferred_move_uci(b)
-        return ""
-
     root_id = "root"
     root_opening, root_eco = board_opening(root_board)
-    effective_opening_focus = opening_focus
-    if effective_opening_focus == "auto":
-        opening_lower = str(root_opening or "").strip().lower()
-        if my_color == "black" and ("pirc" in opening_lower):
-            effective_opening_focus = "pirc_defense"
-        elif my_color == "black" and ("king's indian" in opening_lower or "kings indian" in opening_lower):
-            effective_opening_focus = "kings_indian_defense"
-        elif my_color == "white" and ("king's indian attack" in opening_lower or "kings indian attack" in opening_lower):
-            effective_opening_focus = "kings_indian_attack"
+    effective_opening_focus = "inferred_style"
     root_node = {
         "id": root_id,
         "parentId": "",
+        "fenBefore": root_board.fen(),
+        "fenAfter": root_board.fen(),
         "fen": root_board.fen(),
         "normalizedFen": normalized_fen(root_board),
         "ply": 0,
         "san": "",
         "uci": "",
+        "move": None,
+        "source": {"key": "starting_source", "label": str(request.get("source_label", "Current board") or "Current board")},
         "sideToMove": "white" if root_board.turn == chess.WHITE else "black",
         "openingName": root_opening,
         "ecoCode": root_eco,
@@ -3050,6 +2988,7 @@ def generate_smart_theory_tree(
         "popularity": 0,
         "gameCount": 0,
         "classification": "Root",
+        "eval": {"beforeCp": 0, "afterCp": 0, "lossCp": 0, "swingCp": 0},
         "opponentAccuracy": opponent_accuracy,
         "isUserSide": False,
         "isOpponentSide": False,
@@ -3057,6 +2996,13 @@ def generate_smart_theory_tree(
         "originalUserMove": "",
         "correctedMove": "",
         "theoryExplanation": "Start position for smart theory generation.",
+        "explanation": {
+            "summary": "Start position for Smart Theory generation.",
+            "why": "Every generated child must be legally reachable from this exact position.",
+            "threat": "",
+            "response": "",
+            "plan": "Follow the selected source while its moves remain sound, then use Stockfish corrections.",
+        },
         "planForUser": "Build a stable opening structure and stay consistent with your repertoire themes.",
         "opponentIdea": "",
         "threatSummary": "No immediate tactical threat at the root; establish your preferred setup.",
@@ -3107,7 +3053,13 @@ def generate_smart_theory_tree(
                 warnings.append(f"Worker failed on position {normalized_fen(current_board)}: {exc}")
                 continue
             if not lines:
-                continue
+                fallback_move = next(iter(current_board.legal_moves), None)
+                if fallback_move is None:
+                    continue
+                warnings.append(
+                    f"Engine and database analysis were unavailable for {normalized_fen(current_board)}; used deterministic legal fallback {fallback_move.uci()}."
+                )
+                lines = [{"pv": [fallback_move], "score": None, "_fallback": True}]
 
             mover = "white" if current_board.turn == chess.WHITE else "black"
             user_to_move = mover == my_color
@@ -3126,9 +3078,9 @@ def generate_smart_theory_tree(
             if user_to_move:
                 if not top_pv:
                     continue
-                expected_user_move_from_line = ""
-                if remaining_user_line_uci and len(path) < len(remaining_user_line_uci):
-                    expected_user_move_from_line = str(remaining_user_line_uci[len(path)] or "").strip()
+                expected_user_move_from_line = str(
+                    source_move_by_fen.get(normalized_fen(current_board), "") or ""
+                ).strip()
                 def user_line_for_uci(move_uci: str) -> dict[str, Any] | None:
                     if not move_uci:
                         return None
@@ -3237,30 +3189,6 @@ def generate_smart_theory_tree(
                                     db_moves,
                                 )
                             )
-                preferred_uci = ""
-                if not expected_user_move_from_line and not style_preferred_uci:
-                    if effective_opening_focus == "kings_indian_defense" and my_color == "black":
-                        preferred_uci = _kings_indian_defense_preferred_move_uci(current_board)
-                    elif effective_opening_focus == "kings_indian_attack" and my_color == "white":
-                        preferred_uci = _kings_indian_attack_preferred_move_uci(current_board)
-                    elif effective_opening_focus == "pirc_defense" and my_color == "black":
-                        preferred_uci = _pirc_defense_preferred_move_uci(current_board)
-                    elif effective_opening_focus == "kings_indian_systems":
-                        preferred_uci = _kings_indian_systems_preferred_move_uci(current_board)
-                if preferred_uci and all(item[0].uci() != preferred_uci for item in candidate_moves):
-                    try:
-                        preferred_move = chess.Move.from_uci(preferred_uci)
-                    except ValueError:
-                        preferred_move = None
-                    if preferred_move and preferred_move in current_board.legal_moves:
-                        matching_line = user_line_for_uci(preferred_uci)
-                        line_for_preferred = matching_line or top_line
-                        cp = score_white_cp(line_for_preferred, current_board.turn)
-                        san = current_board.san(preferred_move)
-                        category = user_category(
-                            user_loss_cp(before_white_cp=eval_before, after_white_cp=cp, mover_color=current_board.turn)
-                        ) if matching_line else "Good"
-                        candidate_moves.append((preferred_move, san, cp, line_for_preferred, 92.0, 0, category, db_moves))
                 # Play like the user when the known move is still sound; switch
                 # to the strongest correction only when the known move is too weak.
                 if candidate_moves:
@@ -3277,17 +3205,15 @@ def generate_smart_theory_tree(
                             (item for item in candidate_moves if item[0].uci() == style_preferred_uci),
                             None,
                         )
-                    preferred_candidate = None
-                    if preferred_uci:
-                        preferred_candidate = next(
-                            (item for item in candidate_moves if item[0].uci() == preferred_uci),
-                            None,
-                        )
                     if expected_candidate is not None:
                         best_score_known = best_candidate[3].get("score") is not None if isinstance(best_candidate[3], dict) else False
                         expected_score_known = expected_candidate[3].get("score") is not None if isinstance(expected_candidate[3], dict) else False
-                        cp_gap = abs(int(best_candidate[2]) - int(expected_candidate[2]))
-                        if best_score_known and expected_score_known and cp_gap <= expected_move_confidence_cp:
+                        expected_loss = user_loss_cp(
+                            before_white_cp=int(best_candidate[2]),
+                            after_white_cp=int(expected_candidate[2]),
+                            mover_color=current_board.turn,
+                        )
+                        if best_score_known and expected_score_known and expected_loss <= expected_move_confidence_cp:
                             candidate_moves = [expected_candidate]
                         else:
                             # Grandmaster-version mode: do not export the user's
@@ -3298,16 +3224,18 @@ def generate_smart_theory_tree(
                         # Mubassar-style confidence gate: keep the familiar move
                         # when it is close enough, otherwise keep best+style for
                         # clear correction context.
-                        cp_gap = abs(int(best_candidate[2]) - int(style_candidate[2]))
-                        if cp_gap <= style_move_confidence_cp:
+                        style_loss = user_loss_cp(
+                            before_white_cp=int(best_candidate[2]),
+                            after_white_cp=int(style_candidate[2]),
+                            mover_color=current_board.turn,
+                        )
+                        if style_loss <= style_move_confidence_cp:
                             candidate_moves = [style_candidate]
                         else:
                             # If the style move is too weak, annotate the
                             # correction but keep the exported repertoire line
                             # on the engine-approved move.
                             candidate_moves = [best_candidate]
-                    elif preferred_candidate is not None:
-                        candidate_moves = [preferred_candidate]
                     else:
                         candidate_moves = [best_candidate]
             else:
@@ -3375,6 +3303,8 @@ def generate_smart_theory_tree(
                     if avoid_absurd_moves and delta >= 450:
                         return
                     key = item[0].uci()
+                    if key != top_best_uci and key not in db_map:
+                        return
                     if any(existing[0].uci() == key for existing in bucket):
                         return
                     bucket.append(item)
@@ -3415,7 +3345,31 @@ def generate_smart_theory_tree(
                     if len(selected) >= opponent_replies:
                         break
                     _add_opponent_candidate(selected, item)
-                candidate_moves = selected or ranked[:opponent_replies]
+                if selected:
+                    candidate_moves = selected
+                else:
+                    fallback_move = next(iter(current_board.legal_moves), None)
+                    if fallback_move is None:
+                        candidate_moves = []
+                    else:
+                        fallback_board = current_board.copy(stack=False)
+                        fallback_board.push(fallback_move)
+                        fallback_lines = eval_lines(fallback_board, 1)
+                        fallback_cp = (
+                            score_white_cp(fallback_lines[0], fallback_board.turn)
+                            if fallback_lines
+                            else eval_before
+                        )
+                        candidate_moves = [(
+                            fallback_move,
+                            current_board.san(fallback_move),
+                            fallback_cp,
+                            {"pv": [fallback_move], "score": None, "_fallback": True},
+                            0.0,
+                            0,
+                            "Sideline",
+                            db_moves,
+                        )]
                 # Keep one engine-top defensive resource available when enabled,
                 # even if weighting/filtering picked only weaker human-like lines.
                 if include_best_engine_replies and top_best_uci:
@@ -3468,6 +3422,17 @@ def generate_smart_theory_tree(
                 except Exception as exc:
                     warnings.append(f"Move push failed and was skipped ({move.uci()}): {exc}")
                     continue
+                verification_board = chess.Board(current_board.fen())
+                try:
+                    verification_board.push(chess.Move.from_uci(move.uci()))
+                except Exception as exc:
+                    warnings.append(f"Node validation failed for {move.uci()}: {exc}")
+                    continue
+                if verification_board.fen() != next_board.fen():
+                    warnings.append(
+                        f"Node FEN mismatch skipped for {move.uci()}: expected {verification_board.fen()}, received {next_board.fen()}."
+                    )
+                    continue
                 opening_name, eco_code = board_opening(next_board)
                 if eco_only_mode and not (opening_name or eco_code):
                     continue
@@ -3490,9 +3455,11 @@ def generate_smart_theory_tree(
                 original_user_move = ""
                 corrected_move = ""
                 correction_note = ""
-                expected_user_move_uci = ""
-                if user_to_move and remaining_user_line_uci and len(path) < len(remaining_user_line_uci):
-                    expected_user_move_uci = str(remaining_user_line_uci[len(path)] or "").strip()
+                expected_user_move_uci = (
+                    str(source_move_by_fen.get(normalized_fen(current_board), "") or "").strip()
+                    if user_to_move
+                    else ""
+                )
                 if user_to_move and not expected_user_move_uci and reference_user_move_uci and ply == 0:
                     expected_user_move_uci = reference_user_move_uci
                 if user_to_move and expected_user_move_uci:
@@ -3565,14 +3532,47 @@ def generate_smart_theory_tree(
                 )
                 node_counter += 1
                 node_id = f"n{node_counter}"
+                source_key = "stockfish_best_move"
+                source_label = "Stockfish best move"
+                if user_to_move and corrected_move:
+                    source_key = "stockfish_correction"
+                    source_label = "Stockfish correction"
+                elif user_to_move and expected_user_move_uci and expected_user_move_uci == move.uci():
+                    source_key = starting_source
+                    source_label = {
+                        "saved_line": "My saved line",
+                        "imported_game": "My imported game",
+                        "imported_pgn": "My imported game",
+                        "my_repertoire": "My repertoire",
+                    }.get(starting_source, "My repertoire")
+                elif user_to_move and style_preferred_uci and style_preferred_uci == move.uci():
+                    source_key = "my_repertoire"
+                    source_label = "My repertoire"
+                elif not user_to_move and is_engine_best_reply:
+                    source_key = "opponent_best_engine_reply"
+                    source_label = "Opponent best engine reply"
+                elif not user_to_move and str(move.uci()) in db_map:
+                    source_key = "opponent_database_reply"
+                    source_label = "Opponent database reply"
+                elif bool(line_meta.get("_fallback")):
+                    source_key = "fallback_legal_move"
+                    source_label = "Fallback legal move"
                 node = {
                     "id": node_id,
                     "parentId": parent_id,
+                    "fenBefore": current_board.fen(),
+                    "fenAfter": next_board.fen(),
                     "fen": next_board.fen(),
                     "normalizedFen": normalized_fen(next_board),
                     "ply": ply + 1,
                     "san": san,
                     "uci": move.uci(),
+                    "move": {
+                        "from": chess.square_name(move.from_square),
+                        "to": chess.square_name(move.to_square),
+                        "promotion": chess.piece_symbol(move.promotion) if move.promotion else "",
+                    },
+                    "source": {"key": source_key, "label": source_label},
                     "sideToMove": "white" if next_board.turn == chess.WHITE else "black",
                     "openingName": opening_name,
                     "ecoCode": eco_code,
@@ -3590,6 +3590,12 @@ def generate_smart_theory_tree(
                     "popularity": round(float(popularity), 2),
                     "gameCount": int(game_count),
                     "classification": move_class,
+                    "eval": {
+                        "beforeCp": int(eval_before),
+                        "afterCp": int(eval_after),
+                        "lossCp": int(user_loss) if user_to_move else max(0, abs(int(eval_swing))),
+                        "swingCp": int(eval_swing),
+                    },
                     "isBestEngineReply": bool(is_engine_best_reply),
                     "opponentAccuracy": opponent_accuracy,
                     "isUserSide": bool(user_to_move),
@@ -3605,6 +3611,13 @@ def generate_smart_theory_tree(
                     "learningPriority": int(learning_priority),
                     "learningReason": learning_reason,
                     "theoryExplanation": theory,
+                    "explanation": {
+                        "summary": theory,
+                        "why": str(explanation_blocks.get("why", "") or ""),
+                        "threat": str(explanation_blocks.get("threat", "") or ""),
+                        "response": str(explanation_blocks.get("best_response", "") or ""),
+                        "plan": str(explanation_blocks.get("follow_up", "") or plan or ""),
+                    },
                     "planForUser": plan,
                     "opponentIdea": opp_idea if not user_to_move else "",
                     "threatSummary": str(explanation_blocks.get("threat", "") or ""),
@@ -3657,6 +3670,7 @@ def generate_smart_theory_tree(
     )[:40]
     cb(phase, "Smart theory generation complete." if phase == "complete" else "Smart theory generation stopped.")
     return {
+        "schema_version": SMART_THEORY_SCHEMA_VERSION,
         "status": phase,
         "generation_state": phase,
         "generation_seconds": generation_seconds,
@@ -3710,6 +3724,219 @@ def generate_smart_theory_tree(
             "worker_count": worker_count,
         },
     }
+
+
+def validate_smart_theory_tree(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Migrate and validate a Smart Theory payload without trusting stored FENs."""
+    if not isinstance(payload, dict):
+        raise ValueError("Smart Theory import must be a JSON object.")
+    warnings: list[str] = []
+    raw_tree = payload.get("tree")
+    raw_nodes = payload.get("nodes")
+    node_map: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_tree, dict):
+        node_map = {
+            str(node_id): dict(node)
+            for node_id, node in raw_tree.items()
+            if isinstance(node, dict)
+        }
+    elif isinstance(raw_nodes, list):
+        node_map = {
+            str(node.get("id") or ""): dict(node)
+            for node in raw_nodes
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+    if not node_map:
+        raise ValueError("Smart Theory import contains no nodes.")
+    root_id = str(payload.get("root_id") or "root")
+    if root_id not in node_map:
+        roots = [
+            node_id
+            for node_id, node in node_map.items()
+            if not str(node.get("parentId") or "").strip()
+        ]
+        if len(roots) != 1:
+            raise ValueError("Smart Theory import must contain exactly one root node.")
+        root_id = roots[0]
+    raw_root = node_map[root_id]
+    root_fen = str(
+        raw_root.get("fenAfter")
+        or raw_root.get("fenBefore")
+        or raw_root.get("fen")
+        or payload.get("effective_start_fen")
+        or payload.get("start_fen")
+        or ""
+    ).strip()
+    try:
+        root_board = chess.Board(root_fen)
+    except ValueError as exc:
+        raise ValueError(f"Root node {root_id} has an invalid FEN.") from exc
+
+    validated: dict[str, dict[str, Any]] = {}
+    ordered: list[dict[str, Any]] = []
+
+    def normalized_source(raw: object, *, is_root: bool = False) -> dict[str, str]:
+        if isinstance(raw, dict):
+            key = str(raw.get("key") or "").strip()
+            label = str(raw.get("label") or "").strip()
+        else:
+            label = str(raw or "").strip()
+            key = label.lower().replace(" ", "_")
+        if is_root:
+            return {"key": key or "starting_source", "label": label or "Current board"}
+        allowed_labels = {
+            "My saved line",
+            "My imported game",
+            "My repertoire",
+            "Stockfish correction",
+            "Stockfish best move",
+            "Opponent database reply",
+            "Opponent best engine reply",
+            "Fallback legal move",
+        }
+        if label not in allowed_labels:
+            warnings.append(f"Node source '{label or key}' was normalized to Fallback legal move.")
+            return {"key": "fallback_legal_move", "label": "Fallback legal move"}
+        return {"key": key or label.lower().replace(" ", "_"), "label": label}
+
+    def child_ids_for(node_id: str, node: dict[str, Any]) -> list[str]:
+        declared = node.get("children")
+        if isinstance(declared, list):
+            return [str(item) for item in declared if str(item) in node_map]
+        return [
+            child_id
+            for child_id, child in node_map.items()
+            if str(child.get("parentId") or "") == node_id
+        ]
+
+    root = dict(raw_root)
+    root.update(
+        {
+            "id": root_id,
+            "parentId": "",
+            "fenBefore": root_board.fen(),
+            "fenAfter": root_board.fen(),
+            "fen": root_board.fen(),
+            "move": None,
+            "san": "",
+            "uci": "",
+            "source": normalized_source(root.get("source"), is_root=True),
+            "classification": str(root.get("classification") or "Root"),
+            "eval": root.get("eval") if isinstance(root.get("eval"), dict) else {},
+            "explanation": root.get("explanation") if isinstance(root.get("explanation"), dict) else {
+                "summary": str(root.get("theoryExplanation") or "Starting position."),
+                "why": "",
+                "threat": "",
+                "response": "",
+                "plan": str(root.get("planForUser") or ""),
+            },
+            "children": [],
+        }
+    )
+    validated[root_id] = root
+    ordered.append(root)
+
+    visiting: set[str] = set()
+
+    def visit(parent_id: str, parent_board: chess.Board) -> None:
+        if parent_id in visiting:
+            warnings.append(f"Cycle detected at node {parent_id}; descendants were skipped.")
+            return
+        visiting.add(parent_id)
+        parent = validated[parent_id]
+        for child_id in child_ids_for(parent_id, node_map[parent_id]):
+            if child_id in validated:
+                warnings.append(f"Duplicate or cyclic node {child_id} was skipped.")
+                continue
+            raw_child = node_map.get(child_id)
+            if not isinstance(raw_child, dict):
+                continue
+            declared_parent = str(raw_child.get("parentId") or parent_id)
+            if declared_parent != parent_id:
+                warnings.append(
+                    f"Node {child_id} declares parent {declared_parent}, expected {parent_id}; node and descendants skipped."
+                )
+                continue
+            move_uci = str(raw_child.get("uci") or "").strip().lower()
+            try:
+                move = chess.Move.from_uci(move_uci)
+            except ValueError:
+                warnings.append(f"Node {child_id} has invalid UCI '{move_uci}'; node and descendants skipped.")
+                continue
+            if move not in parent_board.legal_moves:
+                warnings.append(f"Node {child_id} move {move_uci} is illegal from its parent; node and descendants skipped.")
+                continue
+            next_board = parent_board.copy(stack=False)
+            expected_san = parent_board.san(move)
+            next_board.push(move)
+            declared_before = str(raw_child.get("fenBefore") or parent_board.fen()).strip()
+            declared_after = str(raw_child.get("fenAfter") or raw_child.get("fen") or next_board.fen()).strip()
+            try:
+                canonical_before = chess.Board(declared_before).fen()
+                canonical_after = chess.Board(declared_after).fen()
+            except ValueError:
+                warnings.append(f"Node {child_id} contains an invalid FEN; node and descendants skipped.")
+                continue
+            if canonical_before != parent_board.fen() or canonical_after != next_board.fen():
+                warnings.append(f"Node {child_id} FEN replay mismatch; node and descendants skipped.")
+                continue
+            child = dict(raw_child)
+            child.update(
+                {
+                    "id": child_id,
+                    "parentId": parent_id,
+                    "fenBefore": parent_board.fen(),
+                    "fenAfter": next_board.fen(),
+                    "fen": next_board.fen(),
+                    "move": {
+                        "from": chess.square_name(move.from_square),
+                        "to": chess.square_name(move.to_square),
+                        "promotion": chess.piece_symbol(move.promotion) if move.promotion else "",
+                    },
+                    "san": str(raw_child.get("san") or expected_san),
+                    "uci": move_uci,
+                    "source": normalized_source(raw_child.get("source")),
+                    "classification": str(raw_child.get("classification") or "Good"),
+                    "eval": raw_child.get("eval") if isinstance(raw_child.get("eval"), dict) else {
+                        "beforeCp": int(raw_child.get("evalBefore", 0) or 0),
+                        "afterCp": int(raw_child.get("evalAfter", 0) or 0),
+                        "lossCp": int(raw_child.get("userLossCp", 0) or 0),
+                        "swingCp": int(raw_child.get("evalSwing", 0) or 0),
+                    },
+                    "explanation": raw_child.get("explanation") if isinstance(raw_child.get("explanation"), dict) else {
+                        "summary": str(raw_child.get("theoryExplanation") or ""),
+                        "why": str(raw_child.get("whyMoveGoodOrBad") or ""),
+                        "threat": str(raw_child.get("threatSummary") or ""),
+                        "response": str(raw_child.get("bestResponseSummary") or ""),
+                        "plan": str(raw_child.get("followUpPlan") or raw_child.get("planForUser") or ""),
+                    },
+                    "children": [],
+                }
+            )
+            validated[child_id] = child
+            ordered.append(child)
+            parent["children"].append(child_id)
+            visit(child_id, next_board)
+        visiting.remove(parent_id)
+
+    visit(root_id, root_board)
+    unreachable = sorted(set(node_map) - set(validated))
+    if unreachable:
+        warnings.append(f"Skipped {len(unreachable)} invalid or unreachable node(s).")
+    migrated = dict(payload)
+    migrated.update(
+        {
+            "schema_version": SMART_THEORY_SCHEMA_VERSION,
+            "root_id": root_id,
+            "start_fen": root_board.fen(),
+            "effective_start_fen": root_board.fen(),
+            "nodes_total": len(ordered),
+            "nodes": ordered,
+            "tree": validated,
+            "warnings": [*list(payload.get("warnings") or []), *warnings][:120],
+        }
+    )
+    return migrated, warnings
 
 
 def _build_branch_line(

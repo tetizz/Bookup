@@ -182,7 +182,7 @@ def test_settings_smart_theory_roundtrip() -> None:
         settings = client.post(
             "/api/settings",
             json={
-                "bookup_opening_focus": "kings_indian_systems",
+                "bookup_opening_focus": "inferred_style",
                 "bookup_include_best_engine_replies": True,
                 "bookup_expected_move_confidence_cp": 130,
                 "bookup_style_move_confidence_cp": 95,
@@ -202,7 +202,7 @@ def test_settings_smart_theory_roundtrip() -> None:
         payload = settings.get_json() or {}
         defaults = payload.get("defaults") if isinstance(payload, dict) else {}
         _check("settings_defaults_dict", isinstance(defaults, dict), type(defaults).__name__)
-        _check("settings_opening_focus_value", str(defaults.get("bookup_opening_focus", "")) == "kings_indian_systems", defaults)
+        _check("settings_opening_focus_value", str(defaults.get("bookup_opening_focus", "")) == "inferred_style", defaults)
         _check("settings_expected_cp_value", int(defaults.get("bookup_expected_move_confidence_cp", 0) or 0) == 130, defaults)
         _check("settings_style_cp_value", int(defaults.get("bookup_style_move_confidence_cp", 0) or 0) == 95, defaults)
         _check("settings_style_weight_value", abs(float(defaults.get("bookup_style_min_weight", 0) or 0.0) - 1.5) < 0.001, defaults)
@@ -462,7 +462,7 @@ def test_smart_theory_uses_real_snapshot_spines() -> None:
         "max_ply": 4,
         "max_positions": 30,
         "opponent_replies": 1,
-        "opening_focus": "kings_indian_systems",
+        "opening_focus": "inferred_style",
         "start_play_uci": [],
         "user_style_lines": style_lines,
         "include_best_engine_replies": False,

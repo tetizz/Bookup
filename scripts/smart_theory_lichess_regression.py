@@ -148,11 +148,11 @@ def test_settings_opening_focus() -> None:
         payload = response.get_json() or {}
         require(response.status_code == 200, "settings_status_200", str(payload))
         defaults = payload.get("defaults", {}) if isinstance(payload.get("defaults"), dict) else {}
-        require(str(defaults.get("bookup_opening_focus", "")).lower() == "kings_indian_defense", "settings_focus_legacy_maps")
+        require(str(defaults.get("bookup_opening_focus", "")).lower() == "inferred_style", "settings_focus_legacy_ignored")
         response2 = client.post("/api/settings", json={"bookup_opening_focus": "kings_indian_systems"})
         payload2 = response2.get_json() or {}
         defaults2 = payload2.get("defaults", {}) if isinstance(payload2.get("defaults"), dict) else {}
-        require(str(defaults2.get("bookup_opening_focus", "")).lower() == "kings_indian_systems", "settings_focus_persisted")
+        require(str(defaults2.get("bookup_opening_focus", "")).lower() == "inferred_style", "settings_focus_inferred_style")
 
 
 def test_settings_study_name_round_trip() -> None:
@@ -524,7 +524,7 @@ def test_opening_focus_does_not_override_selected_color() -> None:
     result = generate_smart_theory_tree(board, _FakeEngine(), payload=payload)
     settings_used = result.get("settings_used", {}) if isinstance(result.get("settings_used"), dict) else {}
     require(str(settings_used.get("my_color", "")).lower() == "white", "kings_indian_defense_keeps_selected_white")
-    require(str(result.get("opening_focus", "")).lower() == "auto", "kings_indian_defense_mismatch_downgrades_to_auto")
+    require(str(result.get("opening_focus", "")).lower() == "inferred_style", "legacy_focus_ignored_for_white")
 
     payload2 = {
         "my_color": "black",
@@ -537,10 +537,10 @@ def test_opening_focus_does_not_override_selected_color() -> None:
     result2 = generate_smart_theory_tree(board, _FakeEngine(), payload=payload2)
     settings_used2 = result2.get("settings_used", {}) if isinstance(result2.get("settings_used"), dict) else {}
     require(str(settings_used2.get("my_color", "")).lower() == "black", "kings_indian_attack_keeps_selected_black")
-    require(str(result2.get("opening_focus", "")).lower() == "auto", "kings_indian_attack_mismatch_downgrades_to_auto")
+    require(str(result2.get("opening_focus", "")).lower() == "inferred_style", "legacy_focus_ignored_for_black")
 
 
-def test_opening_focus_preferred_move_modes() -> None:
+def test_legacy_opening_focus_does_not_force_moves() -> None:
     class _Settings:
         depth = 12
         think_time_sec = 0.2
@@ -573,7 +573,8 @@ def test_opening_focus_preferred_move_modes() -> None:
         )
         kia_moves = [node for node in kia_result.get("nodes", []) if isinstance(node, dict) and bool(node.get("isUserSide"))]
         require(bool(kia_moves), "kia_user_moves_present")
-        require(str(kia_moves[0].get("uci", "")) == "g1f3", "kia_prefers_nf3")
+        expected_white = next(iter(chess.Board().legal_moves)).uci()
+        require(str(kia_moves[0].get("uci", "")) == expected_white, "legacy_focus_does_not_force_nf3")
 
         pirc_result = generate_smart_theory_tree(
             chess.Board(),
@@ -590,7 +591,10 @@ def test_opening_focus_preferred_move_modes() -> None:
         )
         pirc_moves = [node for node in pirc_result.get("nodes", []) if isinstance(node, dict) and bool(node.get("isUserSide"))]
         require(bool(pirc_moves), "pirc_user_moves_present")
-        require(str(pirc_moves[0].get("uci", "")) == "d7d6", "systems_prefers_pirc_d6_in_e4_structure")
+        pirc_board = chess.Board()
+        pirc_board.push(chess.Move.from_uci("e2e4"))
+        expected_black = next(iter(pirc_board.legal_moves)).uci()
+        require(str(pirc_moves[0].get("uci", "")) == expected_black, "legacy_focus_does_not_force_pirc_d6")
 
 
 def test_include_best_engine_replies_toggle() -> None:
@@ -641,6 +645,7 @@ def test_include_best_engine_replies_toggle() -> None:
         "opponent_replies": 1,
         "include_rare_sidelines": False,
         "eco_only_mode": True,
+        "cache_evaluations": False,
     }
     with patch("bookup.analysis.database_context_for_board", side_effect=fake_database_context):
         without_best = generate_smart_theory_tree(
@@ -842,7 +847,7 @@ def test_backend_infers_spine_when_payload_omits_user_book_line() -> None:
     require(user_uci[:2] == ["e2e4", "g1f3"], "backend_infer_plays_user_spine")
 
 
-def test_white_systems_prefers_nf3_over_stale_e4_payload() -> None:
+def test_explicit_source_line_beats_unrelated_style_prior() -> None:
     class _Settings:
         depth = 12
         think_time_sec = 0.2
@@ -878,9 +883,8 @@ def test_white_systems_prefers_nf3_over_stale_e4_payload() -> None:
         "opponent_replies": 1,
         "opening_focus": "kings_indian_systems",
         "start_play_uci": [],
-        # This simulates the stale/bad frontend path that sent a Black/Pirc e4
-        # setup as the White user line. The backend must still find the Nf3
-        # systems line from saved style data below.
+        # The explicitly selected source line must stay authoritative. Style
+        # priors may help only when no exact-position source move exists.
         "user_book_line_uci": ["e2e4", "d7d6", "d2d4", "g8f6"],
         "user_style_lines": [
             {
@@ -903,10 +907,9 @@ def test_white_systems_prefers_nf3_over_stale_e4_payload() -> None:
         result = generate_smart_theory_tree(chess.Board(), _FakeEngine(), payload=payload)
     user_nodes = [node for node in result.get("nodes", []) if isinstance(node, dict) and bool(node.get("isUserSide"))]
     user_uci = [str(node.get("uci", "") or "") for node in user_nodes]
-    require(result.get("user_book_line_uci", [])[:5] == ["g1f3", "e7e6", "g2g3", "d7d5", "f1g2"], "white_systems_overrides_stale_e4_line")
-    require(bool(user_uci), "white_systems_user_nodes_present")
-    require(user_uci[0] == "g1f3", "white_systems_first_move_is_nf3")
-    require("e2e4" not in user_uci[:3], "white_systems_does_not_start_kings_pawn")
+    require(result.get("user_book_line_uci", [])[:4] == ["e2e4", "d7d6", "d2d4", "g8f6"], "explicit_source_line_preserved")
+    require(bool(user_uci), "explicit_source_user_nodes_present")
+    require(user_uci[0] == "e2e4", "explicit_source_first_move_followed")
 
 
 def test_user_style_priors_fallback_when_too_weak() -> None:
@@ -1000,6 +1003,8 @@ def test_black_user_move_that_improves_white_eval_is_not_blunder() -> None:
             payload={
                 "my_color": "black",
                 "opening_focus": "pirc_defense",
+                "starting_source": "saved_line",
+                "user_book_line_uci": ["d7d6"],
                 "opponent_accuracy": "mixed",
                 "max_ply": 1,
                 "max_positions": 12,
@@ -1252,10 +1257,10 @@ def test_background_auto_sync_skips_when_generation_stopped() -> None:
         "orientation": "white",
     }
     fake_result = {
+        **sample_tree(),
         "status": "stopped",
         "positions_done": 0,
         "positions_total": 1,
-        "nodes": sample_tree()["nodes"],
         "warnings": [],
     }
 
@@ -1506,12 +1511,12 @@ if __name__ == "__main__":
     test_start_line_kept_when_book_lookup_unavailable()
     test_corrections_not_limited_to_root()
     test_opening_focus_does_not_override_selected_color()
-    test_opening_focus_preferred_move_modes()
+    test_legacy_opening_focus_does_not_force_moves()
     test_include_best_engine_replies_toggle()
     test_user_style_priors_influence_user_move_choice()
     test_inferred_user_line_is_spine_not_hidden_setup()
     test_backend_infers_spine_when_payload_omits_user_book_line()
-    test_white_systems_prefers_nf3_over_stale_e4_payload()
+    test_explicit_source_line_beats_unrelated_style_prior()
     test_user_style_priors_fallback_when_too_weak()
     test_black_user_move_that_improves_white_eval_is_not_blunder()
     test_opposite_color_style_lines_do_not_become_my_moves()

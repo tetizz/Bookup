@@ -110,7 +110,7 @@ function game(uuid, timeClass, endTime, result, moves, rating = 1500) {
 
   const cache = await page.evaluate(async () => {
     const db = await new Promise((resolve, reject) => {
-      const request = indexedDB.open("bookup-web-cache", 2);
+      const request = indexedDB.open("bookup-web-cache", 3);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });

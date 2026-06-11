@@ -590,6 +590,9 @@
     analyzeImportedGames,
     analyzeGameAccuracy,
     buildPositionCandidates,
+    BrowserStockfish,
+    lineSan,
+    fenKey,
     constants: {
       maxPositions: MAX_POSITIONS,
       repeatedThreshold: REPEATED_POSITION_THRESHOLD,

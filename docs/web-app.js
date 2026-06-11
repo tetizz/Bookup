@@ -7,7 +7,7 @@
 
   const STORAGE_KEY = "bookup-web-desktop-v2";
   const CACHE_DB_NAME = "bookup-web-cache";
-  const CACHE_DB_VERSION = 2;
+  const CACHE_DB_VERSION = 3;
   const ANALYSIS_VERSION = 5;
   const MODES = ["rapid", "blitz", "bullet"];
   const PIECE_NAMES = { p: "P", n: "N", b: "B", r: "R", q: "Q", k: "K" };
@@ -59,6 +59,8 @@
     database: null,
     cloud: null,
     smartTree: null,
+    smartSelectedNodeId: "",
+    smartController: null,
     smartStop: false,
     loading: false,
     activeTab: "setup",
@@ -107,6 +109,7 @@
         const db = request.result;
         if (!db.objectStoreNames.contains("workspaces")) db.createObjectStore("workspaces", { keyPath: "key" });
         if (!db.objectStoreNames.contains("analysis")) db.createObjectStore("analysis", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("smart_theory")) db.createObjectStore("smart_theory", { keyPath: "key" });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -138,9 +141,10 @@
     const db = await openCacheDb();
     if (!db) return;
     await new Promise((resolve, reject) => {
-      const transaction = db.transaction(["workspaces", "analysis"], "readwrite");
+      const transaction = db.transaction(["workspaces", "analysis", "smart_theory"], "readwrite");
       transaction.objectStore("workspaces").clear();
       transaction.objectStore("analysis").clear();
+      transaction.objectStore("smart_theory").clear();
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
     });
@@ -168,6 +172,27 @@
         updatedAt: Date.now(),
         payload,
       });
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+  }
+
+  async function readSmartTheoryCache(key) {
+    const db = await openCacheDb();
+    if (!db) return null;
+    return new Promise((resolve, reject) => {
+      const request = db.transaction("smart_theory", "readonly").objectStore("smart_theory").get(key);
+      request.onsuccess = () => resolve(request.result?.payload || null);
+      request.onerror = () => reject(request.error);
+    }).finally(() => db.close());
+  }
+
+  async function writeSmartTheoryCache(key, payload) {
+    const db = await openCacheDb();
+    if (!db) return;
+    await new Promise((resolve, reject) => {
+      const request = db.transaction("smart_theory", "readwrite").objectStore("smart_theory").put({ key, updatedAt: Date.now(), payload });
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
@@ -1585,6 +1610,8 @@
     const ranks = orientation === "white" ? [8,7,6,5,4,3,2,1] : [1,2,3,4,5,6,7,8];
     const board = $("board");
     if (!board) return;
+    board.dataset.fen = chess.fen();
+    board.dataset.orientation = orientation;
     if (state.trainer.renderedOrientation !== orientation || state.trainer.boardNodes.size !== 64) {
       setHtml("rankLabels", ranks.map((rankValue) => `<span>${rankValue}</span>`).join(""));
       setHtml("fileLabels", files.map((file) => `<span>${file}</span>`).join(""));
@@ -2080,152 +2107,285 @@
     setHtml("theoryOutput", generated.length ? generated.map((item, index) => card(`${index + 1}. ${item.san}`, item.games ? `${count(item.games)} real imported/database games` : "Top public cloud-evaluation continuation", item.opening || item.source || "verified continuation")).join("") : "No real database or cloud continuation exists for this position.", !generated.length);
   }
 
-  async function generateSmartTheory() {
-    state.smartStop = false;
-    const source = $("smartTheoryStartingSource")?.value || "starting_position";
-    const maxPly = clamp(num($("smartTheoryMaxPly")?.value, 12), 2, 20);
-    const configuredReplies = clamp(num($("smartTheoryReplies")?.value, 3), 1, 12);
-    const opponentProfile = $("smartTheoryOpponentAccuracy")?.value || "mixed";
-    const replyCount = {
-      grandmaster: Math.min(2, configuredReplies),
-      strong_club: Math.min(3, configuredReplies),
-      club: Math.min(5, configuredReplies),
-      beginner_intermediate: Math.min(8, configuredReplies + 2),
-      mixed: configuredReplies,
-    }[opponentProfile] || configuredReplies;
-    const includeRare = Boolean($("smartTheoryIncludeRare")?.checked);
-    let fen = new Chess().fen();
-    if (source === "current_board" || source === "selected_move") fen = state.trainer.chess.fen();
-    if (source === "saved_line" && state.selectedBranch) {
-      const seed = new Chess();
-      state.selectedBranch.moves.slice(0, 8).forEach((move) => seed.move(move, { sloppy: true }));
-      fen = seed.fen();
+  function sansToUci(moves, startFen = new Chess().fen()) {
+    const chess = new Chess(startFen);
+    const output = [];
+    for (const san of moves || []) {
+      const move = chess.move(san, { sloppy: true });
+      if (!move) break;
+      output.push(`${move.from}${move.to}${move.promotion || ""}`);
     }
-    if (source === "custom_fen") fen = String($("smartTheoryCustomFen")?.value || fen);
-    if (!new Chess().validate_fen(fen).valid) {
-      setText("smartTheoryStatus", "Invalid FEN");
-      return;
-    }
-    setText("smartTheoryStatus", "Generating");
-    setText("smartTheoryProgress", "Starting public database search...");
-    const root = { san: "Start", fen, children: [], path: [], games: 0 };
-    const queue = [{ node: root, ply: 0 }];
-    let positions = 0;
-    const maxPositions = clamp(num($("smartTheoryMaxPositions")?.value, 80), 10, 300);
-    while (queue.length && positions < maxPositions && !state.smartStop) {
-      const { node, ply } = queue.shift();
-      if (ply >= maxPly) continue;
-      let payload;
-      try { payload = await positionData(node.fen); } catch { payload = null; }
-      const chess = new Chess(node.fen);
-      const myColor = $("smartTheoryMyColor")?.value === "black" ? "b" : "w";
-      let choices;
-      if (chess.turn() === myColor) {
-        const correction = state.lessons.find((lesson) => fenKey(lesson.decisionFen) === fenKey(node.fen) && lessonNeedsWork(lesson));
-        if (correction) {
-          choices = [{
-            san: correction.recommendedMove,
-            uci: correction.recommendedMoveUci,
-            white: 0,
-            draws: 0,
-            black: 0,
-            source: "local Stockfish correction",
-          }];
-        } else {
-          const cloud = await cloudChoice(node.fen);
-          choices = cloud ? [cloud] : (payload?.moves || []).slice(0, 1);
-        }
-      } else {
-        choices = (payload?.moves || []).slice(0, replyCount);
-      }
-      if (!includeRare && choices.length > 1) {
-        const topGames = num(choices[0].white) + num(choices[0].draws) + num(choices[0].black);
-        choices = choices.filter((choice, index) => {
-          if (index === 0) return true;
-          const games = num(choice.white) + num(choice.draws) + num(choice.black);
-          return games >= Math.max(2, topGames * 0.05);
-        });
-      }
-      if (!choices.length) {
-        const cloud = await cloudChoice(node.fen);
-        if (cloud) choices = [cloud];
-      }
-      for (const choice of choices) {
-        const next = new Chess(node.fen);
-        const move = next.move(choice.san, { sloppy: true });
-        if (!move) continue;
-        const games = num(choice.white) + num(choice.draws) + num(choice.black);
-        const child = {
-          san: move.san, uci: choice.uci, fen: next.fen(), games,
-          opening: payload?.opening?.name || "", path: [...node.path, move.san], children: [],
-          white: num(choice.white), draws: num(choice.draws), black: num(choice.black),
-          source: choice.source || payload?.source || "cloud",
-        };
-        node.children.push(child);
-        queue.push({ node: child, ply: ply + 1 });
-      }
-      positions += 1;
-      setText("smartTheoryProgress", `${positions} positions · ${queue.length} queued`);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    state.smartTree = root;
-    setText("smartTheoryStatus", state.smartStop ? "Stopped" : "Complete");
-    setText("smartTheoryProgress", `${positions} public positions generated for the ${opponentProfile.replaceAll("_", " ")} profile.`);
-    renderSmartTheory();
-  }
-
-  function flattenTree(node, output = []) {
-    (node?.children || []).forEach((child) => {
-      output.push(child);
-      flattenTree(child, output);
-    });
     return output;
   }
 
-  function renderSmartTheory() {
-    const root = state.smartTree;
-    if (!root) return;
-    const nodes = flattenTree(root);
-    const first = nodes[0];
-    setHtml("smartTheoryRunSummary", card("Generation complete", `${nodes.length} moves from real imported games, authenticated opening data when available, and public cloud evaluation. No generated move is fabricated.`, "browser theory"));
-    setHtml("smartTheoryCurrentMeta", first ? card(first.san, first.path.join(" "), `${count(first.games)} games`) : "No generated node.", !first);
-    setHtml("smartTheoryMoveList", first ? card("Main path", first.path.join(" "), "SAN") : "No path.", !first);
-    setHtml("smartTheoryOpeningMeta", first ? card(first.opening || "Unclassified position", first.fen, "FEN") : "No opening data.", !first);
-    const correction = first?.source === "local Stockfish correction";
-    setHtml("smartTheoryRecommendation", first ? card(
-      first.san,
-      correction
-        ? "Recommended by the cached exact-position Stockfish lesson because your repeated move missed the best move here."
-        : `Most-played continuation among the selected public database filters (${count(first.games)} games).`,
-      correction ? "Stockfish correction" : "database recommendation"
-    ) : "No recommendation.", !first);
-    setHtml("smartTheoryLearningQueue", nodes.slice().sort((a, b) => b.games - a.games).slice(0, 8).map((node) => card(node.path.join(" "), `${count(node.games)} public games`, "study first")).join("") || "No learning queue.", !nodes.length);
-    setHtml("smartTheoryOpponentReplies", root.children.map((node) => card(node.san, `${count(node.games)} public games`, node.opening || "reply")).join("") || "No replies.", !root.children.length);
-    setHtml("smartTheoryExplanation", first ? card(
-      "Why this move",
-      correction
-        ? `${first.san} replaces the repeated mistake found at this exact FEN. The recommendation comes from local browser Stockfish and is saved in the offline lesson cache.`
-        : `${first.san} is the highest-volume continuation in the available imported or public opening data for this position.`,
-      first.source || "evidence"
-    ) : "No explanation.", !first);
-    const search = String($("smartTheoryTreeSearch")?.value || "").trim().toLowerCase();
-    if (search) {
-      const matches = nodes.filter((node) => [
-        node.san, node.uci, node.opening, node.path.join(" "),
-      ].some((value) => String(value || "").toLowerCase().includes(search)));
-      setHtml("smartTheoryTree", matches.slice(0, 80).map((node) => card(
-        node.path.join(" "),
-        `${count(node.games)} public games · ${escapeHtml(node.opening || node.source || "position")}`,
-        node.san
-      )).join("") || "No generated line matches this search.", !matches.length);
-    } else {
-      setHtml("smartTheoryTree", renderSmartNodes(root.children));
-    }
-    renderMiniBoard(first?.fen || root.fen);
+  function smartSourceItems(type) {
+    if (type === "saved_line") return state.lessons.map((lesson, index) => ({
+      id: lesson.lessonId || `lesson-${index}`,
+      label: lesson.lineLabel || `Saved line ${index + 1}`,
+      detail: lesson.recommendedMove || "",
+      fen: lesson.decisionFen || new Chess().fen(),
+      moves_uci: lesson.trainingLineUci || [lesson.recommendedMoveUci].filter(Boolean),
+      player_color: lesson.color || lesson.playerColor || $("smartTheoryMyColor")?.value || "white",
+    }));
+    if (type === "imported_game") return state.games.map((game, index) => ({
+      id: String(game.id || game.url || `game-${index}`),
+      label: `${game.headers?.White || "White"} - ${game.headers?.Black || "Black"}`,
+      detail: game.headers?.Opening || game.timeClass || "Imported game",
+      fen: game.headers?.FEN || new Chess().fen(),
+      moves_uci: sansToUci(game.moves, game.headers?.FEN || new Chess().fen()),
+      player_color: game.color || "white",
+    }));
+    if (type === "my_repertoire") return state.branches.map((branch, index) => ({
+      id: String(branch.id || `branch-${index}`),
+      label: `${branch.color} · ${branch.moves.slice(0, 5).join(" ")}`,
+      detail: `${branch.games || 0} imported games`,
+      fen: new Chess().fen(),
+      moves_uci: sansToUci(branch.moves),
+      player_color: branch.color || "white",
+    }));
+    return [];
   }
 
-  function renderSmartNodes(nodes, depth = 0) {
-    return (nodes || []).map((node) => `<details class="move-tree-node" ${depth < 1 ? "open" : ""}><summary><strong>${escapeHtml(node.san)}</strong><span>${count(node.games)} games</span></summary><div class="tree-node-list">${depth < 8 ? renderSmartNodes(node.children, depth + 1) : ""}</div></details>`).join("");
+  function refreshSmartSourcePicker() {
+    const type = $("smartTheoryStartingSource")?.value || "current_board";
+    const picker = $("smartTheorySourcePicker");
+    const wrap = $("smartTheorySourcePickerWrap");
+    if (!picker) return;
+    const items = smartSourceItems(type);
+    const previous = picker.value;
+    const needsItem = type !== "current_board";
+    if (wrap) wrap.hidden = !needsItem;
+    picker.innerHTML = needsItem
+      ? `<option value="">Select ${escapeHtml(type.replaceAll("_", " "))}</option>${items.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("")}`
+      : '<option value="">Current board</option>';
+    if (items.some((item) => item.id === previous)) picker.value = previous;
+    previewSmartSource();
+  }
+
+  function resolveSmartSource() {
+    const type = $("smartTheoryStartingSource")?.value || "current_board";
+    if (type === "current_board") return {
+      type, id: "", label: "Current board", fen: state.trainer.chess.fen(), moves_uci: [],
+      player_color: $("smartTheoryMyColor")?.value || "white",
+    };
+    const item = smartSourceItems(type).find((candidate) => candidate.id === $("smartTheorySourcePicker")?.value);
+    if (!item) throw new Error(`Select a specific ${type.replaceAll("_", " ")} before generating.`);
+    return { type, ...item };
+  }
+
+  function previewSmartSource() {
+    try {
+      const source = resolveSmartSource();
+      if ($("smartTheoryMyColor")) $("smartTheoryMyColor").value = source.player_color || "white";
+      setText("smartTheorySourcePreview", `${source.label}${source.detail ? ` · ${source.detail}` : ""}. Generation starts from this exact board.`);
+      renderMiniBoard(source.fen);
+      if ($("smartTheoryGenerateBtn")) $("smartTheoryGenerateBtn").disabled = false;
+    } catch (error) {
+      setText("smartTheorySourcePreview", error.message);
+      renderMiniBoard(new Chess().fen());
+      if ($("smartTheoryGenerateBtn")) $("smartTheoryGenerateBtn").disabled = true;
+    }
+  }
+
+  function clearSmartTheoryResult() {
+    state.smartController?.abort();
+    state.smartController = null;
+    state.smartTree = null;
+    state.smartSelectedNodeId = "";
+    [
+      "smartTheoryRunSummary",
+      "smartTheoryCurrentMeta",
+      "smartTheoryMoveList",
+      "smartTheoryOpeningMeta",
+      "smartTheoryRecommendation",
+      "smartTheoryLearningQueue",
+      "smartTheoryOpponentReplies",
+      "smartTheoryExplanation",
+      "smartTheoryTree",
+    ].forEach((id) => setHtml(id, "No generated theory in this session.", true));
+    setText("smartTheoryStatus", "Idle");
+    setText("smartTheoryProgress", "No generation in progress.");
+    previewSmartSource();
+  }
+
+  function smartStylePriors() {
+    const map = new Map();
+    state.games.forEach((game) => {
+      const chess = new Chess(game.headers?.FEN || new Chess().fen());
+      const playerTurn = game.color === "black" ? "b" : "w";
+      game.moves.forEach((san) => {
+        const before = fenKey(chess.fen());
+        const move = chess.move(san, { sloppy: true });
+        if (!move) return;
+        if (move.color !== playerTurn) return;
+        const uci = `${move.from}${move.to}${move.promotion || ""}`;
+        const list = map.get(before) || [];
+        const found = list.find((item) => item.uci === uci);
+        if (found) found.weight += 1;
+        else list.push({ uci, weight: 1 });
+        list.sort((a, b) => b.weight - a.weight || a.uci.localeCompare(b.uci));
+        map.set(before, list);
+      });
+    });
+    return map;
+  }
+
+  function smartCacheKey(source, settings) {
+    const text = JSON.stringify({ schema: 2, source, settings });
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `tree-v2:${(hash >>> 0).toString(16)}`;
+  }
+
+  async function generateSmartTheory() {
+    const engine = window.BookupSmartTheory;
+    if (!engine?.generate) throw new Error("Smart Theory engine did not load. Refresh and try again.");
+    const source = resolveSmartSource();
+    const settings = {
+      maxPly: clamp(num($("smartTheoryMaxPly")?.value, 12), 2, 20),
+      maxPositions: clamp(num($("smartTheoryMaxPositions")?.value, 80), 10, 300),
+      opponentReplies: clamp(num($("smartTheoryReplies")?.value, 5), 1, 12),
+      opponentModel: $("smartTheoryOpponentAccuracy")?.value || "mixed",
+      includeMistakes: Boolean($("smartTheoryIncludeMistakes")?.checked),
+      includeBlunders: Boolean($("smartTheoryIncludeBlunders")?.checked),
+      includeBestEngineReplies: Boolean($("smartTheoryIncludeBestEngineReplies")?.checked),
+      moveTimeMs: 180,
+    };
+    const key = smartCacheKey(source, settings);
+    const cached = await readSmartTheoryCache(key).catch(() => null);
+    if (cached) {
+      state.smartTree = (await engine.validateTree(cached)).tree;
+      state.smartSelectedNodeId = state.smartTree.root_id;
+      setText("smartTheoryStatus", "Cached");
+      setText("smartTheoryProgress", `${state.smartTree.nodes.length} validated nodes restored offline.`);
+      renderSmartTheory();
+      return;
+    }
+    state.smartController?.abort();
+    state.smartController = new AbortController();
+    state.smartStop = false;
+    setText("smartTheoryStatus", "Generating");
+    setText("smartTheoryProgress", "Starting browser Stockfish workers...");
+    state.smartTree = await engine.generate({
+      source,
+      ...settings,
+      stylePriors: smartStylePriors(),
+      signal: state.smartController.signal,
+      includeRare: Boolean($("smartTheoryIncludeRare")?.checked),
+      cacheGet: (cacheKey) => readAnalysisCache(cacheKey, 180 * 24 * 60 * 60 * 1000).catch(() => null),
+      cacheSet: (cacheKey, payload) => writeAnalysisCache(cacheKey, payload).catch(() => {}),
+      databaseReplies: async (fen) => {
+        try {
+          const payload = await positionData(fen);
+          return (payload.moves || []).map((move) => ({
+            uci: move.uci,
+            san: move.san,
+            games: num(move.white) + num(move.draws) + num(move.black),
+          }));
+        } catch {
+          return [];
+        }
+      },
+      onProgress: ({ done, queued, cacheHits, engineCalls, workers }) => {
+        setText("smartTheoryProgress", `${done} nodes · ${queued} queued · ${workers} worker${workers === 1 ? "" : "s"} · ${cacheHits} cache hits · ${engineCalls} engine calls`);
+      },
+    });
+    state.smartSelectedNodeId = state.smartTree.root_id;
+    await writeSmartTheoryCache(key, state.smartTree).catch(() => {});
+    setText("smartTheoryStatus", state.smartTree.status === "stopped" ? "Stopped" : "Complete");
+    setText("smartTheoryProgress", `${state.smartTree.nodes.length} legally connected nodes · ${state.smartTree.cache_hit_count || 0} cache hits · ${state.smartTree.warnings?.length || 0} warnings`);
+    renderSmartTheory();
+  }
+
+  function smartNodeMap() {
+    return new Map((state.smartTree?.nodes || []).map((node) => [String(node.id), node]));
+  }
+
+  function flattenTree(rootOrTree, output = []) {
+    if (!state.smartTree) return output;
+    const byId = smartNodeMap();
+    const root = rootOrTree?.id ? rootOrTree : byId.get(state.smartTree.root_id || "root");
+    const visit = (node) => (node?.children || []).forEach((id) => {
+      const child = typeof id === "object" ? id : byId.get(String(id));
+      if (!child) return;
+      output.push(child);
+      visit(child);
+    });
+    visit(root);
+    return output;
+  }
+
+  function smartPath(node) {
+    const byId = smartNodeMap();
+    const path = [];
+    let cursor = node;
+    while (cursor && cursor.parentId) {
+      path.unshift(cursor);
+      cursor = byId.get(String(cursor.parentId));
+    }
+    return path;
+  }
+
+  function selectSmartNode(nodeId) {
+    const byId = smartNodeMap();
+    const node = byId.get(String(nodeId));
+    if (!node) return;
+    state.smartSelectedNodeId = node.id;
+    const source = node.source?.label || "Starting source";
+    setHtml("smartTheoryCurrentMeta", `<strong>${escapeHtml(node.san || "(root position)")}</strong><span>${escapeHtml(source)} · ${escapeHtml(node.classification || "Root")}</span>`);
+    setHtml("smartTheoryMoveList", smartPath(node).map((item) => escapeHtml(item.san)).join(" ") || "Root position.", !node.parentId);
+    setHtml("smartTheoryOpeningMeta", `<strong>Exact FEN</strong><span class="mono-inline">${escapeHtml(node.fenAfter || node.fen)}</span>`);
+    setHtml("smartTheoryRecommendation", `<strong>${escapeHtml(node.bestMoveSan || node.san || "Position ready")}</strong><span>${escapeHtml(source)}</span>${node.correctedMove ? `<small>${escapeHtml(node.originalUserMove)} → ${escapeHtml(node.correctedMove)}</small>` : ""}`);
+    const explanation = node.explanation || {};
+    setHtml("smartTheoryExplanation", `<strong>${escapeHtml(explanation.summary || "Selected starting position.")}</strong>${explanation.why ? `<p>${escapeHtml(explanation.why)}</p>` : ""}${explanation.threat ? `<p><b>Threat:</b> ${escapeHtml(explanation.threat)}</p>` : ""}${explanation.response ? `<p><b>Response:</b> ${escapeHtml(explanation.response)}</p>` : ""}${explanation.plan ? `<p><b>Plan:</b> ${escapeHtml(explanation.plan)}</p>` : ""}`);
+    const children = (node.children || []).map((id) => byId.get(String(id))).filter(Boolean);
+    setHtml("smartTheoryOpponentReplies", children.map((child) => `<button class="smart-reply-row" data-smart-select="${escapeHtml(child.id)}" type="button"><strong>${escapeHtml(child.san)}</strong><span>${escapeHtml(child.source?.label || "")}</span><small>${escapeHtml(child.classification || "")}</small></button>`).join("") || "No generated child replies.", !children.length);
+    qsa("[data-smart-select]").forEach((button) => button.addEventListener("click", () => selectSmartNode(button.dataset.smartSelect)));
+    const evalCp = num(node.eval?.afterCp ?? node.evalAfter);
+    setText("smartTheoryEvalLabel", `${evalCp >= 0 ? "+" : ""}${(evalCp / 100).toFixed(2)}`);
+    if ($("smartTheoryEvalFill")) $("smartTheoryEvalFill").style.height = `${clamp(50 + evalCp / 10, 8, 92)}%`;
+    renderMiniBoard(node.fenAfter || node.fen);
+    renderSmartTheoryTree();
+  }
+
+  function renderSmartTheoryTree() {
+    const tree = state.smartTree;
+    if (!tree) return;
+    const byId = smartNodeMap();
+    const root = byId.get(tree.root_id || "root");
+    const query = String($("smartTheoryTreeSearch")?.value || "").toLowerCase();
+    const focus = $("smartTheoryTreeFocus")?.value || "all";
+    const bucket = (node) => node.isCorrectedMove ? "corrected" : node.isUserSide && ["Inaccuracy", "Mistake", "Blunder"].includes(node.classification) ? "needs_work" : node.isBestEngineReply ? "engine_pressure" : node.source?.label === "My repertoire" ? "style_matched" : "all";
+    const selfMatches = (node) => (focus === "all" || bucket(node) === focus) && [node.san, node.uci, node.source?.label, node.classification].some((value) => String(value || "").toLowerCase().includes(query));
+    const branchMatches = (node, seen = new Set()) => {
+      if (!node || seen.has(node.id)) return false;
+      seen.add(node.id);
+      return selfMatches(node) || (node.children || []).some((id) => branchMatches(byId.get(String(id)), new Set(seen)));
+    };
+    const renderBranch = (node, depth, seen = new Set()) => {
+      if (!node || seen.has(node.id)) return "";
+      seen.add(node.id);
+      const children = (node.children || []).map((id) => byId.get(String(id))).filter((child) => branchMatches(child));
+      return `<button class="smart-tree-row ${node.id === state.smartSelectedNodeId ? "selected" : ""}" data-smart-node="${escapeHtml(node.id)}" style="--tree-depth:${depth}" type="button"><span class="smart-tree-connector"></span><span class="smart-tree-move">${escapeHtml(node.san)}</span><span class="smart-tree-eval">${(num(node.eval?.afterCp) / 100).toFixed(2)}</span><span class="smart-tree-source">${escapeHtml(node.source?.label || "")}</span><span class="smart-tree-classification">${escapeHtml(node.classification || "")}</span></button>${children.map((child) => renderBranch(child, depth + 1, new Set(seen))).join("")}`;
+    };
+    const html = (root?.children || []).map((id) => byId.get(String(id))).filter((node) => branchMatches(node)).map((node) => renderBranch(node, 0)).join("");
+    setHtml("smartTheoryTree", html || "No connected branches match this filter.", !html);
+    qsa("[data-smart-node]").forEach((button) => button.addEventListener("click", () => selectSmartNode(button.dataset.smartNode)));
+  }
+
+  function renderSmartTheory() {
+    if (!state.smartTree) return;
+    const nodes = flattenTree(state.smartTree);
+    setHtml("smartTheoryRunSummary", `<strong>${nodes.length} generated moves</strong><span>${state.smartTree.worker_count || 1} browser worker(s) · ${state.smartTree.cache_hit_count || 0} cache hits · ${state.smartTree.warnings?.length || 0} warnings</span>`);
+    const priority = nodes.filter((node) => node.isCorrectedMove || ["Inaccuracy", "Mistake", "Blunder"].includes(node.classification)).slice(0, 8);
+    setHtml("smartTheoryLearningQueue", priority.map((node) => `<button class="smart-reply-row" data-smart-priority="${escapeHtml(node.id)}" type="button"><strong>${escapeHtml(node.san)}</strong><span>${escapeHtml(node.classification)}</span></button>`).join("") || "No urgent corrections in this tree.", !priority.length);
+    qsa("[data-smart-priority]").forEach((button) => button.addEventListener("click", () => selectSmartNode(button.dataset.smartPriority)));
+    renderSmartTheoryTree();
+    const first = nodes[0] || smartNodeMap().get(state.smartTree.root_id || "root");
+    selectSmartNode(state.smartSelectedNodeId && smartNodeMap().has(state.smartSelectedNodeId) ? state.smartSelectedNodeId : first.id);
   }
 
   function renderMiniBoard(fen) {
@@ -2271,6 +2431,7 @@
 
   function renderAll() {
     renderSummary();
+    refreshSmartSourcePicker();
     state.dirtyTabs.delete("setup");
     renderTab(state.activeTab);
   }
@@ -2491,21 +2652,34 @@
       setText("smartTheoryProgress", `${button.textContent.trim()} preset applied.`);
     }));
     $("smartTheoryGenerateBtn")?.addEventListener("click", () => generateSmartTheory().catch((error) => {
-      setText("smartTheoryStatus", "Error"); setText("smartTheoryProgress", error.message);
+      setText("smartTheoryStatus", error?.name === "AbortError" ? "Stopped" : "Error"); setText("smartTheoryProgress", error?.name === "AbortError" ? "Generation stopped. Partial work was not cached." : error.message);
     }));
-    $("smartTheoryStopBtn")?.addEventListener("click", () => { state.smartStop = true; setText("smartTheoryStatus", "Stopping"); });
-    $("smartTheoryClearBtn")?.addEventListener("click", () => {
-      state.smartTree = null;
-      ["smartTheoryRunSummary","smartTheoryCurrentMeta","smartTheoryMoveList","smartTheoryOpeningMeta","smartTheoryRecommendation","smartTheoryLearningQueue","smartTheoryOpponentReplies","smartTheoryExplanation","smartTheoryTree"].forEach((id) => setHtml(id, "No generated theory in this session.", true));
-      setText("smartTheoryStatus", "Idle");
+    $("smartTheoryStopBtn")?.addEventListener("click", () => { state.smartStop = true; state.smartController?.abort(); setText("smartTheoryStatus", "Stopping"); });
+    $("smartTheoryStartingSource")?.addEventListener("change", () => {
+      clearSmartTheoryResult();
+      refreshSmartSourcePicker();
     });
+    $("smartTheorySourcePicker")?.addEventListener("change", clearSmartTheoryResult);
+    $("smartTheoryClearBtn")?.addEventListener("click", clearSmartTheoryResult);
     $("smartTheoryExportBtn")?.addEventListener("click", () => {
       if (!state.smartTree) return;
       download("bookup-smart-theory.json", JSON.stringify(state.smartTree, null, 2), "application/json");
     });
     $("smartTheoryImportInput")?.addEventListener("change", async (event) => {
-      try { state.smartTree = JSON.parse(await event.target.files[0].text()); renderSmartTheory(); }
-      catch { setText("smartTheoryStatus", "Invalid JSON"); }
+      try {
+        const imported = JSON.parse(await event.target.files[0].text());
+        const validated = await window.BookupSmartTheory.validateTree(imported);
+        state.smartTree = validated.tree;
+        state.smartSelectedNodeId = state.smartTree.root_id;
+        await writeSmartTheoryCache(`imported:${Date.now()}`, state.smartTree);
+        renderSmartTheory();
+        setText("smartTheoryStatus", "Imported");
+        setText("smartTheoryProgress", `${state.smartTree.nodes.length} validated nodes loaded${validated.warnings.length ? ` · ${validated.warnings.length} warnings` : ""}.`);
+      } catch (error) {
+        setText("smartTheoryStatus", "Invalid JSON");
+        setText("smartTheoryProgress", error.message || "Could not import Smart Theory JSON.");
+      }
+      event.target.value = "";
     });
     $("smartTheoryPreviewChaptersBtn")?.addEventListener("click", () => {
       const chapters = smartTheoryChapters();
@@ -2516,11 +2690,16 @@
       )).join("") || "Generate a tree first.", !chapters.length);
     });
     $("smartTheorySaveCorrectionBtn")?.addEventListener("click", () => {
-      const node = flattenTree(state.smartTree || { children: [] })[0];
+      const node = smartNodeMap().get(String(state.smartSelectedNodeId));
       if (!node) return;
-      state.branches.unshift({ id: `smart-${Date.now()}`, color: $("smartTheoryMyColor")?.value || "white", moves: node.path, games: 1, wins: 0, draws: 1, losses: 0, ratings: [], lastSeen: 0, examples: [] });
+      const correction = node.correctedMove || node.bestMoveUci || node.uci;
+      const base = new Chess(node.fenBefore || state.smartTree.start_fen);
+      const move = base.move({ from: correction.slice(0, 2), to: correction.slice(2, 4), promotion: correction.slice(4, 5) || "q" });
+      if (!move) { setText("smartTheoryStatus", "No legal correction"); return; }
+      const prefix = smartPath(node).slice(0, -1).map((item) => item.san);
+      state.branches.unshift({ id: `smart-${Date.now()}`, color: $("smartTheoryMyColor")?.value || "white", moves: [...prefix, move.san], games: 1, wins: 0, draws: 1, losses: 0, ratings: [], lastSeen: 0, examples: [] });
       markDataDirty();
-      save(); renderAll(); setText("smartTheoryStatus", "Saved to repertoire");
+      save(); renderAll(); refreshSmartSourcePicker(); setText("smartTheoryStatus", "Saved to repertoire");
     });
     $("smartTheoryExportLichessBtn")?.addEventListener("click", () => {
       if (!state.smartTree) { setText("smartTheoryLichessHint", "Generate a tree first."); return; }
@@ -2542,9 +2721,8 @@
       if (!id) { setText("smartTheoryLichessHint", "Enter a Lichess study ID or URL first."); return; }
       window.open(`https://lichess.org/study/${encodeURIComponent(id)}`, "_blank", "noopener");
     });
-    $("smartTheoryTreeSearch")?.addEventListener("input", () => {
-      if (state.smartTree) renderSmartTheory();
-    });
+    $("smartTheoryTreeSearch")?.addEventListener("input", renderSmartTheoryTree);
+    $("smartTheoryTreeFocus")?.addEventListener("change", renderSmartTheoryTree);
     $("progressSaveProjectionBtn")?.addEventListener("click", () => {
       state.customGames = clamp(num($("progressCustomGames")?.value, 538), 1, 5000);
       state.projectionMode = $("progressProjectionMode")?.value || "realistic";
@@ -2607,7 +2785,8 @@
   }
 
   function serializeSmartTree(parent, ply) {
-    const children = parent?.children || [];
+    const byId = smartNodeMap();
+    const children = (parent?.children || []).map((child) => typeof child === "object" ? child : byId.get(String(child))).filter(Boolean);
     if (!children.length) return "";
     const [main, ...alternatives] = children;
     const mainToken = pgnMoveToken(main.san, ply);
@@ -2634,10 +2813,11 @@
       || $("smartTheoryLichessStudyName")?.value
       || "Bookup Smart Theory"
     ).trim();
-    const rootFen = state.smartTree.fen;
+    const root = smartNodeMap().get(state.smartTree.root_id || "root");
+    const rootFen = state.smartTree.start_fen || root?.fenAfter || new Chess().fen();
     const startPly = pgnStartPly(rootFen);
     if (strategy === "single") {
-      const body = serializeSmartTree(state.smartTree, startPly);
+      const body = serializeSmartTree(root, startPly);
       return [{
         name: baseName,
         moves: flattenTree(state.smartTree, []).length,
@@ -2646,7 +2826,7 @@
       }];
     }
     if (strategy === "first_move") {
-      return (state.smartTree.children || []).slice(0, maxChapters).map((node, index) => {
+      return (root?.children || []).map((id) => smartNodeMap().get(String(id))).filter(Boolean).slice(0, maxChapters).map((node, index) => {
         const parent = { children: [node] };
         const name = `${baseName} ${index + 1} - ${node.san}`;
         return {
@@ -2657,13 +2837,14 @@
         };
       });
     }
-    const leaves = flattenTree(state.smartTree, []).filter((node) => !node.children?.length).slice(0, maxChapters);
+    const leaves = flattenTree(root, []).filter((node) => !node.children?.length).slice(0, maxChapters);
     return leaves.map((node, index) => {
-      const line = node.path.map((san, offset) => pgnMoveToken(san, startPly + offset)).join(" ");
+      const lineMoves = smartPath(node).map((item) => item.san);
+      const line = lineMoves.map((san, offset) => pgnMoveToken(san, startPly + offset)).join(" ");
       const name = `${baseName} ${index + 1}`;
       return {
         name,
-        moves: node.path.length,
+        moves: lineMoves.length,
         strategy: "deep focus line",
         pgn: `${smartPgnHeader(name, rootFen)}\n\n${line} *`,
       };
@@ -2707,6 +2888,7 @@
     if (sessionDate) sessionDate.value = today();
     const restored = await restoreAnalysisCache().catch(() => false);
     renderAll();
+    refreshSmartSourcePicker();
     if (restored && state.games.length && !state.analysisMeta) {
       status(`Upgrading ${count(state.games.length)} cached games to exact-position lessons...`);
       try {

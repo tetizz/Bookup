@@ -58,20 +58,25 @@ function check(name, condition, detail = "") {
     check("legal_board_lazy_render", await page.locator("#board .square").count() === 64, "64 squares");
     if (testKnownMove) {
       const moveStarted = Date.now();
-      await page.evaluate(() => {
+      const firstAttempt = await page.evaluate(() => {
         const san = (document.querySelector("#boardLine")?.textContent.match(/best continuation:\s*(\S+)/) || [])[1];
-        const move = new Chess().move(san, { sloppy: true });
+        const fen = document.querySelector("#board")?.dataset.fen;
+        const move = new Chess(fen).move(san, { sloppy: true });
+        if (!move) return { fen, san, error: "SAN is not legal from the rendered board." };
         document.querySelector(`[data-square="${move.from}"]`).click();
         document.querySelector(`[data-square="${move.to}"]`).click();
+        return { fen, san, uci: `${move.from}${move.to}${move.promotion || ""}` };
       });
-      await page.locator("#trainerFeedback").filter({ hasText: "Correct" }).waitFor({ timeout: 3000 });
+      await page.waitForTimeout(100);
+      const firstFeedback = await page.locator("#trainerFeedback").innerText();
+      check("board_move_correct", /Correct|Position complete/.test(firstFeedback), `${JSON.stringify(firstAttempt)} · ${firstFeedback}`);
       check("board_move_response", Date.now() - moveStarted < 700, `${Date.now() - moveStarted}ms`);
       await page.waitForTimeout(900);
       const firstPassRequests = cloudRequests;
       await page.getByRole("button", { name: "Reset", exact: true }).click();
       await page.evaluate(() => {
         const san = (document.querySelector("#boardLine")?.textContent.match(/best continuation:\s*(\S+)/) || [])[1];
-        const move = new Chess().move(san, { sloppy: true });
+        const move = new Chess(document.querySelector("#board")?.dataset.fen).move(san, { sloppy: true });
         document.querySelector(`[data-square="${move.from}"]`).click();
         document.querySelector(`[data-square="${move.to}"]`).click();
       });
@@ -113,6 +118,44 @@ function check(name, condition, detail = "") {
     check("local_pgn_import", Number(await page.locator("#summaryNeedsWork").innerText()) === 1);
     await verifyRepertoireWorkflow(true);
   }
+
+  await page.getByRole("button", { name: "Smart Theory Generator", exact: true }).click();
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
+  await page.waitForFunction(
+    () => /Complete|Cached/.test(document.querySelector("#smartTheoryStatus")?.textContent || ""),
+    null,
+    { timeout: 90000 }
+  );
+  const smartRows = page.locator("#smartTheoryTree .smart-tree-row");
+  check("smart_theory_tree_generated", await smartRows.count() > 0, `${await smartRows.count()} moves`);
+  await smartRows.first().click();
+  const selectedFen = await page.locator("#smartTheoryOpeningMeta").innerText();
+  check("smart_theory_node_sync", /Exact FEN/.test(selectedFen) && !/ w /.test(selectedFen), selectedFen);
+
+  const jsonDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export JSON", exact: true }).click();
+  const jsonDownload = await jsonDownloadPromise;
+  const jsonPath = await jsonDownload.path();
+  check("smart_theory_json_export", Boolean(jsonPath));
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await page.locator("#smartTheoryImportInput").setInputFiles(jsonPath);
+  await page.waitForFunction(() => document.querySelector("#smartTheoryStatus")?.textContent === "Imported");
+  check("smart_theory_json_import", await page.locator("#smartTheoryTree .smart-tree-row").count() > 0);
+
+  await page.locator("#smartTheoryTree .smart-tree-row").first().click();
+  const pgnDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download PGN", exact: true }).click();
+  const pgnDownload = await pgnDownloadPromise;
+  check("smart_theory_pgn_export", Boolean(await pgnDownload.path()));
+
+  await page.getByRole("button", { name: "Save corrected line", exact: true }).click();
+  check("smart_theory_save_correction", await page.locator("#smartTheoryStatus").innerText() === "Saved to repertoire");
+  await page.locator("#smartTheoryStartingSource").selectOption("my_repertoire");
+  check("smart_theory_requires_item", await page.getByRole("button", { name: "Generate", exact: true }).isDisabled());
+  const repertoireOptions = page.locator("#smartTheorySourcePicker option");
+  check("smart_theory_repertoire_updated", await repertoireOptions.count() > 1, `${await repertoireOptions.count()} options`);
+  await page.locator("#smartTheorySourcePicker").selectOption({ index: 1 });
+  check("smart_theory_explicit_item_ready", await page.getByRole("button", { name: "Generate", exact: true }).isEnabled());
 
   check("no_browser_errors", errors.length === 0, errors.join(" | "));
   console.log(`METRICS ${JSON.stringify(startup)}`);

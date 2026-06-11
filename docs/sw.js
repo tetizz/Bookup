@@ -1,10 +1,11 @@
-const CACHE_NAME = "bookup-shell-v5";
+const CACHE_NAME = "bookup-shell-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./app.html",
   "./styles.min.css",
   "./position-analysis.min.js",
+  "./smart-theory-engine.min.js",
   "./web-app.min.js",
   "./vendor/chess.min.js",
   "./vendor/stockfish/stockfish-18-lite-single.js",

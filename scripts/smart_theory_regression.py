@@ -10,6 +10,7 @@ import time
 from itertools import product
 from pathlib import Path
 import sys
+import chess
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -45,11 +46,26 @@ def _run_case(client, source: str, accuracy: str, case_id: int) -> None:
         "eco_only_mode": False,
         "cache_evaluations": True,
     }
-
-    if source == "custom_fen":
-        payload["fen"] = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
-    if source in {"saved_line", "selected_move", "imported_pgn"}:
-        payload["start_play_uci"] = ["e2e4", "e7e5", "g1f3"]
+    source_context = {
+        "type": source,
+        "id": "" if source == "current_board" else f"{source}-fixture",
+        "label": {
+            "current_board": "Current board",
+            "saved_line": "My saved line",
+            "imported_game": "My imported game",
+            "my_repertoire": "My repertoire",
+        }[source],
+        "fen": chess.STARTING_FEN,
+        "moves_uci": [],
+        "player_color": "white",
+    }
+    if source == "saved_line":
+        source_context["moves_uci"] = ["e2e4", "e7e5", "g1f3"]
+    elif source == "imported_game":
+        source_context["pgn"] = "1. d4 Nf6 2. Nf3 g6 3. g3 *"
+    elif source == "my_repertoire":
+        source_context["moves_uci"] = ["g1f3"]
+    payload["source_context"] = source_context
 
     start = client.post("/api/generate-smart-theory", json=payload)
     _check("start_202", start.status_code == 202, start.status_code)
@@ -79,6 +95,18 @@ def _run_case(client, source: str, accuracy: str, case_id: int) -> None:
     _check("nodes_present", isinstance(result.get("nodes"), list) and len(result["nodes"]) >= 1, type(result.get("nodes")).__name__)
     _check("nodes_total_present", "nodes_total" in result, "nodes_total")
     _check("duration_present", "generation_seconds" in result, "generation_seconds")
+    by_id = {str(node.get("id")): node for node in result["nodes"]}
+    for node in result["nodes"]:
+        if not node.get("parentId"):
+            _check("root_fen_stable", node.get("fenBefore") == source_context["fen"] == node.get("fenAfter"), node)
+            continue
+        parent = by_id[str(node["parentId"])]
+        board = chess.Board(str(node["fenBefore"]))
+        move = chess.Move.from_uci(str(node["uci"]))
+        _check("edge_parent_fen", str(node["fenBefore"]) == str(parent["fenAfter"]), node["id"])
+        _check("edge_legal", move in board.legal_moves, node["id"])
+        board.push(move)
+        _check("edge_fen_after", board.fen() == str(node["fenAfter"]), node["id"])
 
 
 def main() -> None:
@@ -87,12 +115,10 @@ def main() -> None:
         _check("apply_move", client.post("/api/apply-move", json={"fen": "startpos", "move_uci": "e2e4"}).status_code == 200)
 
         sources = [
-            "starting_position",
             "current_board",
-            "custom_fen",
             "saved_line",
-            "selected_move",
-            "imported_pgn",
+            "imported_game",
+            "my_repertoire",
         ]
         accuracies = ["mixed", "grandmaster", "club", "beginner_intermediate"]
         case_id = 0
