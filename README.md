@@ -8,9 +8,9 @@ Bookup includes a GitHub Pages website in `docs/`.
 
 - The site root is the interactive Bookup Web app, not just a download page.
 - Bookup Web has a real Chess.com public stats lookup for rapid, blitz, and bullet. It does not invent live ratings when the public API cannot be reached.
-- The web edition uses the same eight workspaces as desktop: Setup, Repertoire Map, Progress, Needs Work, Study Lines, Theory, Smart Theory Generator, and Review.
+- The web and desktop editions share five focused areas: Setup, Repertoire, Train, Progress, and Smart Theory.
 - Public games and PGN files are parsed locally into repertoire branches, review queues, health metrics, theory trees, and a legal-move training board.
-- Browser analysis uses Lichess cloud evaluation. Opening data comes from the imported real-game corpus, or from authenticated Lichess Explorer requests when the user supplies a session-only token.
+- Browser analysis uses a responsive Stockfish worker pool with cached evaluations. Opening data comes from the imported real-game corpus and public opening-database responses.
 - Settings, sessions, reviews, and repertoire summaries are stored in browser local storage. Lichess tokens are never persisted or committed.
 - Repertoire PGN, Bookup JSON, and Smart Theory exports are generated entirely in the browser.
 - The production site uses minified assets, native system fonts, lazy workspace rendering, idle-time persistence, cached analysis requests, and a precomputed repertoire position index.
@@ -39,14 +39,14 @@ build_web_assets.bat
 - caches imported games and full analyzed repertoires locally so repeat loads are much faster
 - builds a repertoire map from repeated positions you actually reach
 - groups transpositions by position instead of only by opening label
-- shows a repertoire health dashboard with coverage, due load, weak branches, and known lines
+- shows a repertoire health dashboard with coverage, weak branches, and known lines
 - scores line memory so fragile, building, and strong branches are separated
 - detects opening drift by comparing recent first moves with your long-term imported repertoire
 - charts rating progress, win/loss/draw record, score rate, win rate, and separate rapid/blitz/bullet time-control graphs across 30 days, 90 days, and all time
 - exports a compact preparation pack with focus lines, common replies, and maintenance lines
 - shows local engine/profile cache health so repeat analysis is easier to trust
 - shows live Stockfish runtime stats during imports, including analyzed positions, positions per second, ETA, worker count, CPU budget, CPU usage, and memory usage
-- generates a short study plan from due lines, fragile memory scores, common replies, and new branches
+- generates a short study plan from repeated misses, common replies, and new branches
 - shows a confidence graph so weak, building, stable, and strong lines are visible at a glance
 - proposes drift fixes when your recent first moves stop matching your longer-term repertoire
 - explains import speed with indexed positions, analyzed positions, skipped positions, and cache notes
@@ -57,45 +57,39 @@ build_web_assets.bat
 - builds a practical theory tree from imported games, split by games where you played White or Black
 - generates on-demand theory lines from the current position or after a move you want to test
 - suggests one-click theory seeds from common replies and due-line repairs
-- builds database-weighted response drills so common replies become trainable lines
-- includes an opponent simulator, pre-move quiz cards, smart retry deck, blunder trap finder, and repertoire export
-- tracks repeated mistake heatmap squares, mistake timelines, and spaced-review buckets
-- filters out lines you already know well enough so the active queue stays focused
-- explains every due/new queue item with the repeated-miss evidence, frequency, review state, and engine/database factors that put it there
+- builds database-weighted training positions so common replies become playable drills
+- keeps the active training queue focused on repeated inaccurate, mistake, and blunder classifications
+- explains each training position with its repeated-miss evidence and recommended correction
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
-- scans imported games for Brilliant moves during repertoire builds, stores the results locally, and tracks cache/live scan coverage so missed non-candidate brilliants are less likely to disappear
 - runs as a Windows desktop app instead of a plain browser tab
 
 ## Workspaces
 
 - `Setup`
-  Import games, configure the engine, add a Lichess token, and build or reload your repertoire.
+  Import public Chess.com games or saved PGN, configure analysis, and build or reload the local repertoire cache.
 
-- `Repertoire Map`
-  See health, rating progress, result trends, Stockfish runtime stats, Brilliant Tracker, study plan, memory scores, confidence graph, opening drift, drift fixes, cache health, preparation packs, import speed, repeated repertoire positions, transpositions, and branches you actually reach. Compare your repeated move with the recommended move and open exact lines to work on.
+- `Repertoire`
+  Inspect the positions, transpositions, first moves, imported-game tree, cache health, and branches you actually reach. Open any exact position for training or Smart Theory.
 
-- `Needs Work`
-  Focus on repeated repertoire mistakes, due lines, fresh lines, queue explainers, suggested repertoire updates, mistake heatmap squares, mistake timelines, spaced-review buckets, smart retry cards, and pre-move quizzes.
-
-- `Study Lines`
-  Work through a line on the board with:
+- `Train`
+  Work through a correction queue on the board with:
   - a live eval bar
   - Stockfish candidate lines
-  - Lichess/database moves from the current position
+  - database moves from the current position
   - copy buttons for the current FEN and played PGN path
   - move classifications
   - a move trail
   - live Stockfish settings for depth, MultiPV, threads, hash, and engine path
 
-- `Theory`
-  Explore your imported-game move tree, prepare against common database replies, run opponent-simulator scenarios, inspect blunder traps, export your repertoire, and ask Stockfish to generate the next best moves from the current board position.
+- `Progress`
+  Track rapid, blitz, and bullet ratings, results, recent form, measured accuracy, sessions, goal progress, projections, and time estimates. Manual values are clearly marked and are never presented as live Chess.com data.
 
-- `Review`
-  Revisit repeated positions that still need correction.
+- `Smart Theory`
+  Generate a legal variation tree from the current board, a saved line, an imported game, or your repertoire. Known good moves remain in the line, Stockfish corrects weak moves, opponent replies stay legal, and each node keeps its source, evaluation, classification, and explanation.
 
 ## Study Lines
 
-The `Study Lines` workspace is the main live-analysis surface.
+The `Train` workspace is the main live-analysis surface.
 
 It combines:
 
@@ -119,7 +113,7 @@ The board is still repertoire-first:
 
 ## Imported Game Tree Map
 
-The `Theory` workspace includes a tree map built from your imported games only.
+The `Repertoire` workspace includes a tree map built from your imported games only.
 
 It includes:
 
@@ -129,30 +123,18 @@ It includes:
 - a deep branch explorer under the visual map
 - click-to-load nodes that open the exact resulting FEN on the Study Lines analysis board
 
-## Theory
+## Smart Theory
 
-The `Theory` workspace has seven study tools:
+Smart Theory is a connected source-to-tree workflow rather than a random position generator:
 
-- `Imported Games Theory Tree`
-  Shows the move tree from your imported games only. Click any branch card to open that exact position on the Study Lines board.
-
-- `Theory Generator`
-  Uses the current Study Lines board position. You can optionally enter a UCI move such as `e2e4`, then generate the next 10 best moves, or any value from 1 to 30, using the saved Stockfish settings.
-
-- `Theory Presets`
-  Offers one-click seeds from due lines and common replies so you can extend the line without typing UCI.
-
-- `Response Builder`
-  Uses repeated repertoire lines plus database/common-reply context to create practical “if they play this, answer with this” training cards.
-
-- `Opponent Simulator`
-  Turns common database replies into practice scenarios.
-
-- `Blunder Trap Finder`
-  Highlights common replies or repeated lines where the punishment is concrete enough to rehearse.
-
-- `Repertoire Export`
-  Downloads a local text export of prepared lines and first-move tree data.
+- choose Current board, Saved line, Imported game, or My repertoire
+- generate from the exact selected FEN
+- follow known good moves and correct weak moves with Stockfish
+- combine repertoire, imported-game, public database, and engine replies
+- click any tree node to synchronize the board and explanation
+- validate every parent, move, and resulting FEN before accepting a node
+- cache completed analysis locally for offline reuse
+- export a single nested PGN variation tree or the complete JSON schema
 
 ## Inputs
 
@@ -263,11 +245,10 @@ That includes:
 - imported PGN games from manual local imports
 - cached analyzed repertoires keyed by request/settings
 - imported-game move-tree payloads
-- health dashboard, heatmap, mistake timeline, response-builder, and transposition payloads inside the saved profile snapshot
+- health dashboard, training queue, transposition, and imported-tree payloads inside the saved profile snapshot
 - rating progress snapshots from imported game headers, including daily W/D/L, win rate, score rate, rating changes, and separate time-control breakdowns
-- Brilliant Tracker results from imported games, including games with brilliants, most brilliant-heavy games, recent brilliant dates, and classification scan coverage
 - Stockfish runtime summaries from the latest repertoire build, including worker count, analysis speed, cache hits, live hits, and elapsed time
-- study plan, confidence graph, smart retry, pre-move quiz, opponent simulator, blunder traps, and repertoire export payloads
+- Smart Theory trees, source fingerprints, evaluations, warnings, and corrected-line data
 - snapshot state for the latest profile
 - training progress and review stats
 
@@ -277,7 +258,7 @@ If you rerun the exact same import and analysis settings, Bookup should load fro
 
 - Leave `Time classes` as `all` for the full public archive.
 - Use `Max games = 0` to import all public games.
-- Add a Lichess token if you want richer database move coverage in `Study Lines`.
+- Add a local Lichess token only when you want direct desktop study export.
 - Exact first-time loads can still take longer because Stockfish is doing real repertoire analysis.
 - Repeat loads of the same request should be much faster because Bookup now reuses cached games and cached analyzed profiles.
 - The Lichess database panel can update separately from Stockfish, so database moves are still useful when engine analysis is slow.
@@ -293,8 +274,8 @@ The current product direction is:
 - practical opponent replies from the database
 - engine-backed candidate lines and eval
 - move classifications on the board and in the side panels
-- health, heatmap, mistake timeline, review schedule, and response-builder surfaces that explain what to study next
-- study plan, confidence graph, smart retry, pre-move quiz, opponent simulator, trap finder, and export tools that turn the repertoire into a real workflow
+- progress, measured accuracy, training, and source-aware Smart Theory surfaces that explain what to study next
+- legal, validated variation trees that keep repertoire moves when they are good and make engine corrections when they are not
 - a legal-move study board that helps you work on the lines that matter most
 
 ## Next Improvements

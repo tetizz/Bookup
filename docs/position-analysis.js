@@ -457,11 +457,12 @@
     const valueLostCp = Math.max(0, best.scoreCp - yourScore);
     const repeatBestCount = position.playerMoves.get(bestMoveUci) || 0;
     const repeatMistakeCount = yourMoveUci === bestMoveUci ? 0 : yourMoveCount;
-    const lineStatus = repeatMistakeCount >= REPEATED_POSITION_THRESHOLD
+    const classification = classifyLoss(valueLostCp);
+    const needsCorrection = ["inaccuracy", "mistake", "blunder"].includes(classification.key);
+    const lineStatus = repeatMistakeCount >= REPEATED_POSITION_THRESHOLD && needsCorrection
       ? "needs_work"
       : (repeatBestCount >= 100 ? "known" : "new");
     const continuation = lineSan(position.fen, best.pv.slice(0, 8));
-    const classification = classifyLoss(valueLostCp);
     const confidence = clamp(
       18
       + Math.min(35, position.occurrences * 2.2)

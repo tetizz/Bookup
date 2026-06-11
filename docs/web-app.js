@@ -900,7 +900,10 @@
   }
 
   function lessonNeedsWork(lesson) {
-    return lesson?.lineStatus === "needs_work" && lesson.repeatMistakeCount >= 2;
+    const classification = String(lesson?.classification?.key || "").toLowerCase();
+    return lesson?.lineStatus === "needs_work"
+      && lesson.repeatMistakeCount >= 2
+      && ["inaccuracy", "mistake", "blunder"].includes(classification);
   }
 
   function lessonIsDue(lesson) {
@@ -1148,17 +1151,17 @@
       drawRatingChart("progressGamesChart", [], "#74d39b");
       drawRatingChart("progressWinRateChart", [], "#f1c96a", { suffix: "%" });
       drawRatingChart("progressAccuracyChart", measured.games.map((game) => ({ x: game.endTime, y: game.accuracy })), "#c79bff", { suffix: "%" });
-      renderAccuracyLab(measured, DEFAULT_ACCURACY);
+      renderAccuracyLab(measured);
       setHtml("progressGoalGrid", `<p class="line-note">Load Chess.com stats to track rating goals.</p>`);
       setHtml("progressProjectionPanel", `<p class="line-note">Load a live rating to calculate projections.</p>`);
       setHtml("progressProjectionBands", "");
       renderTimeCalculator();
       renderRecommendations(0, measured.moves ? {
         average: measured.average,
-        opening: measured.phaseStats.opening.accuracy ?? DEFAULT_ACCURACY.opening,
-        middlegame: measured.phaseStats.middlegame.accuracy ?? DEFAULT_ACCURACY.middlegame,
-        endgame: measured.phaseStats.endgame.accuracy ?? DEFAULT_ACCURACY.endgame,
-      } : DEFAULT_ACCURACY);
+        opening: measured.phaseStats.opening.accuracy,
+        middlegame: measured.phaseStats.middlegame.accuracy,
+        endgame: measured.phaseStats.endgame.accuracy,
+      } : null);
       renderSessions();
       return;
     }
@@ -1168,10 +1171,10 @@
     const imported = importedStats();
     const accuracy = measured.moves ? {
       average: measured.average,
-      opening: measured.phaseStats.opening.accuracy ?? DEFAULT_ACCURACY.opening,
-      middlegame: measured.phaseStats.middlegame.accuracy ?? DEFAULT_ACCURACY.middlegame,
-      endgame: measured.phaseStats.endgame.accuracy ?? DEFAULT_ACCURACY.endgame,
-    } : DEFAULT_ACCURACY;
+      opening: measured.phaseStats.opening.accuracy,
+      middlegame: measured.phaseStats.middlegame.accuracy,
+      endgame: measured.phaseStats.endgame.accuracy,
+    } : null;
     setHtml("progressMetricGrid", [
       ["Current rating", rating(data.rating), `${state.mode} from Chess.com`],
       ["Record", `${count(data.wins)}W ${count(data.draws)}D ${count(data.losses)}L`, `${count(data.games)} games`],
@@ -1206,7 +1209,7 @@
       x: game.endTime,
       y: game.accuracy,
     })), "#c79bff", { suffix: "%" });
-    renderAccuracyLab(measured, accuracy);
+    renderAccuracyLab(measured);
     renderGoals(data, recentScore, accuracy);
     renderProjection(data);
     renderTimeCalculator();
@@ -1358,12 +1361,12 @@
     ctx.textAlign = "left";
   }
 
-  function renderAccuracyLab(measured, fallbackAccuracy) {
+  function renderAccuracyLab(measured) {
     const hasMeasured = measured.moves > 0;
     const rows = [
-      ["Opening", "opening", fallbackAccuracy.opening],
-      ["Middlegame", "middlegame", fallbackAccuracy.middlegame],
-      ["Endgame", "endgame", fallbackAccuracy.endgame],
+      ["Opening", "opening"],
+      ["Middlegame", "middlegame"],
+      ["Endgame", "endgame"],
     ];
     setText("progressAccuracyMethod", hasMeasured
       ? `${measured.games.length} games · ${measured.moves} moves`
@@ -1424,15 +1427,22 @@
     return `<div class="goal-row"><div><span>${label}</span><strong>${suffix === "rating" ? rating(value) : `${num(value).toFixed(suffix === "%" ? 1 : 0)}${suffix === "%" ? "%" : ""}`} / ${target}</strong></div><div class="goal-track"><div style="width:${progress}%"></div></div></div>`;
   }
 
-  function renderGoals(data, recentWinRate, accuracy = state.accuracy) {
+  function renderGoals(data, recentWinRate, accuracy = null) {
     const rows = [1600, 1700, 1800, 1900, 2000].map((target) => goalRow(`${target} rating`, data.rating, target, "rating"));
     const gamesSinceBaseline = Math.max(0, num(data.games) - num(state.goalBaselines[state.mode], data.games));
     rows.push(goalRow("538 more games", Math.min(538, gamesSinceBaseline), 538));
     rows.push(goalRow("1000 more games", Math.min(1000, gamesSinceBaseline), 1000));
-    rows.push(goalRow("Average accuracy", accuracy.average, 75, "%"));
-    rows.push(goalRow("Middlegame accuracy", accuracy.middlegame, 73, "%"));
-    rows.push(goalRow("Endgame accuracy", accuracy.endgame, 80, "%"));
+    if (accuracy && Number.isFinite(Number(accuracy.average))) {
+      rows.push(goalRow("Average accuracy", accuracy.average, 75, "%"));
+    }
+    if (accuracy && Number.isFinite(Number(accuracy.middlegame))) {
+      rows.push(goalRow("Middlegame accuracy", accuracy.middlegame, 73, "%"));
+    }
+    if (accuracy && Number.isFinite(Number(accuracy.endgame))) {
+      rows.push(goalRow("Endgame accuracy", accuracy.endgame, 80, "%"));
+    }
     rows.push(goalRow("Recent win rate", recentWinRate, 52, "%"));
+    if (!accuracy) rows.push(`<p class="line-note">Accuracy goals appear after Bookup has analyzed moves in this time control.</p>`);
     setHtml("progressGoalGrid", rows.join(""));
   }
 
@@ -1470,7 +1480,7 @@
     const custom = clamp(num($("progressCustomGames")?.value, state.customGames), 1, 5000);
     state.customGames = custom;
     state.projectionMode = $("progressProjectionMode")?.value || state.projectionMode;
-    const values = [538, 1000, custom];
+    const values = [...new Set([538, 1000, custom])];
     setHtml("progressProjectionPanel", values.map((games) => {
       const result = projectGames(games, data);
       return card(
@@ -1501,8 +1511,11 @@
       const finish = Math.min(...clocks.slice(-8));
       return clamp((start - finish) * 2 / 60, 2, 80);
     }
-    const [base, inc] = String(game.timeControl || "").split("+").map(num);
-    return base ? clamp((base * 2 + inc * 70) / 60, 2, 80) : 20;
+    const [baseRaw, incRaw] = String(game.timeControl || "").split("+");
+    const base = num(baseRaw);
+    const inc = num(incRaw, 0);
+    const estimate = base ? (base * 2 + inc * 70) / 60 : 20;
+    return Number.isFinite(estimate) ? clamp(estimate, 2, 80) : 20;
   }
 
   function durationText(minutes) {
@@ -1513,26 +1526,33 @@
 
   function renderTimeCalculator() {
     const games = state.games.filter((game) => game.timeClass === state.mode).slice(-50);
-    const lengths = games.map(estimateMinutes);
+    const lengths = games.map(estimateMinutes).filter((value) => Number.isFinite(value) && value > 0);
     const avg = lengths.length ? lengths.reduce((sum, value) => sum + value, 0) / lengths.length : 20;
     const custom = state.customGames;
-    const rows = [538, 1000, custom].map((gamesCount) => card(`${count(gamesCount)} games`, `Max ${durationText(gamesCount * 20)} · real ${durationText(gamesCount * avg)}`, `${avg.toFixed(1)} min average`));
+    const rows = [...new Set([538, 1000, custom])].map((gamesCount) => card(`${count(gamesCount)} games`, `Max ${durationText(gamesCount * 20)} · real ${durationText(gamesCount * avg)}`, `${avg.toFixed(1)} min average`));
     const days = [10, 15, 20, 25, 40].map((perDay) => `${perDay}/day: ${Math.ceil(custom / perDay)} days`).join(" · ");
     rows.push(card("Recent duration sample", `${games.length ? `${Math.min(...lengths).toFixed(1)} shortest · ${Math.max(...lengths).toFixed(1)} longest` : "No clock sample; using 20 min/game."}<br>${days}`, `${games.length} games used${games.length < 10 ? " · small sample" : ""}`));
     setHtml("progressTimePanel", rows.join(""));
   }
 
-  function renderRecommendations(recentWinRate, accuracy = state.accuracy) {
-    const phases = [["opening", accuracy.opening], ["middlegame", accuracy.middlegame], ["endgame", accuracy.endgame]].sort((a, b) => a[1] - b[1]);
+  function renderRecommendations(recentWinRate, accuracy = null) {
     const weakLines = state.lessons.filter(lessonNeedsWork).slice(0, 3)
       .map((lesson) => `${lesson.yourRepeatedMove} → ${lesson.recommendedMove}`).join("; ");
-    setHtml("progressRecommendationPanel", [
-      card("Opening", weakLines ? `Review these exact move corrections first: ${weakLines}.` : "Import games to identify repeated decision mistakes.", percent(accuracy.opening)),
-      card("Middlegame", accuracy.middlegame < 73 ? "Pause on forcing moves, pawn breaks, and worst-piece improvement before committing." : "Maintain plan recognition with annotated game reviews.", percent(accuracy.middlegame)),
-      card("Endgame", accuracy.endgame < 80 ? "Prioritize king activity, rook activity, and pawn-race counting." : "Maintain two endgame sessions each week.", percent(accuracy.endgame)),
+    const items = [
+      card("Opening", weakLines ? `Review these exact move corrections first: ${weakLines}.` : "Import games to identify repeated decision mistakes.", accuracy?.opening == null ? "needs analysis" : percent(accuracy.opening)),
+      card("Middlegame", accuracy?.middlegame == null ? "Analyze recent games before assigning a middlegame priority." : accuracy.middlegame < 73 ? "Pause on forcing moves, pawn breaks, and worst-piece improvement before committing." : "Maintain plan recognition with annotated game reviews.", accuracy?.middlegame == null ? "needs analysis" : percent(accuracy.middlegame)),
+      card("Endgame", accuracy?.endgame == null ? "Analyze recent games before assigning an endgame priority." : accuracy.endgame < 80 ? "Prioritize king activity, rook activity, and pawn-race counting." : "Maintain two endgame sessions each week.", accuracy?.endgame == null ? "needs analysis" : percent(accuracy.endgame)),
       card("Tactics", recentWinRate < 52 ? "Do a short clean tactics block before playing, then review every loss immediately." : "Keep tactics short and daily; avoid exhausting calculation before games.", percent(recentWinRate)),
-      card("Review priority", `${phases[0][0]} is the lowest phase. Pair it with the highest-priority exact position in your queue.`, "today"),
-    ].join(""));
+    ];
+    const phases = accuracy
+      ? [["opening", accuracy.opening], ["middlegame", accuracy.middlegame], ["endgame", accuracy.endgame]]
+        .filter(([, value]) => Number.isFinite(Number(value)))
+        .sort((a, b) => a[1] - b[1])
+      : [];
+    items.push(card("Review priority", phases.length
+      ? `${phases[0][0]} is the lowest measured phase. Pair it with the highest-priority exact position in your queue.`
+      : "Start with the highest-priority exact position in your queue until a phase sample is available.", "today"));
+    setHtml("progressRecommendationPanel", items.join(""));
   }
 
   function renderSessions() {
@@ -1711,10 +1731,15 @@
     state.cloud = null;
     state.database = null;
     setText("boardTitle", lesson.openingName || lesson.lineLabel || "Exact decision position");
-    setText("boardSummary", `This is the exact position where you repeatedly played ${lesson.yourRepeatedMove}. Find Stockfish's best move.`);
+    const needsCorrection = ["inaccuracy", "mistake", "blunder"].includes(String(lesson.classification?.key || "").toLowerCase());
+    setText("boardSummary", needsCorrection
+      ? `This is the exact position where you repeatedly played ${lesson.yourRepeatedMove}. Find Stockfish's correction.`
+      : `This is the exact position where you repeatedly played ${lesson.yourRepeatedMove}, a ${lesson.classification?.label || "sound"} move. Rehearse your repertoire choice.`);
     setText("boardLine", `${lesson.introLineSan || lesson.lineLabel} · best continuation: ${lesson.continuationSan || lesson.recommendedMove}`);
-    setText("trainerFeedback", `Your repeated move was ${lesson.yourRepeatedMove}. Find a stronger move.`);
-    setText("trainerDecision", `You are ${lesson.color}. Choose the best move in this position.`);
+    setText("trainerFeedback", needsCorrection
+      ? `Your repeated move was ${lesson.yourRepeatedMove}. Find the correction ${lesson.recommendedMove}.`
+      : `Your repeated move ${lesson.yourRepeatedMove} is sound. Play it again to reinforce the line.`);
+    setText("trainerDecision", `You are ${lesson.color}. ${needsCorrection ? "Choose the correcting move" : "Play your repertoire move"} in this position.`);
     setText("trainerCoach", `${count(lesson.repeatMistakeCount)} repeats · about ${(num(lesson.valueLostCp) / 100).toFixed(2)} pawns lost · ${Math.round(num(lesson.confidence))}% confidence`);
     setText("studyMoveMeta", "Exact position");
     setHtml("studyMoveClassifications", card(
@@ -2405,6 +2430,7 @@
     else if (name === "repertoire-map") {
       renderHealth();
       renderRepertoire();
+      renderMoveTree();
     } else if (name === "stats") {
       renderProgress();
       clearTimeout(state.intelligenceTimer);
@@ -2437,6 +2463,8 @@
   }
 
   function activateTab(name) {
+    const aliases = { "needs-work": "trainer", review: "trainer", theory: "smart-theory" };
+    name = aliases[name] || name;
     if (name === "trainer" && !state.selectedLesson && !state.selectedBranch) {
       const next = dueLessons()[0];
       if (next) {

@@ -1925,6 +1925,9 @@ function normalizeTabName(name) {
   const requested = String(name || "").trim().toLowerCase();
   const aliases = {
     progress: "stats",
+    "needs-work": "trainer",
+    review: "trainer",
+    theory: "smart-theory",
   };
   const normalized = aliases[requested] || requested || "setup";
   return el.tabPanels.some((panel) => panel.dataset.tabPanel === normalized) ? normalized : "setup";
@@ -2630,18 +2633,35 @@ function renderProgressCockpit(progress) {
     <article class="progress-stat-card"><span>Score %</span><strong>${Number(profile.score_percentage || 0).toFixed(1)}%</strong><small>Draw = 0.5</small></article>
     <article class="progress-stat-card"><span>Recent form</span><strong>${recent.games ? `${recent.wins}W ${recent.draws}D ${recent.losses}L` : "--"}</strong><small>${recent.games ? `${recent.games} recent games · ${Number(recent.score_percentage || 0).toFixed(1)}% score` : "Refresh for recent games"}</small></article>
   `;
-  renderProgressCharts(progress.charts || {});
+  const averageIsMeasured = Boolean(profile.accuracy?.average_is_measured);
+  const phaseIsMeasured = Boolean(profile.accuracy?.phase_is_measured);
+  const honestCharts = {
+    ...(progress.charts || {}),
+    phase_accuracy: phaseIsMeasured ? (progress.charts?.phase_accuracy || []) : [],
+    accuracy: averageIsMeasured ? (progress.charts?.accuracy || []) : [],
+  };
+  renderProgressCharts(honestCharts);
   renderProgressWeakness(profile);
-  renderProgressGoals(progress.goals || []);
+  renderProgressGoals(progress.goals || [], { averageIsMeasured, phaseIsMeasured });
   renderProgressProjection(progress.projection || {});
   renderProgressTime(progress.projection || {});
-  renderProgressRecommendations(progress.recommendations || []);
+  renderProgressRecommendations(progress.recommendations || [], phaseIsMeasured);
   renderProgressSessions(progress.sessions || []);
 }
 
 function renderProgressWeakness(profile) {
   if (!el.progressWeakness) return;
   const accuracy = profile.accuracy || {};
+  if (!accuracy.phase_is_measured) {
+    el.progressWeakness.className = "stack empty";
+    el.progressWeakness.innerHTML = `
+      <article class="progress-recommendation-card">
+        <strong>No measured phase sample yet</strong>
+        <p class="summary-copy">${accuracy.average_is_measured ? `${accuracy.average_source === "chesscom" ? "Recent overall Chess.com" : "Saved session"} accuracy: ${Number(accuracy.average || 0).toFixed(2)}. ` : ""}Import analyzed games or save a session with phase accuracy. Manual fallback phase values are kept in settings but are not shown as measured performance.</p>
+      </article>
+    `;
+    return;
+  }
   const phases = ["opening", "middlegame", "endgame"];
   el.progressWeakness.className = "stack";
   el.progressWeakness.innerHTML = `
@@ -2659,9 +2679,15 @@ function renderProgressWeakness(profile) {
   `;
 }
 
-function renderProgressGoals(goals) {
+function renderProgressGoals(goals, measurement = {}) {
   if (!el.progressGoalGrid) return;
-  el.progressGoalGrid.innerHTML = goals.map((goal) => `
+  const visibleGoals = goals.filter((goal) => {
+    const label = String(goal.label || "");
+    if (/Avg accuracy/i.test(label)) return Boolean(measurement.averageIsMeasured);
+    if (/Middlegame|Endgame/i.test(label)) return Boolean(measurement.phaseIsMeasured);
+    return true;
+  });
+  el.progressGoalGrid.innerHTML = visibleGoals.map((goal) => `
     <article class="progress-goal-card">
       <div class="progress-goal-top">
         <strong>${escapeHtml(goal.label)}</strong>
@@ -2670,7 +2696,9 @@ function renderProgressGoals(goals) {
       <div class="progress-bar"><span style="--progress:${Number(goal.progress || 0)}%"></span></div>
       <small>${Number(goal.progress || 0).toFixed(1)}% complete</small>
     </article>
-  `).join("");
+  `).join("") + (!measurement.phaseIsMeasured
+    ? `<p class="line-note">Phase accuracy goals unlock after Bookup has a measured phase sample.</p>`
+    : "");
 }
 
 function renderProgressProjection(projection) {
@@ -2708,15 +2736,18 @@ function renderProgressTime(projection) {
   `;
 }
 
-function renderProgressRecommendations(items) {
+function renderProgressRecommendations(items, accuracyIsMeasured = false) {
   if (!el.progressRecommendations) return;
+  const visibleItems = items.filter((item) => accuracyIsMeasured || !["opening", "middlegame", "endgame"].includes(String(item.area || "").toLowerCase()));
   el.progressRecommendations.className = "stack";
-  el.progressRecommendations.innerHTML = items.map((item) => `
+  el.progressRecommendations.innerHTML = visibleItems.map((item) => `
     <article class="progress-recommendation-card">
       <strong>${escapeHtml(item.area)} · ${escapeHtml(item.priority)}</strong>
       <p class="summary-copy">${escapeHtml(item.text)}</p>
     </article>
-  `).join("");
+  `).join("") + (!accuracyIsMeasured
+    ? `<article class="progress-recommendation-card"><strong>Phase plan pending</strong><p class="summary-copy">Analyze recent games before Bookup assigns an opening, middlegame, or endgame weakness.</p></article>`
+    : "");
 }
 
 function renderProgressSessions(items) {

@@ -138,6 +138,9 @@ def save_session(root: Path, username: str, raw: dict[str, Any]) -> dict[str, An
         "draws": safe_int(raw.get("draws")) or 0,
         "losses": safe_int(raw.get("losses")) or 0,
         "accuracy": safe_float(raw.get("accuracy")),
+        "opening_accuracy": safe_float(raw.get("opening_accuracy")),
+        "middlegame_accuracy": safe_float(raw.get("middlegame_accuracy")),
+        "endgame_accuracy": safe_float(raw.get("endgame_accuracy")),
         "notes": str(raw.get("notes") or "").strip(),
         "mistake_theme": str(raw.get("mistake_theme") or "").strip(),
         "next_work": str(raw.get("next_work") or "").strip(),
@@ -382,20 +385,39 @@ def active_profile(data: dict[str, Any], username: str, mode: str) -> dict[str, 
             "fallback_active": True,
             "available_modes": list(MODES),
         }
-    profile["accuracy"] = accuracy_payload(data["settings"], profile.get("accuracy_from_live_games"))
+    latest_session = next(
+        (
+            item for item in reversed(data.get("sessions", []))
+            if item.get("mode") == mode
+            and all(safe_float(item.get(key)) is not None for key in ("opening_accuracy", "middlegame_accuracy", "endgame_accuracy"))
+        ),
+        None,
+    )
+    profile["accuracy"] = accuracy_payload(
+        data["settings"],
+        profile.get("accuracy_from_live_games"),
+        latest_session,
+    )
     profile["fetched_at"] = live.get("fetched_at") if live else None
     return profile
 
 
-def accuracy_payload(settings: dict[str, Any], live_average: Any) -> dict[str, Any]:
+def accuracy_payload(settings: dict[str, Any], live_average: Any, phase_sample: dict[str, Any] | None = None) -> dict[str, Any]:
     saved = settings.get("accuracy") or DEFAULT_ACCURACY
-    average = safe_float(live_average)
+    live_value = safe_float(live_average)
+    session_average = safe_float((phase_sample or {}).get("accuracy"))
+    average = live_value if live_value is not None else session_average
+    phase_is_measured = phase_sample is not None
     payload = {
         "average": round(average if average is not None else safe_float(saved.get("average")) or DEFAULT_ACCURACY["average"], 2),
-        "opening": safe_float(saved.get("opening")) or DEFAULT_ACCURACY["opening"],
-        "middlegame": safe_float(saved.get("middlegame")) or DEFAULT_ACCURACY["middlegame"],
-        "endgame": safe_float(saved.get("endgame")) or DEFAULT_ACCURACY["endgame"],
-        "average_is_live": average is not None,
+        "opening": safe_float((phase_sample or {}).get("opening_accuracy")) if phase_is_measured else safe_float(saved.get("opening")) or DEFAULT_ACCURACY["opening"],
+        "middlegame": safe_float((phase_sample or {}).get("middlegame_accuracy")) if phase_is_measured else safe_float(saved.get("middlegame")) or DEFAULT_ACCURACY["middlegame"],
+        "endgame": safe_float((phase_sample or {}).get("endgame_accuracy")) if phase_is_measured else safe_float(saved.get("endgame")) or DEFAULT_ACCURACY["endgame"],
+        "average_is_live": live_value is not None,
+        "average_is_measured": average is not None,
+        "average_source": "chesscom" if live_value is not None else ("session" if session_average is not None else "manual_fallback"),
+        "phase_is_measured": phase_is_measured,
+        "phase_source": "session" if phase_is_measured else "manual_fallback",
     }
     phases = {key: payload[key] for key in ("opening", "middlegame", "endgame")}
     payload["main_weakness"] = min(phases, key=phases.get)
@@ -409,14 +431,28 @@ def build_charts(data: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any
     rating = profile.get("rating_series") or [{"date": item.get("date", ""), "value": item.get("rating", 0)} for item in snapshots]
     if not rating:
         rating = [{"date": dt.date.today().isoformat(), "value": profile.get("rating", 0)}]
+    accuracy_points = [
+        {"date": item.get("date", ""), "value": item.get("accuracy")}
+        for item in snapshots
+        if safe_float(item.get("accuracy")) is not None
+    ]
+    phase_points = [
+        {
+            "date": item.get("date", ""),
+            "opening": item.get("opening_accuracy"),
+            "middlegame": item.get("middlegame_accuracy"),
+            "endgame": item.get("endgame_accuracy"),
+        }
+        for item in snapshots
+        if all(safe_float(item.get(key)) is not None for key in ("opening_accuracy", "middlegame_accuracy", "endgame_accuracy"))
+    ]
     return {
         "rating": rating,
         "daily_delta": daily_delta_from_rating(rating),
         "games": [{"date": item.get("date", ""), "value": item.get("games", 0)} for item in snapshots] or [{"date": dt.date.today().isoformat(), "value": profile.get("total_games", 0)}],
         "win_rate": [{"date": item.get("date", ""), "value": item.get("win_rate", 0)} for item in snapshots] or [{"date": dt.date.today().isoformat(), "value": profile.get("win_rate", 0)}],
-        "accuracy": [{"date": item.get("date", ""), "value": item.get("accuracy", 0)} for item in snapshots] or [{"date": dt.date.today().isoformat(), "value": profile["accuracy"]["average"]}],
-        "phase_accuracy": [{"date": item.get("date", ""), "opening": item.get("opening_accuracy", 0), "middlegame": item.get("middlegame_accuracy", 0), "endgame": item.get("endgame_accuracy", 0)} for item in snapshots]
-        or [{"date": dt.date.today().isoformat(), "opening": profile["accuracy"]["opening"], "middlegame": profile["accuracy"]["middlegame"], "endgame": profile["accuracy"]["endgame"]}],
+        "accuracy": accuracy_points,
+        "phase_accuracy": phase_points,
     }
 
 
@@ -442,7 +478,7 @@ def daily_delta_from_rating(series: list[dict[str, Any]]) -> list[dict[str, Any]
 def build_projection(data: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     settings = data["settings"]
     custom = safe_int(settings.get("custom_games")) or 538
-    counts = [538, 1000, custom]
+    counts = list(dict.fromkeys((538, 1000, custom)))
     table = normalize_dropoff(settings.get("dropoff_table"))
     average = safe_float(profile.get("duration_summary", {}).get("average")) or 20.0
     return {
@@ -522,10 +558,7 @@ def build_goals(profile: dict[str, Any]) -> list[dict[str, Any]]:
     for goal in goals:
         target = safe_float(goal["target"]) or 1
         value = safe_float(goal["value"]) or 0
-        if "rating" in str(goal["label"]):
-            pct = ((value - 1500) / max(1, target - 1500)) * 100
-        else:
-            pct = (value / max(1, target)) * 100
+        pct = (value / max(1, target)) * 100
         goal["progress"] = round(max(0, min(100, pct)), 1)
     return goals
 
@@ -559,10 +592,10 @@ def save_daily_snapshots(data: dict[str, Any], live: dict[str, Any]) -> None:
             "losses": profile.get("losses"),
             "win_rate": profile.get("win_rate"),
             "score_percentage": profile.get("score_percentage"),
-            "accuracy": profile.get("accuracy_from_live_games") or data["settings"]["accuracy"]["average"],
-            "opening_accuracy": data["settings"]["accuracy"]["opening"],
-            "middlegame_accuracy": data["settings"]["accuracy"]["middlegame"],
-            "endgame_accuracy": data["settings"]["accuracy"]["endgame"],
+            "accuracy": profile.get("accuracy_from_live_games"),
+            "opening_accuracy": None,
+            "middlegame_accuracy": None,
+            "endgame_accuracy": None,
         }
         existing = next((item for item in snapshots if item.get("date") == today and item.get("mode") == mode and item.get("source") == "live"), None)
         if existing:
@@ -586,9 +619,9 @@ def add_session_snapshot(data: dict[str, Any], session: dict[str, Any]) -> None:
         "win_rate": round(((session.get("wins") or 0) / games) * 100, 1) if games else 0,
         "score_percentage": round((((session.get("wins") or 0) + 0.5 * (session.get("draws") or 0)) / games) * 100, 1) if games else 0,
         "accuracy": session.get("accuracy") or data["settings"]["accuracy"]["average"],
-        "opening_accuracy": data["settings"]["accuracy"]["opening"],
-        "middlegame_accuracy": data["settings"]["accuracy"]["middlegame"],
-        "endgame_accuracy": data["settings"]["accuracy"]["endgame"],
+        "opening_accuracy": session.get("opening_accuracy"),
+        "middlegame_accuracy": session.get("middlegame_accuracy"),
+        "endgame_accuracy": session.get("endgame_accuracy"),
     }
     data.setdefault("snapshots", []).append(snapshot)
 

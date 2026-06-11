@@ -11,6 +11,9 @@ if not exist ".venv\Scripts\python.exe" (
 call ".venv\Scripts\activate.bat"
 if errorlevel 1 exit /b 1
 
+call build_web_assets.bat
+if errorlevel 1 exit /b 1
+
 python -m pip install --upgrade pip
 if errorlevel 1 exit /b 1
 
