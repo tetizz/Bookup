@@ -19,13 +19,64 @@ html {
 }
 
 body {
+  position: relative;
+  isolation: isolate;
   min-width: 280px;
   margin: 0;
   overflow-x: hidden;
   background:
+    linear-gradient(90deg, rgba(118, 165, 255, 0.04) 1px, transparent 1px) 0 0 / 72px 72px,
+    linear-gradient(rgba(98, 201, 139, 0.035) 1px, transparent 1px) 0 0 / 72px 72px,
     radial-gradient(circle at 50% -20%, rgba(70, 103, 157, 0.18), transparent 42%),
     var(--product-bg);
   color: var(--product-text);
+  animation: productAmbientGrid 26s linear infinite;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+}
+
+body::before {
+  inset: 0;
+  opacity: 0.58;
+  background-image:
+    linear-gradient(118deg, transparent 0 43%, rgba(118, 165, 255, 0.12) 43.2% 43.48%, transparent 43.8% 100%),
+    linear-gradient(64deg, transparent 0 61%, rgba(98, 201, 139, 0.11) 61.15% 61.42%, transparent 61.75% 100%),
+    conic-gradient(from 45deg at 50% 50%, rgba(255, 255, 255, 0.028) 0 25%, rgba(118, 165, 255, 0.035) 0 50%, transparent 0 75%, rgba(241, 201, 106, 0.03) 0 100%);
+  background-position:
+    -16vw 10vh,
+    56vw 18vh,
+    0 0;
+  background-size:
+    720px 440px,
+    620px 480px,
+    144px 144px;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+  animation: productBoardTrace 31s linear infinite;
+}
+
+body::after {
+  inset: -8%;
+  opacity: 0.42;
+  background-image:
+    linear-gradient(126deg, transparent 0 46%, rgba(241, 201, 106, 0.12) 46.1% 46.4%, transparent 46.75% 100%),
+    linear-gradient(38deg, transparent 0 56%, rgba(118, 165, 255, 0.13) 56.12% 56.38%, transparent 56.72% 100%),
+    repeating-linear-gradient(126deg, transparent 0 96px, rgba(255, 255, 255, 0.036) 97px 98px, transparent 99px 210px);
+  background-position:
+    12vw 12vh,
+    46vw 52vh,
+    0 0;
+  background-size:
+    760px 500px,
+    680px 430px,
+    540px 540px;
+  mix-blend-mode: screen;
+  animation: productSignalDrift 18s ease-in-out infinite alternate;
 }
 
 * {
@@ -60,6 +111,11 @@ svg {
   position: sticky;
   top: 0;
   z-index: 80;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 1;
 }
 
 .product-header {
@@ -627,6 +683,61 @@ table {
   50% {
     transform: scale(1.05);
     box-shadow: 0 0 0 7px rgba(118, 165, 255, 0.06);
+  }
+}
+
+@keyframes productAmbientGrid {
+  from {
+    background-position:
+      0 0,
+      0 0,
+      center,
+      center;
+  }
+  to {
+    background-position:
+      72px 36px,
+      -36px 72px,
+      center,
+      center;
+  }
+}
+
+@keyframes productBoardTrace {
+  from {
+    background-position:
+      -16vw 10vh,
+      56vw 18vh,
+      0 0;
+  }
+  to {
+    background-position:
+      14vw 16vh,
+      34vw 10vh,
+      144px 144px;
+  }
+}
+
+@keyframes productSignalDrift {
+  0% {
+    opacity: 0.3;
+    transform: translate3d(-1.6%, -0.8%, 0);
+    background-position:
+      12vw 12vh,
+      46vw 52vh,
+      0 0;
+  }
+  55% {
+    opacity: 0.52;
+    transform: translate3d(1.2%, 0.7%, 0);
+  }
+  100% {
+    opacity: 0.38;
+    transform: translate3d(2%, 1.2%, 0);
+    background-position:
+      28vw 8vh,
+      36vw 46vh,
+      180px -120px;
   }
 }
 
