@@ -128,27 +128,67 @@ svg {
 }
 
 .product-home-button {
+  position: relative;
+  overflow: hidden;
   display: inline-flex;
   min-height: 42px;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   flex: 0 0 auto;
   padding: 0 15px;
   border: 1px solid color-mix(in srgb, var(--product-accent), var(--product-border) 38%);
   border-radius: 7px;
   color: var(--product-text);
   background: linear-gradient(180deg, rgba(118, 165, 255, 0.18), rgba(17, 25, 37, 0.92));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 28px rgba(0, 0, 0, 0.18);
   font-size: 13px;
   font-weight: 800;
   text-decoration: none;
-  transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+  isolation: isolate;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease,
+    background 0.16s ease;
+  animation: productHomeFloat 3.2s ease-in-out infinite;
 }
 
-.product-home-button:hover {
-  transform: translateY(-1px);
+.product-home-button::before {
+  content: "";
+  position: absolute;
+  inset: -70% -45%;
+  z-index: -1;
+  background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.22) 48%, transparent 62%);
+  transform: translateX(-70%);
+  animation: productHomeSweep 4.8s ease-in-out infinite;
+}
+
+.product-home-button__spark {
+  width: 8px;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: var(--product-accent);
+  box-shadow: 0 0 0 4px rgba(118, 165, 255, 0.12);
+  animation: productHomePulse 1.9s ease-in-out infinite;
+}
+
+.product-home-button:hover,
+.product-home-button:focus-visible {
+  transform: translateY(-2px);
   border-color: var(--product-accent);
   color: #ffffff;
+  background: linear-gradient(180deg, rgba(118, 165, 255, 0.28), rgba(17, 25, 37, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 16px 36px rgba(58, 101, 184, 0.2);
+}
+
+.product-home-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--product-accent), #ffffff 20%);
+  outline-offset: 3px;
 }
 
 .product-header-stat {
@@ -549,6 +589,44 @@ table {
     flex: 0 1 auto;
     max-width: 18ch;
     overflow-wrap: anywhere;
+  }
+}
+
+@keyframes productHomeFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes productHomeSweep {
+  0%,
+  42% {
+    transform: translateX(-72%);
+    opacity: 0;
+  }
+  52% {
+    opacity: 1;
+  }
+  68%,
+  100% {
+    transform: translateX(72%);
+    opacity: 0;
+  }
+}
+
+@keyframes productHomePulse {
+  0%,
+  100% {
+    transform: scale(0.88);
+    box-shadow: 0 0 0 4px rgba(118, 165, 255, 0.12);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 7px rgba(118, 165, 255, 0.06);
   }
 }
 

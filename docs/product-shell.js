@@ -37,7 +37,10 @@
             <div class="product-header-stat"><span>Needs work</span><strong data-summary-slot="summaryNeedsWork">--</strong></div>
             <div class="product-header-stat"><span>Queue</span><strong data-summary-slot="summaryQueue">--</strong></div>
           </div>
-          <a class="product-home-button" href="${HOME_URL}" role="button">Home</a>
+          <a class="product-home-button" href="${HOME_URL}" aria-label="Open tetizz chess projects home">
+            <span class="product-home-button__spark" aria-hidden="true"></span>
+            <span>Home</span>
+          </a>
         </div>
       </div>`;
     Object.entries(liveSummary).forEach(([id, node]) => {
