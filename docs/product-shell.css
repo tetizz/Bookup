@@ -119,6 +119,38 @@ svg {
   gap: 8px;
 }
 
+.product-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.product-home-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0 15px;
+  border: 1px solid color-mix(in srgb, var(--product-accent), var(--product-border) 38%);
+  border-radius: 7px;
+  color: var(--product-text);
+  background: linear-gradient(180deg, rgba(118, 165, 255, 0.18), rgba(17, 25, 37, 0.92));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+}
+
+.product-home-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--product-accent);
+  color: #ffffff;
+}
+
 .product-header-stat {
   min-width: 86px;
   padding: 8px 12px;
@@ -457,6 +489,10 @@ table {
 
   .product-header-stats {
     display: none;
+  }
+
+  .product-header-actions {
+    justify-content: flex-start;
   }
 
   .progress-dashboard-grid,
