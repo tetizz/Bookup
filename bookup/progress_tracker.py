@@ -10,6 +10,8 @@ from typing import Any
 
 import requests
 
+from .chesscom import infer_time_class as infer_chesscom_time_class
+
 
 HEADERS = {
     "User-Agent": "Bookup/0.3 Progress Tracker (contact: https://github.com/tetizz/Bookup)",
@@ -300,18 +302,12 @@ def parse_game(raw: dict[str, Any], username_lc: str) -> dict[str, Any] | None:
 
 
 def infer_time_class(game: dict[str, Any]) -> str:
-    explicit = str(game.get("time_class", "") or "").lower().strip()
-    if explicit:
-        return explicit
-    base, inc = parse_time_control(str(game.get("time_control", "") or ""))
-    total = base + 40 * inc
-    if total >= 1500:
-        return "daily"
-    if total >= 480:
-        return "rapid"
-    if total >= 120:
-        return "blitz"
-    return "bullet" if total > 0 else "unknown"
+    return infer_chesscom_time_class(
+        {
+            "TimeClass": str(game.get("time_class", "") or ""),
+            "TimeControl": str(game.get("time_control", "") or ""),
+        }
+    )
 
 
 def estimate_duration_minutes(time_control: str, pgn: str) -> float:

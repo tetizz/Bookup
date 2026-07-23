@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
 import chess.pgn
@@ -12,6 +12,7 @@ import requests
 HEADERS = {
     "User-Agent": "Bookup/0.2 (contact: https://github.com/tetizz/Bookup)",
 }
+TIME_CLASSES = frozenset({"bullet", "blitz", "rapid", "daily"})
 
 
 @dataclass(slots=True)
@@ -23,6 +24,27 @@ class ImportedGame:
     opponent: str
     pgn: str
     game: chess.pgn.Game
+
+
+class ImportedGames(list[ImportedGame]):
+    """List-compatible archive import with non-fatal month warnings."""
+
+    def __init__(
+        self,
+        games: Iterable[ImportedGame] = (),
+        *,
+        warnings: Iterable[str] = (),
+        failed_archives: Iterable[str] = (),
+    ) -> None:
+        super().__init__(games)
+        self.warnings = list(warnings)
+        self.failed_archives = list(failed_archives)
+
+
+class ArchiveImportError(RuntimeError):
+    def __init__(self, message: str, *, warnings: Iterable[str] = ()) -> None:
+        super().__init__(message)
+        self.warnings = list(warnings)
 
 
 def _get_json(url: str) -> dict:
@@ -42,15 +64,21 @@ def fetch_archives(username: str) -> list[str]:
 
 
 def normalize_time_classes(values: Iterable[str]) -> set[str]:
-    normalized = {value.strip().lower() for value in values if value.strip()}
+    normalized = {str(value).strip().lower() for value in values if str(value).strip()}
     if not normalized or normalized == {"all"}:
         return set()
+    if "all" in normalized:
+        raise ValueError("Use all by itself, or choose specific time classes.")
+    unsupported = normalized - TIME_CLASSES
+    if unsupported:
+        invalid = ", ".join(sorted(unsupported))
+        raise ValueError(f"Unsupported time class: {invalid}. Use rapid, blitz, bullet, daily, or all.")
     return normalized
 
 
 def infer_time_class(headers: dict[str, str]) -> str:
     explicit = str(headers.get("TimeClass", "")).lower().strip()
-    if explicit:
+    if explicit in TIME_CLASSES:
         return explicit
     raw = str(headers.get("TimeControl", "")).strip()
     if raw in {"", "-", "?"}:
@@ -68,11 +96,11 @@ def infer_time_class(headers: dict[str, str]) -> str:
             total = int(raw)
         except ValueError:
             total = 0
-    if total >= 1500:
+    if total >= 86400:
         return "daily"
-    if total >= 480:
+    if total >= 600:
         return "rapid"
-    if total >= 120:
+    if total >= 180:
         return "blitz"
     if total > 0:
         return "bullet"
@@ -130,7 +158,12 @@ def _import_from_pgn_blob(username_lc: str, pgn_blob: str, target: set[str], imp
 def _import_from_month_json(username_lc: str, month: dict, target: set[str], max_games: int | None = None) -> list[ImportedGame]:
     imported: list[ImportedGame] = []
     for raw_game in reversed(month.get("games", [])):
-        time_class = str(raw_game.get("time_class", "")).lower()
+        time_class = infer_time_class(
+            {
+                "TimeClass": str(raw_game.get("time_class", "") or ""),
+                "TimeControl": str(raw_game.get("time_control", "") or ""),
+            }
+        )
         if target and time_class not in target:
             continue
         white = raw_game.get("white", {})
@@ -187,34 +220,71 @@ def fetch_games(
     time_classes: Iterable[str],
     max_games: int | None,
     archives: list[str] | None = None,
-) -> list[ImportedGame]:
+) -> ImportedGames:
     target = normalize_time_classes(time_classes)
     archives = archives if archives is not None else fetch_archives(username)
     imported: list[ImportedGame] = []
+    warnings: list[str] = []
+    failed_archives: list[str] = []
     username_lc = username.lower()
     ordered_archives = list(reversed(archives))
 
-    if max_games is not None and max_games <= 200:
-        for archive_url in ordered_archives:
-            imported.extend(_fetch_archive_games(archive_url, username_lc, target))
-            if len(imported) >= max_games:
-                return imported[:max_games]
-        return imported
-
-    max_workers = min(8, max(2, len(ordered_archives))) if ordered_archives else 2
-    futures: list[Future[list[ImportedGame]]] = []
+    batch_size = min(3, max(1, len(ordered_archives)))
     try:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for archive_url in ordered_archives:
-                futures.append(executor.submit(_fetch_archive_games, archive_url, username_lc, target))
-            for future in as_completed(futures):
-                imported.extend(future.result())
-                if max_games is not None and len(imported) >= max_games:
-                    return imported[:max_games]
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            for offset in range(0, len(ordered_archives), batch_size):
+                batch = ordered_archives[offset:offset + batch_size]
+                futures = [
+                    executor.submit(_fetch_archive_games, archive_url, username_lc, target)
+                    for archive_url in batch
+                ]
+                for archive_url, future in zip(batch, futures):
+                    try:
+                        imported.extend(future.result())
+                    except Exception as exc:
+                        failed_archives.append(archive_url)
+                        warnings.append(_archive_warning(archive_url, exc))
+                    if max_games is not None and len(imported) >= max_games:
+                        return ImportedGames(
+                            imported[:max_games],
+                            warnings=warnings,
+                            failed_archives=failed_archives,
+                        )
     except RuntimeError:
         imported.clear()
+        warnings.clear()
+        failed_archives.clear()
         for archive_url in ordered_archives:
-            imported.extend(_fetch_archive_games(archive_url, username_lc, target))
+            try:
+                imported.extend(_fetch_archive_games(archive_url, username_lc, target))
+            except Exception as exc:
+                failed_archives.append(archive_url)
+                warnings.append(_archive_warning(archive_url, exc))
             if max_games is not None and len(imported) >= max_games:
-                return imported[:max_games]
-    return imported
+                imported = imported[:max_games]
+                break
+        return _finalize_import(imported, warnings, failed_archives, ordered_archives)
+
+    return _finalize_import(imported, warnings, failed_archives, ordered_archives)
+
+
+def _archive_warning(archive_url: str, exc: Exception) -> str:
+    month = "/".join(str(archive_url).rstrip("/").split("/")[-2:]) or "unknown archive"
+    detail = str(exc).strip() or exc.__class__.__name__
+    return f"{month}: {detail}"
+
+
+def _finalize_import(
+    imported: list[ImportedGame],
+    warnings: list[str],
+    failed_archives: list[str],
+    ordered_archives: list[str],
+) -> ImportedGames:
+    if not imported and failed_archives:
+        failed = len(failed_archives)
+        total = len(ordered_archives)
+        raise ArchiveImportError(
+            f"No games could be imported because {failed} of {total} Chess.com archives failed.",
+            warnings=warnings,
+        )
+    return ImportedGames(imported, warnings=warnings, failed_archives=failed_archives)

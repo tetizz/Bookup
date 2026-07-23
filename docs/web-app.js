@@ -11,6 +11,7 @@
   const ANALYSIS_VERSION = 5;
   const MODES = ["rapid", "blitz", "bullet"];
   const PIECE_NAMES = { p: "P", n: "N", b: "B", r: "R", q: "Q", k: "K" };
+  const PIECE_LABELS = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
   const DEFAULT_ACCURACY = { average: 74.18, opening: 85.1, middlegame: 71.1, endgame: 77.2 };
   const DEFAULT_DROPOFF = [
     [1, 100, 55, 5, 40], [101, 200, 53, 5, 42], [201, 300, 52, 5, 43],
@@ -71,6 +72,7 @@
       mistakes: 0,
       boardNodes: new Map(),
       renderedOrientation: "",
+      focusedSquare: "",
       detached: false,
     },
     database: null,
@@ -92,6 +94,7 @@
     importMeta: null,
     cacheKey: "local",
     cacheRestored: false,
+    userWorkspaces: {},
   };
 
   const $ = (id) => document.getElementById(id);
@@ -113,6 +116,16 @@
       reject(new DOMException("Import stopped.", "AbortError"));
     }, { once: true });
   });
+
+  function workspaceCacheKey(username, settings = state.settings) {
+    const normalizedUsername = String(username || "").trim().toLowerCase();
+    if (!normalizedUsername) return "local";
+    const modes = parseTimeClasses(settings?.timeClasses).slice().sort();
+    const scope = settings?.importAllGames
+      ? "all"
+      : String(clamp(num(settings?.maxGames, 240), 1, 20000));
+    return `chesscom:${normalizedUsername}:${modes.join("+")}:${scope}`;
+  }
 
   function openCacheDb() {
     return new Promise((resolve, reject) => {
@@ -266,7 +279,7 @@
   }
 
   async function restoreAnalysisCache() {
-    const key = state.username ? `chesscom:${state.username.toLowerCase()}` : "local";
+    const key = workspaceCacheKey(state.username, state.settings);
     const cached = await readWorkspaceCache(key);
     if (!cached?.games?.length) return false;
     state.cacheKey = key;
@@ -294,6 +307,9 @@
   }
 
   function serializedState() {
+    const userWorkspaces = { ...state.userWorkspaces };
+    const userKey = userWorkspaceKey(state.username);
+    if (userKey) userWorkspaces[userKey] = captureUserWorkspace();
     return JSON.stringify({
       username: state.username,
       mode: state.mode,
@@ -327,7 +343,46 @@
       analysisMeta: state.analysisMeta,
       gameAnalysis: state.gameAnalysis,
       gameAnalysisMeta: state.gameAnalysisMeta,
+      userWorkspaces,
     });
+  }
+
+  function userWorkspaceKey(username) {
+    return String(username || "").trim().toLowerCase();
+  }
+
+  function captureUserWorkspace() {
+    return {
+      reviews: state.reviews.map((item) => ({ ...item })),
+      sessions: state.sessions.map((item) => ({ ...item })),
+      snapshots: state.snapshots.map((item) => ({ ...item })),
+      goalBaselines: { ...state.goalBaselines },
+      manualRepertoire: { ...state.manualRepertoire },
+      stats: { ...state.stats },
+      accuracy: { ...state.accuracy },
+      dropoff: state.dropoff.map((row) => [...row]),
+      customGames: state.customGames,
+      projectionMode: state.projectionMode,
+    };
+  }
+
+  function stashUserWorkspace(username = state.username) {
+    const key = userWorkspaceKey(username);
+    if (key) state.userWorkspaces[key] = captureUserWorkspace();
+  }
+
+  function applyUserWorkspace(username) {
+    const saved = state.userWorkspaces[userWorkspaceKey(username)] || {};
+    state.reviews = Array.isArray(saved.reviews) ? saved.reviews.map((item) => ({ ...item })) : [];
+    state.sessions = Array.isArray(saved.sessions) ? saved.sessions.map((item) => ({ ...item })) : [];
+    state.snapshots = Array.isArray(saved.snapshots) ? saved.snapshots.map((item) => ({ ...item })) : [];
+    state.goalBaselines = saved.goalBaselines && typeof saved.goalBaselines === "object" ? { ...saved.goalBaselines } : {};
+    state.manualRepertoire = saved.manualRepertoire && typeof saved.manualRepertoire === "object" ? { ...saved.manualRepertoire } : {};
+    state.stats = saved.stats && typeof saved.stats === "object" ? { ...saved.stats } : {};
+    state.accuracy = saved.accuracy ? { ...DEFAULT_ACCURACY, ...saved.accuracy } : { ...DEFAULT_ACCURACY };
+    state.dropoff = Array.isArray(saved.dropoff) ? saved.dropoff.map((row) => [...row]) : DEFAULT_DROPOFF.map((row) => [...row]);
+    state.customGames = num(saved.customGames, 538);
+    state.projectionMode = ["simple", "realistic"].includes(saved.projectionMode) ? saved.projectionMode : "realistic";
   }
 
   function flushSave() {
@@ -337,8 +392,9 @@
     }
     try {
       localStorage.setItem(STORAGE_KEY, serializedState());
+      return true;
     } catch {
-      // The app remains usable even if browser storage is unavailable or full.
+      return false;
     }
   }
 
@@ -396,9 +452,19 @@
       if (Array.isArray(data.gameAnalysis)) state.gameAnalysis = data.gameAnalysis;
       if (data.gameAnalysisMeta) state.gameAnalysisMeta = data.gameAnalysisMeta;
       if (data.stats) state.stats = data.stats;
+      if (data.userWorkspaces && typeof data.userWorkspaces === "object") {
+        state.userWorkspaces = data.userWorkspaces;
+        applyUserWorkspace(state.username);
+      } else {
+        stashUserWorkspace(state.username);
+      }
       markDataDirty();
     } catch {
-      localStorage.removeItem(STORAGE_KEY);
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Storage can be entirely unavailable; keep the in-memory defaults usable.
+      }
     }
   }
 
@@ -421,6 +487,14 @@
     setText("status", message);
     const node = $("status");
     if (node) node.dataset.tone = tone;
+  }
+
+  function workspaceNotice(message = "", tone = "") {
+    const node = $("workspaceNotice");
+    if (!node) return;
+    node.textContent = message;
+    node.dataset.tone = tone;
+    node.hidden = !message;
   }
 
   function card(title, body, meta = "", actions = "") {
@@ -476,14 +550,17 @@
   }
 
   function inferTimeClass(raw, headers) {
-    const explicit = String(raw.time_class || headers.TimeClass || "").toLowerCase();
-    if (explicit && explicit !== "pgn") return explicit;
-    const control = String(raw.time_control || headers.TimeControl || "");
-    const base = num(control.split("+")[0]);
-    if (!base) return "unknown";
-    if (base < 180) return "bullet";
-    if (base < 600) return "blitz";
-    if (base < 86400) return "rapid";
+    const supported = new Set(["rapid", "blitz", "bullet", "daily"]);
+    const explicit = String(raw.time_class || headers.TimeClass || "").trim().toLowerCase();
+    if (supported.has(explicit)) return explicit;
+    const control = String(raw.time_control || headers.TimeControl || "").trim().split("/").at(-1);
+    const [baseText, incrementText = "0"] = control.split("+");
+    const base = num(baseText);
+    const total = base + 40 * num(incrementText);
+    if (!total) return "unknown";
+    if (total < 180) return "bullet";
+    if (total < 600) return "blitz";
+    if (total < 86400) return "rapid";
     return "daily";
   }
 
@@ -708,55 +785,100 @@
 
   async function fetchPublicGames(signal) {
     const username = encodeURIComponent(state.username);
+    const requestedCacheKey = workspaceCacheKey(state.username, state.settings);
+    const warnings = [];
     setImportProgress(1, 1, `Connecting to Chess.com for ${state.username}...`, 0, 4);
-    const statsRequest = fetchJson(`https://api.chess.com/pub/player/${username}/stats`, { signal });
-    const archivesRequest = fetchJson(`https://api.chess.com/pub/player/${username}/games/archives`, { signal });
-    const statsPayload = await statsRequest;
-    setImportProgress(1, 1, "Rating and record loaded. Finding game archives...", 4, 9);
-    const archivesPayload = await archivesRequest;
+    const statsRequest = fetchJson(
+      `https://api.chess.com/pub/player/${username}/stats`,
+      { signal },
+      6000,
+      0,
+    ).then(
+      (value) => ({ status: "fulfilled", value }),
+      (reason) => ({ status: "rejected", reason }),
+    );
+    const archivesPayload = await fetchJson(
+      `https://api.chess.com/pub/player/${username}/games/archives`,
+      { signal },
+      18000,
+      2,
+    );
+    const statsResult = await Promise.race([
+      statsRequest,
+      sleep(750, signal).then(() => ({ status: "pending" })),
+    ]);
+    const statsPayload = statsResult.status === "fulfilled" ? statsResult.value : null;
+    if (statsResult.status === "rejected") {
+      warnings.push(`Stats: ${statsResult.reason?.message || "rating and record unavailable"}`);
+    } else if (statsResult.status === "pending") {
+      warnings.push("Stats: rating request was slow, so game import continued without waiting.");
+    }
+    setImportProgress(1, 1, statsPayload
+      ? "Rating and record loaded. Finding game archives..."
+      : "Stats are unavailable. Continuing with game archives...", 4, 9);
     setImportProgress(1, 1, "Archive list loaded. Scanning recent games...", 9, 12);
     const parsedStats = {};
-    for (const mode of MODES) {
-      const item = statsPayload[`chess_${mode}`];
-      if (!item?.last) continue;
-      const wins = num(item.record?.win);
-      const draws = num(item.record?.draw);
-      const losses = num(item.record?.loss);
-      parsedStats[mode] = {
-        rating: num(item.last.rating), best: num(item.best?.rating, item.last.rating),
-        wins, draws, losses, games: wins + draws + losses,
-      };
+    if (statsPayload) {
+      for (const mode of MODES) {
+        const item = statsPayload[`chess_${mode}`];
+        if (!item?.last) continue;
+        const wins = num(item.record?.win);
+        const draws = num(item.record?.draw);
+        const losses = num(item.record?.loss);
+        parsedStats[mode] = {
+          rating: num(item.last.rating), best: num(item.best?.rating, item.last.rating),
+          wins, draws, losses, games: wins + draws + losses,
+        };
+      }
+      state.stats = parsedStats;
+      saveDailySnapshots(parsedStats);
+    } else if (state.cacheKey !== requestedCacheKey) {
+      state.stats = {};
     }
-    state.stats = parsedStats;
-    saveDailySnapshots(parsedStats);
     const urls = (archivesPayload.archives || []).slice().reverse();
     if (!urls.length) throw new Error("Chess.com returned no public game archives for this username.");
     const importAll = state.settings.importAllGames;
     const wanted = importAll ? Number.POSITIVE_INFINITY : clamp(num(state.settings.maxGames, 240), 1, 20000);
     const previousKey = state.cacheKey;
-    const nextKey = `chesscom:${state.username.toLowerCase()}`;
+    const nextKey = requestedCacheKey;
+    const previousFailedArchiveUrls = previousKey === nextKey && Array.isArray(state.importMeta?.failedArchiveUrls)
+      ? state.importMeta.failedArchiveUrls
+      : [];
+    const scanUrls = orderedArchiveUrls(urls, previousFailedArchiveUrls, 3);
+    const availableUrls = new Set(urls);
+    const pendingRetryUrls = new Set(previousFailedArchiveUrls.filter((url) => availableUrls.has(url)));
+    const failedArchiveUrls = new Set();
     const existingGames = previousKey === nextKey ? state.games : [];
     const knownIds = new Set(existingGames.map((game) => String(game.id)));
     const imported = [];
     const rawSeen = new Set();
-    const warnings = [];
     let skipped = 0;
     let duplicates = 0;
     let archivesScanned = 0;
     const startedAt = Date.now();
     const batchSize = 3;
-    for (let offset = 0; offset < urls.length && imported.length < wanted; offset += batchSize) {
-      const batch = urls.slice(offset, offset + batchSize);
+    for (
+      let offset = 0;
+      offset < scanUrls.length && (imported.length < wanted || pendingRetryUrls.size > 0);
+      offset += batchSize
+    ) {
+      const batch = scanUrls.slice(offset, offset + batchSize);
       const results = await Promise.allSettled(batch.map((archiveUrl) => fetchJson(archiveUrl, { signal }, 22000, 3)));
       let batchUnknownGames = 0;
+      let batchFailures = 0;
       for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
         if (signal.aborted) throw new DOMException("Import stopped.", "AbortError");
         archivesScanned += 1;
         const result = results[resultIndex];
+        const archiveUrl = batch[resultIndex];
+        pendingRetryUrls.delete(archiveUrl);
         if (result.status === "rejected") {
-          warnings.push(`${batch[resultIndex].split("/").slice(-2).join("-")}: ${result.reason?.message || "archive failed"}`);
+          batchFailures += 1;
+          failedArchiveUrls.add(archiveUrl);
+          warnings.push(`${archiveUrl.split("/").slice(-2).join("-")}: ${result.reason?.message || "archive failed"}`);
           continue;
         }
+        failedArchiveUrls.delete(archiveUrl);
         const archiveGames = (result.value.games || []).slice().reverse();
         for (let index = 0; index < archiveGames.length && imported.length < wanted; index += 1) {
           const raw = archiveGames[index];
@@ -767,7 +889,7 @@
           }
           batchUnknownGames += 1;
           rawSeen.add(identity);
-          if (!state.settings.timeClasses.includes(String(raw.time_class || "").toLowerCase())) continue;
+          if (!state.settings.timeClasses.includes(inferTimeClass(raw, {}))) continue;
           const parsed = parseGame(raw);
           if (parsed) imported.push(parsed);
           else skipped += 1;
@@ -775,21 +897,31 @@
         }
       }
       const archiveRatio = importAll
-        ? archivesScanned / urls.length
-        : Math.max(archivesScanned / urls.length, imported.length / wanted);
+        ? archivesScanned / scanUrls.length
+        : Math.max(archivesScanned / scanUrls.length, imported.length / wanted);
       setImportProgress(
         archiveRatio,
         1,
-        `Scanning Chess.com archives: ${archivesScanned}/${urls.length} · ${count(imported.length)} new games`,
+        `Scanning Chess.com archives: ${archivesScanned}/${scanUrls.length} · ${count(imported.length)} new games`,
         12,
         55
       );
       await yieldToMain();
-      if (!importAll && existingGames.length && batchUnknownGames === 0) break;
+      if (
+        !importAll &&
+        existingGames.length &&
+        batchUnknownGames === 0 &&
+        batchFailures === 0 &&
+        pendingRetryUrls.size === 0
+      ) break;
     }
     const merged = [...existingGames, ...imported];
     const unique = [...new Map(merged.map((game) => [String(game.id), game])).values()]
       .sort((a, b) => a.endTime - b.endTime);
+    if (!unique.length) {
+      const warning = warnings.length ? ` ${warnings.length} request warning(s) occurred.` : "";
+      throw new Error(`No matching games could be loaded from Chess.com.${warning}`);
+    }
     state.cacheKey = nextKey;
     state.games = importAll ? unique : unique.slice(-wanted);
     const previousFingerprint = previousKey === nextKey && existingGames.length ? gameFingerprint(existingGames) : "";
@@ -804,6 +936,8 @@
       skipped,
       archivesScanned,
       archivesAvailable: urls.length,
+      archivesComplete: failedArchiveUrls.size === 0,
+      failedArchiveUrls: [...failedArchiveUrls],
       warnings: warnings.slice(0, 12),
       completedAt: Date.now(),
       elapsedMs: Date.now() - startedAt,
@@ -834,15 +968,24 @@
       if (stopButton) stopButton.hidden = true;
       return;
     }
-    state.username = username;
-    state.settings.maxGames = clamp(num($("maxGamesInput")?.value, 240), 1, 20000);
-    state.settings.timeClasses = parseTimeClasses($("timeClassesInput")?.value);
-    state.settings.importAllGames = Boolean($("importAllGamesInput")?.checked);
-    state.settings.autoImportStartup = Boolean($("autoImportStartupInput")?.checked);
-    state.importController = new AbortController();
-    status(`Loading public games for ${state.username}...`);
-    setImportProgress(0, 0, `Starting import for ${state.username}...`, 1, 1);
+    const nextMaxGames = clamp(num($("maxGamesInput")?.value, 240), 1, 20000);
+    let nextTimeClasses;
+    try {
+      nextTimeClasses = parseTimeClasses($("timeClassesInput")?.value);
+    } catch (error) {
+      status(error.message, "error");
+      state.loading = false;
+      document.body.classList.remove("is-loading");
+      buttons.forEach((item) => { item.disabled = false; });
+      if (stopButton) stopButton.hidden = true;
+      return;
+    }
     const previousWorkspace = {
+      username: state.username,
+      settings: {
+        ...state.settings,
+        timeClasses: [...(state.settings.timeClasses || [])],
+      },
       cacheKey: state.cacheKey,
       games: state.games,
       branches: state.branches,
@@ -854,7 +997,30 @@
       analysisMeta: state.analysisMeta,
       gameAnalysis: state.gameAnalysis,
       gameAnalysisMeta: state.gameAnalysisMeta,
+      reviews: state.reviews,
+      sessions: state.sessions,
+      manualRepertoire: state.manualRepertoire,
+      accuracy: state.accuracy,
+      dropoff: state.dropoff,
+      customGames: state.customGames,
+      projectionMode: state.projectionMode,
+      userWorkspaces: state.userWorkspaces,
     };
+    if (userWorkspaceKey(username) !== userWorkspaceKey(state.username)) {
+      stashUserWorkspace(state.username);
+      applyUserWorkspace(username);
+    }
+    state.username = username;
+    state.settings = {
+      ...state.settings,
+      maxGames: nextMaxGames,
+      timeClasses: nextTimeClasses,
+      importAllGames: Boolean($("importAllGamesInput")?.checked),
+      autoImportStartup: Boolean($("autoImportStartupInput")?.checked),
+    };
+    state.importController = new AbortController();
+    status(`Loading public games for ${state.username}...`);
+    setImportProgress(0, 0, `Starting import for ${state.username}...`, 1, 1);
     try {
       await fetchPublicGames(state.importController.signal);
       save();
@@ -864,6 +1030,8 @@
       setImportProgress(1, 1);
     } catch (error) {
       Object.assign(state, previousWorkspace);
+      if ($("usernameInput")) $("usernameInput").value = state.username;
+      if ($("mainUsernameInput")) $("mainUsernameInput").value = state.username;
       markDataDirty();
       const stopped = error.name === "AbortError";
       const message = /failed to fetch|networkerror|network request failed/i.test(String(error.message || ""))
@@ -889,8 +1057,25 @@
   function parseTimeClasses(value) {
     const text = String(value || "rapid,blitz,bullet").toLowerCase();
     if (text.trim() === "all") return ["rapid", "blitz", "bullet", "daily"];
-    const values = text.split(",").map((item) => item.trim()).filter(Boolean);
+    const values = [...new Set(text.split(",").map((item) => item.trim()).filter(Boolean))];
+    if (values.includes("all")) throw new Error("Use all by itself, or choose specific time controls.");
+    const unsupported = values.filter((item) => !["rapid", "blitz", "bullet", "daily"].includes(item));
+    if (unsupported.length) throw new Error(`Unsupported time control: ${unsupported.join(", ")}.`);
     return values.length ? values : ["rapid", "blitz", "bullet"];
+  }
+
+  function orderedArchiveUrls(urls, retryUrls, recentBatchSize = 3) {
+    const available = new Set(urls);
+    const recent = urls.slice(0, Math.max(1, recentBatchSize));
+    const recentSet = new Set(recent);
+    const retries = [...new Set(retryUrls || [])]
+      .filter((url) => available.has(url) && !recentSet.has(url));
+    const retrySet = new Set(retries);
+    return [
+      ...recent,
+      ...retries,
+      ...urls.slice(recent.length).filter((url) => !retrySet.has(url)),
+    ];
   }
 
   function importedStats() {
@@ -1100,9 +1285,52 @@
     setHtml("gameMoveTree", renderNode(root));
   }
 
+  function syncProgressModeState() {
+    qsa("[data-progress-mode]").forEach((button) => {
+      const active = button.dataset.progressMode === state.mode;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+
+  function syncTimeClassToggleState(values = state.settings.timeClasses) {
+    const supported = ["rapid", "blitz", "bullet", "daily"];
+    const selected = new Set(Array.isArray(values) ? values : parseTimeClasses(values));
+    qsa("[data-time-class-toggle]").forEach((button) => {
+      const active = selected.has(button.dataset.timeClassToggle);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    const allSelected = supported.every((mode) => selected.has(mode));
+    qsa("[data-time-class-all]").forEach((button) => {
+      button.classList.toggle("active", allSelected);
+      button.setAttribute("aria-pressed", allSelected ? "true" : "false");
+    });
+    const input = $("timeClassesInput");
+    if (input) input.value = allSelected ? "all" : supported.filter((mode) => selected.has(mode)).join(",");
+  }
+
+  function toggleTimeClass(button) {
+    const supported = ["rapid", "blitz", "bullet", "daily"];
+    if (button.hasAttribute("data-time-class-all")) {
+      syncTimeClassToggleState(supported);
+      return;
+    }
+    const input = $("timeClassesInput");
+    const selected = new Set(parseTimeClasses(input?.value));
+    const mode = button.dataset.timeClassToggle;
+    if (selected.has(mode)) selected.delete(mode);
+    else selected.add(mode);
+    if (!selected.size) {
+      status("Choose at least one time control.", "error");
+      return;
+    }
+    syncTimeClassToggleState([...selected]);
+  }
+
   function renderProgress() {
     const data = state.stats[state.mode];
-    qsa("[data-progress-mode]").forEach((button) => button.classList.toggle("active", button.dataset.progressMode === state.mode));
+    syncProgressModeState();
     const recent = state.games.filter((game) => game.timeClass === state.mode).slice(-30);
     const measured = summarizeModeAccuracy(state.mode);
     if (!data) {
@@ -1538,15 +1766,175 @@
     )).join("") || "No local progress sessions yet.", !items.length);
   }
 
+  function colorForTurn(turn) {
+    return turn === "b" ? "black" : "white";
+  }
+
+  function moveFromUci(chess, uci) {
+    const value = String(uci || "");
+    if (value.length < 4) return null;
+    return chess.move({
+      from: value.slice(0, 2),
+      to: value.slice(2, 4),
+      promotion: value.slice(4, 5) || "q",
+    });
+  }
+
+  function lessonStartPlan(lesson) {
+    if (!lesson?.decisionFen) {
+      return { ok: false, message: "This lesson has no exact starting position and cannot be trained." };
+    }
+    let probe;
+    try {
+      probe = new Chess(lesson?.decisionFen);
+    } catch {
+      return { ok: false, message: "This lesson has an invalid starting position and cannot be trained." };
+    }
+    const color = lesson?.color === "black" ? "black" : "white";
+    const userTurn = color === "black" ? "b" : "w";
+    const line = Array.isArray(lesson?.trainingLineUci) && lesson.trainingLineUci.length
+      ? lesson.trainingLineUci.map(String)
+      : [lesson?.recommendedMoveUci].filter(Boolean).map(String);
+    let autoReplyPlies = 0;
+    while (probe.turn() !== userTurn) {
+      const reply = moveFromUci(probe, line[autoReplyPlies]);
+      if (!reply) {
+        return {
+          ok: false,
+          message: `This ${color} lesson starts on the opponent's turn but has no legal reply to reach your move.`,
+        };
+      }
+      autoReplyPlies += 1;
+    }
+    const targetProbe = new Chess(probe.fen());
+    if (!moveFromUci(targetProbe, line[autoReplyPlies])) {
+      return {
+        ok: false,
+        message: `This lesson does not contain a legal ${color} move from its exact starting position.`,
+      };
+    }
+    return { ok: true, color, line, autoReplyPlies };
+  }
+
+  function manualEntryPlan(entry) {
+    if (!entry?.fen) {
+      return { ok: false, message: "That saved repertoire move has no exact position and cannot be trained." };
+    }
+    let probe;
+    try {
+      probe = new Chess(entry?.fen);
+    } catch {
+      return { ok: false, message: "That saved repertoire position is invalid and cannot be trained." };
+    }
+    const positionColor = colorForTurn(probe.turn());
+    const savedColor = entry?.playerColor === "black" || entry?.playerColor === "white"
+      ? entry.playerColor
+      : positionColor;
+    if (savedColor !== positionColor) {
+      return {
+        ok: false,
+        message: `That saved move is marked for ${savedColor}, but the exact position is ${positionColor} to move. Re-save it from a matching Smart Theory node.`,
+      };
+    }
+    const move = moveFromUci(probe, entry?.uci);
+    if (!move) {
+      return { ok: false, message: "That saved repertoire move is no longer legal and was skipped." };
+    }
+    return {
+      ok: true,
+      color: positionColor,
+      move,
+      uci: `${move.from}${move.to}${move.promotion || ""}`,
+    };
+  }
+
+  function boardAxes(orientation = state.trainer.orientation) {
+    return orientation === "white"
+      ? { files: ["a","b","c","d","e","f","g","h"], ranks: [8,7,6,5,4,3,2,1] }
+      : { files: ["h","g","f","e","d","c","b","a"], ranks: [1,2,3,4,5,6,7,8] };
+  }
+
+  function preferredBoardSquare(chess, files, ranks) {
+    const squares = ranks.flatMap((rankValue) => files.map((file) => `${file}${rankValue}`));
+    return squares.find((square) => {
+      const piece = chess.get(square);
+      return piece?.color === chess.turn() && chess.moves({ square, verbose: true }).length;
+    }) || squares[0];
+  }
+
+  function squareAccessibilityLabel(square, piece, selected, legalTarget) {
+    const contents = piece
+      ? `${piece.color === "w" ? "White" : "Black"} ${PIECE_LABELS[piece.type] || "piece"}`
+      : "empty";
+    return [
+      square,
+      contents,
+      selected ? "selected" : "",
+      legalTarget ? (piece ? "legal capture" : "legal move") : "",
+    ].filter(Boolean).join(", ");
+  }
+
+  function focusBoardSquare(square) {
+    const node = state.trainer.boardNodes.get(square);
+    if (!node) return;
+    state.trainer.focusedSquare = square;
+    state.trainer.boardNodes.forEach((button, buttonSquare) => {
+      button.tabIndex = buttonSquare === square ? 0 : -1;
+    });
+    node.focus({ preventScroll: true });
+  }
+
+  function handleBoardKeydown(event) {
+    const button = event.target.closest("[data-square]");
+    if (!button || !$("board")?.contains(button)) return;
+    const square = button.dataset.square;
+    const { files, ranks } = boardAxes();
+    let row = ranks.indexOf(Number(square.slice(1)));
+    let column = files.indexOf(square[0]);
+    if (row < 0 || column < 0) return;
+    if (event.key === "ArrowUp") row = Math.max(0, row - 1);
+    else if (event.key === "ArrowDown") row = Math.min(7, row + 1);
+    else if (event.key === "ArrowLeft") column = Math.max(0, column - 1);
+    else if (event.key === "ArrowRight") column = Math.min(7, column + 1);
+    else if (event.key === "Home") {
+      column = 0;
+      if (event.ctrlKey) row = 0;
+    } else if (event.key === "End") {
+      column = 7;
+      if (event.ctrlKey) row = 7;
+    } else if (event.key === "Escape" && state.trainer.selected) {
+      event.preventDefault();
+      state.trainer.selected = "";
+      renderBoard();
+      focusBoardSquare(square);
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    focusBoardSquare(`${files[column]}${ranks[row]}`);
+  }
+
+  function setBoardFocusStyle(button, focused) {
+    button.style.boxShadow = focused
+      ? "inset 0 0 0 4px #ffffff, inset 0 0 0 7px #315fa8"
+      : "";
+    button.style.zIndex = focused ? "8" : "";
+  }
+
   function renderBoard() {
     const chess = state.trainer.chess;
     const orientation = state.trainer.orientation;
-    const files = orientation === "white" ? ["a","b","c","d","e","f","g","h"] : ["h","g","f","e","d","c","b","a"];
-    const ranks = orientation === "white" ? [8,7,6,5,4,3,2,1] : [1,2,3,4,5,6,7,8];
+    const { files, ranks } = boardAxes(orientation);
     const board = $("board");
     if (!board) return;
+    const boardHadFocus = board.contains(document.activeElement);
     board.dataset.fen = chess.fen();
     board.dataset.orientation = orientation;
+    board.setAttribute(
+      "aria-label",
+      `Chess trainer board, ${orientation} at bottom, ${colorForTurn(chess.turn())} to move. Use arrow keys to move between squares.`
+    );
     if (state.trainer.renderedOrientation !== orientation || state.trainer.boardNodes.size !== 64) {
       setHtml("rankLabels", ranks.map((rankValue) => `<span>${rankValue}</span>`).join(""));
       setHtml("fileLabels", files.map((file) => `<span>${file}</span>`).join(""));
@@ -1557,6 +1945,7 @@
         const button = document.createElement("button");
         button.type = "button";
         button.dataset.square = square;
+        button.id = `board-square-${square}`;
         fragment.appendChild(button);
         state.trainer.boardNodes.set(square, button);
       }));
@@ -1567,6 +1956,10 @@
     const selected = state.trainer.selected;
     const legal = selected ? chess.moves({ square: selected, verbose: true }) : [];
     const legalTargets = new Set(legal.map((move) => move.to));
+    const focusedSquare = state.trainer.boardNodes.has(state.trainer.focusedSquare)
+      ? state.trainer.focusedSquare
+      : preferredBoardSquare(chess, files, ranks);
+    state.trainer.focusedSquare = focusedSquare;
     ranks.forEach((rankValue, rankIndex) => files.forEach((file, fileIndex) => {
       const square = `${file}${rankValue}`;
       const piece = chess.get(square);
@@ -1576,13 +1969,18 @@
       if (legalTargets.has(square)) classes.push(piece ? "legal-capture" : "legal-target");
       const node = state.trainer.boardNodes.get(square);
       node.className = classes.join(" ");
+      node.tabIndex = square === focusedSquare ? 0 : -1;
+      node.setAttribute("aria-label", squareAccessibilityLabel(square, piece, selected === square, legalTargets.has(square)));
       const renderKey = `${piece ? piece.color + piece.type : ""}|${legalTargets.has(square) ? "target" : ""}`;
       if (node.dataset.renderKey !== renderKey) {
-        const image = piece ? `<img class="piece" draggable="false" decoding="async" src="assets/pieces/cburnett/${piece.color}${PIECE_NAMES[piece.type]}.svg" alt="${piece.color === "w" ? "White" : "Black"} ${PIECE_NAMES[piece.type]}">` : "";
+        const image = piece ? `<img class="piece" draggable="false" decoding="async" src="assets/pieces/cburnett/${piece.color}${PIECE_NAMES[piece.type]}.svg" alt="" aria-hidden="true">` : "";
         node.innerHTML = `${legalTargets.has(square) ? '<span class="move-dot"></span>' : ""}${image}`;
         node.dataset.renderKey = renderKey;
       }
     }));
+    if (boardHadFocus && document.activeElement !== state.trainer.boardNodes.get(focusedSquare)) {
+      state.trainer.boardNodes.get(focusedSquare)?.focus({ preventScroll: true });
+    }
     setText("studyEvalScore", cloudScore());
     const score = cloudCp();
     const whiteShare = clamp(50 + score / 16, 5, 95);
@@ -1670,11 +2068,13 @@
   function openBranch(index) {
     const branch = state.branches[num(index, -1)];
     if (!branch) return;
+    workspaceNotice();
     state.selectedBranch = branch;
     state.selectedLesson = null;
     state.trainer.chess = new Chess();
     state.trainer.selected = "";
     state.trainer.orientation = branch.color;
+    state.trainer.focusedSquare = "";
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
     state.trainer.detached = false;
@@ -1689,7 +2089,7 @@
     setText("trainerDecision", "Choose a legal piece, then choose its destination.");
     setText("trainerCoach", "Your move is compared with the imported repertoire. Opponent moves are replayed automatically.");
     markTabsDirty("trainer");
-    activateTab("trainer");
+    activateTab("trainer", { focusPanel: true });
     requestPositionData();
     if (state.trainer.chess.turn() !== trainerUserTurn()) {
       window.setTimeout(playOpponentMoves, 180);
@@ -1699,11 +2099,19 @@
   function openLesson(lessonId) {
     const lesson = state.lessons.find((item) => item.lessonId === String(lessonId));
     if (!lesson) return;
+    const startPlan = lessonStartPlan(lesson);
+    if (!startPlan.ok) {
+      status(startPlan.message, "error");
+      workspaceNotice(startPlan.message, "error");
+      return;
+    }
+    workspaceNotice();
     state.selectedLesson = lesson;
     state.selectedBranch = null;
     state.trainer.chess = new Chess(lesson.decisionFen);
     state.trainer.selected = "";
-    state.trainer.orientation = lesson.color;
+    state.trainer.orientation = startPlan.color;
+    state.trainer.focusedSquare = "";
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
     state.trainer.detached = false;
@@ -1719,7 +2127,9 @@
     setText("trainerFeedback", needsCorrection
       ? `Your repeated move was ${lesson.yourRepeatedMove}. Find the correction ${lesson.recommendedMove}.`
       : `Your repeated move ${lesson.yourRepeatedMove} is sound. Play it again to reinforce the line.`);
-    setText("trainerDecision", `You are ${lesson.color}. ${needsCorrection ? "Choose the correcting move" : "Play your repertoire move"} in this position.`);
+    setText("trainerDecision", startPlan.autoReplyPlies
+      ? `You are ${startPlan.color}. Bookup is replaying the opponent move before your decision.`
+      : `You are ${startPlan.color}. ${needsCorrection ? "Choose the correcting move" : "Play your repertoire move"} in this position.`);
     setText("trainerCoach", `${count(lesson.repeatMistakeCount)} repeats · about ${(num(lesson.valueLostCp) / 100).toFixed(2)} pawns lost · ${Math.round(num(lesson.confidence))}% confidence`);
     setText("studyMoveMeta", "Exact position");
     setHtml("studyMoveClassifications", card(
@@ -1728,27 +2138,28 @@
       "Stockfish lesson"
     ));
     markTabsDirty("trainer");
-    activateTab("trainer");
+    activateTab("trainer", { focusPanel: true });
     requestPositionData();
+    if (startPlan.autoReplyPlies) {
+      window.setTimeout(playOpponentMoves, 180);
+    }
   }
 
   function openManualRepertoire(entryId) {
     const entry = Object.values(state.manualRepertoire || {}).find((item) => String(item.id) === String(entryId));
     if (!entry?.fen || !entry?.uci) return;
-    const probe = new Chess(entry.fen);
-    const move = probe.move({
-      from: entry.uci.slice(0, 2),
-      to: entry.uci.slice(2, 4),
-      promotion: entry.uci.slice(4, 5) || "q",
-    });
-    if (!move) {
-      status("That saved repertoire move is no longer legal and was skipped.", "error");
+    const plan = manualEntryPlan(entry);
+    if (!plan.ok) {
+      status(plan.message, "error");
+      workspaceNotice(plan.message, "error");
       return;
     }
+    workspaceNotice();
+    const move = plan.move;
     const lesson = {
       lessonId: entry.id,
       decisionFen: entry.fen,
-      color: entry.playerColor || "white",
+      color: plan.color,
       openingName: "Saved repertoire position",
       lineLabel: "Manual repertoire",
       yourRepeatedMove: move.san,
@@ -1767,6 +2178,7 @@
     state.trainer.chess = new Chess(entry.fen);
     state.trainer.selected = "";
     state.trainer.orientation = lesson.color;
+    state.trainer.focusedSquare = "";
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
     state.trainer.detached = false;
@@ -1780,7 +2192,7 @@
     setText("trainerDecision", `You are ${lesson.color}. Play the saved repertoire move.`);
     setText("trainerCoach", "This exact-position choice is included in future Smart Theory style decisions.");
     markTabsDirty("trainer");
-    activateTab("trainer");
+    activateTab("trainer", { focusPanel: true });
     requestPositionData();
   }
 
@@ -1791,8 +2203,15 @@
   function clickSquare(square) {
     const chess = state.trainer.chess;
     const selected = state.trainer.selected;
+    state.trainer.focusedSquare = square;
+    if (!state.selectedLesson && !state.selectedBranch) {
+      setText("trainerDecision", "Load a due position or imported repertoire line before moving.");
+      setText("trainerFeedback", "The board stays locked until a real training target is loaded.");
+      return;
+    }
     if (chess.turn() !== trainerUserTurn()) {
       setText("trainerDecision", "Bookup is choosing the opponent reply.");
+      window.setTimeout(playOpponentMoves, 0);
       return;
     }
     if (!selected) {
@@ -1906,6 +2325,7 @@
         });
         setText("trainerDecision", `Your move. Find ${expected?.san || "the best continuation"}.`);
       }
+      state.trainer.focusedSquare = "";
       renderBoard();
       requestPositionData();
       return;
@@ -1921,6 +2341,7 @@
     }
     if (state.trainer.cursor >= branch.moves.length) finishTrainer(state.trainer.mistakes === 0);
     else setText("trainerDecision", `Your move. Imported continuation: ${branch.moves[state.trainer.cursor]}.`);
+    state.trainer.focusedSquare = "";
     renderBoard();
     requestPositionData();
   }
@@ -1970,6 +2391,7 @@
     }
     setText("trainerFeedback", `${reply.san} played from ${choice.source}. Continue from the live board.`);
     setText("trainerDecision", "Your move. Bookup will classify it and keep the board synchronized.");
+    state.trainer.focusedSquare = "";
     renderBoard();
     requestPositionData();
   }
@@ -2021,10 +2443,6 @@
 
   function fenKey(fen) {
     return String(fen || "").split(" ").slice(0, 4).join(" ");
-  }
-
-  function sessionToken() {
-    return String($("studyLichessTokenInput")?.value || $("lichessTokenInput")?.value || $("smartTheoryLichessToken")?.value || "").trim();
   }
 
   function buildPositionIndex() {
@@ -2136,20 +2554,8 @@
     }
   }
 
-  async function fetchExplorerSource(fen, token) {
-    const url = `https://explorer.lichess.org/lichess?variant=standard&speeds=bullet,blitz,rapid,classical&ratings=1000,1200,1400,1600,1800,2000,2200,2500&fen=${encodeURIComponent(fen)}`;
-    const key = `explorer:lichess:${fenKey(fen)}`;
-    const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
-    const payload = await persistentAnalysisRequest(explorerCache, key, () =>
-      fetchJson(url, { headers }, 18000)
-    , 24 * 60 * 60 * 1000);
-    return { ...payload, source: "lichess" };
-  }
-
   async function fetchExplorer(fen) {
-    const token = sessionToken();
-    if (!token) return null;
-    return fetchExplorerSource(fen, token);
+    return localPositionData(fen);
   }
 
   async function positionData(fen) {
@@ -2199,16 +2605,16 @@
     const db = state.database;
     if (db) {
       const total = num(db.white) + num(db.draws) + num(db.black);
-      setText("studyOpeningMeta", `${db.opening?.name || (db.source === "local" ? "Your imported games" : "Lichess opening position")} · ${count(total)} database games`);
-      setText("studyDatabaseMeta", `${count(total)} games${db.source === "local" ? " · local corpus" : " · Lichess"}`);
+      setText("studyOpeningMeta", `Your imported games · ${count(total)} matching games`);
+      setText("studyDatabaseMeta", `${count(total)} games · local corpus`);
       setHtml("studyDatabaseMoves", (db.moves || []).slice(0, 8).map((move) => {
         const games = num(move.white) + num(move.draws) + num(move.black);
-        return card(move.san || move.uci, `${count(games)} games · White ${percent(games ? move.white / games * 100 : 0)} · Draw ${percent(games ? move.draws / games * 100 : 0)}`, db.source === "local" ? "your imported games" : "Lichess database");
-      }).join("") || "No public database moves for this position.", !(db.moves || []).length);
+        return card(move.san || move.uci, `${count(games)} games · White ${percent(games ? move.white / games * 100 : 0)} · Draw ${percent(games ? move.draws / games * 100 : 0)}`, "your imported games");
+      }).join("") || "No imported games reached this exact position.", !(db.moves || []).length);
     } else {
-      setText("studyOpeningMeta", "No public opening database result for this position.");
-      setText("studyDatabaseMeta", "Unavailable");
-      setHtml("studyDatabaseMoves", "Database unavailable or this position has no indexed games.", true);
+      setText("studyOpeningMeta", "No imported-game history for this position.");
+      setText("studyDatabaseMeta", "No local matches");
+      setHtml("studyDatabaseMoves", "Import games to build exact-position move history.", true);
     }
     const localLines = state.localEngineLines || [];
     const cloud = state.cloud;
@@ -2615,9 +3021,39 @@
     renderTab(state.activeTab);
   }
 
-  function activateTab(name) {
+  function syncWorkspaceTabState(name) {
+    qsa("[data-tab-target]").forEach((button) => {
+      const active = button.dataset.tabTarget === name;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+      button.tabIndex = active ? 0 : -1;
+    });
+    qsa("[data-tab-panel]").forEach((panel) => {
+      const active = panel.dataset.tabPanel === name;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+  }
+
+  function handleWorkspaceTabKeydown(event) {
+    const tabs = qsa("[data-tab-target]");
+    const current = tabs.indexOf(event.currentTarget);
+    if (current < 0) return;
+    let next = current;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (current + 1) % tabs.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (current - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    tabs[next].focus();
+    activateTab(tabs[next].dataset.tabTarget);
+  }
+
+  function activateTab(name, options = {}) {
     const aliases = { "needs-work": "trainer", review: "trainer", theory: "smart-theory" };
     name = aliases[name] || name;
+    if (!ALL_TABS.includes(name)) return;
     if (name === "trainer" && !state.selectedLesson && !state.selectedBranch) {
       const next = dueLessons()[0];
       if (next) {
@@ -2626,12 +3062,14 @@
       }
     }
     state.activeTab = name;
-    qsa("[data-tab-target]").forEach((button) => button.classList.toggle("active", button.dataset.tabTarget === name));
-    qsa("[data-tab-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.tabPanel === name));
+    syncWorkspaceTabState(name);
     if (state.tabFrame) cancelAnimationFrame(state.tabFrame);
     state.tabFrame = requestAnimationFrame(() => {
       state.tabFrame = 0;
       if (state.activeTab === name) renderTab(name);
+      if (options.focusPanel && name === "trainer") {
+        focusBoardSquare(state.trainer.focusedSquare);
+      }
     });
     window.scrollTo({ top: document.querySelector(".workspace-tabs")?.offsetTop || 0, behavior: "auto" });
   }
@@ -2730,12 +3168,30 @@
   }
 
   function bind() {
-    qsa("[data-tab-target]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tabTarget)));
+    qsa("[data-tab-target]").forEach((button) => {
+      button.addEventListener("click", () => activateTab(button.dataset.tabTarget));
+      button.addEventListener("keydown", handleWorkspaceTabKeydown);
+    });
     qsa("[data-progress-mode]").forEach((button) => button.addEventListener("click", () => {
       state.mode = button.dataset.progressMode;
       save();
       renderProgress();
     }));
+    qsa("[data-time-class-toggle], [data-time-class-all]").forEach((button) => {
+      button.addEventListener("click", () => toggleTimeClass(button));
+    });
+    const board = $("board");
+    board?.addEventListener("keydown", handleBoardKeydown);
+    board?.addEventListener("focusin", (event) => {
+      const square = event.target.closest("[data-square]");
+      if (!square) return;
+      state.trainer.focusedSquare = square.dataset.square;
+      setBoardFocusStyle(square, true);
+    });
+    board?.addEventListener("focusout", (event) => {
+      const square = event.target.closest("[data-square]");
+      if (square) setBoardFocusStyle(square, false);
+    });
     document.addEventListener("click", (event) => {
       const lessonButton = event.target.closest("[data-open-lesson]");
       if (lessonButton) openLesson(lessonButton.dataset.openLesson);
@@ -2756,13 +3212,26 @@
       if ($("mainUsernameInput")) $("mainUsernameInput").value = event.currentTarget.value;
     });
     $("saveSetupBtn")?.addEventListener("click", () => {
-      state.username = String($("usernameInput")?.value || state.username).trim();
+      const nextUsername = String($("usernameInput")?.value || state.username).trim();
+      if (userWorkspaceKey(nextUsername) !== userWorkspaceKey(state.username)) {
+        stashUserWorkspace(state.username);
+        applyUserWorkspace(nextUsername);
+      }
+      state.username = nextUsername;
       state.settings.maxGames = clamp(num($("maxGamesInput")?.value, 240), 1, 20000);
-      state.settings.timeClasses = parseTimeClasses($("timeClassesInput")?.value);
+      try {
+        state.settings.timeClasses = parseTimeClasses($("timeClassesInput")?.value);
+      } catch (error) {
+        status(error.message, "error");
+        return;
+      }
       state.settings.importAllGames = Boolean($("importAllGamesInput")?.checked);
       state.settings.autoImportStartup = Boolean($("autoImportStartupInput")?.checked);
-      save();
-      status("Setup saved in this browser.", "success");
+      if (flushSave()) {
+        status("Setup saved in this browser.", "success");
+      } else {
+        status("Setup could not be saved because browser storage is unavailable or full. Your previous saved setup was left unchanged.", "error");
+      }
     });
     $("resetWorkspaceBtn")?.addEventListener("click", async () => {
       if (!confirm("Clear Bookup Web data stored in this browser?")) return;
@@ -2808,12 +3277,6 @@
       const current = queue.findIndex((lesson) => lesson.lessonId === state.selectedLesson?.lessonId);
       const next = queue[(current + 1) % Math.max(1, queue.length)];
       if (next) openLesson(next.lessonId);
-    });
-    $("studyApplySettingsBtn")?.addEventListener("click", () => {
-      const token = $("studyLichessTokenInput")?.value || "";
-      if ($("lichessTokenInput")) $("lichessTokenInput").value = token;
-      setText("studySettingsStatus", "Browser analysis settings applied. Tokens remain in memory only and are never saved.");
-      requestPositionData();
     });
     qsa("[data-smart-preset]").forEach((button) => button.addEventListener("click", () => {
       const presets = {
@@ -2888,24 +3351,40 @@
       const node = smartNodeMap().get(String(state.smartSelectedNodeId));
       if (!node) return;
       const correction = node.correctedMove || node.bestMoveUci || node.uci;
-      const base = new Chess(node.fenBefore || state.smartTree.start_fen);
-      const move = base.move({ from: correction.slice(0, 2), to: correction.slice(2, 4), promotion: correction.slice(4, 5) || "q" });
-      if (!move) { setText("smartTheoryStatus", "No legal correction"); return; }
+      const positionFen = node.fenBefore || state.smartTree?.start_fen;
       const playerColor = $("smartTheoryMyColor")?.value || "white";
-      const positionKey = fenKey(node.fenBefore);
+      const plan = manualEntryPlan({ fen: positionFen, uci: correction, playerColor });
+      if (!plan.ok) {
+        setText("smartTheoryStatus", "Not saved");
+        setText("smartTheoryProgress", plan.message);
+        return;
+      }
+      const positionKey = fenKey(positionFen);
+      const previousEntry = state.manualRepertoire[positionKey];
       state.manualRepertoire[positionKey] = {
         id: `smart-${Date.now()}`,
-        fen: node.fenBefore,
-        uci: `${move.from}${move.to}${move.promotion || ""}`,
-        san: move.san,
-        playerColor,
+        fen: positionFen,
+        uci: plan.uci,
+        san: plan.move.san,
+        playerColor: plan.color,
         source: "manual_repertoire",
         savedAt: Date.now(),
       };
       markDataDirty();
-      save(); renderAll(); refreshSmartSourcePicker();
+      if (!flushSave()) {
+        if (previousEntry) state.manualRepertoire[positionKey] = previousEntry;
+        else delete state.manualRepertoire[positionKey];
+        markDataDirty();
+        renderAll();
+        refreshSmartSourcePicker();
+        setText("smartTheoryStatus", "Not saved");
+        setText("smartTheoryProgress", "Browser storage is unavailable or full. The correction was not added; free storage or allow site data, then try again.");
+        return;
+      }
+      renderAll();
+      refreshSmartSourcePicker();
       setText("smartTheoryStatus", "Saved to repertoire");
-      setText("smartTheoryProgress", `${move.san} is now saved for this exact position and will influence future Trainer and Smart Theory runs.`);
+      setText("smartTheoryProgress", `${plan.move.san} is saved for this exact ${plan.color}-to-move position and will influence future Trainer and Smart Theory runs.`);
     });
     $("smartTheoryExportLichessBtn")?.addEventListener("click", () => {
       if (!state.smartTree) { setText("smartTheoryLichessHint", "Generate a tree first."); return; }
@@ -3103,6 +3582,9 @@
   async function initialize() {
     load();
     bind();
+    syncWorkspaceTabState(state.activeTab);
+    syncProgressModeState();
+    syncTimeClassToggleState(state.settings.timeClasses);
     setSmartTheoryRunning(false);
     const defaults = {
       mainPlatformInput: "chesscom", mainUsernameInput: state.username, usernameInput: state.username,
@@ -3157,6 +3639,18 @@
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("./sw.js").catch(() => {});
     }
+  }
+
+  if (window.__BOOKUP_TEST__) {
+    window.BookupTrainerTestHooks = Object.freeze({
+      boardAxes,
+      colorForTurn,
+      flushSave,
+      lessonStartPlan,
+      manualEntryPlan,
+      squareAccessibilityLabel,
+      workspaceCacheKey,
+    });
   }
 
   document.addEventListener("DOMContentLoaded", initialize);

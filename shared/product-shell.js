@@ -8,6 +8,7 @@
     ["stats", "Progress"],
     ["smart-theory", "Smart Theory"],
   ];
+  const HOME_URL = "https://tetizz.github.io/Home/";
 
   function byId(id) {
     return document.getElementById(id);
@@ -30,10 +31,16 @@
             <span>Your games, one repertoire, one training plan</span>
           </div>
         </div>
-        <div class="product-header-stats" aria-label="Workspace summary">
-          <div class="product-header-stat"><span>Positions</span><strong data-summary-slot="summaryPositions">--</strong></div>
-          <div class="product-header-stat"><span>Needs work</span><strong data-summary-slot="summaryNeedsWork">--</strong></div>
-          <div class="product-header-stat"><span>Queue</span><strong data-summary-slot="summaryQueue">--</strong></div>
+        <div class="product-header-actions">
+          <div class="product-header-stats" aria-label="Workspace summary">
+            <div class="product-header-stat"><span>Positions</span><strong data-summary-slot="summaryPositions">--</strong></div>
+            <div class="product-header-stat"><span>Needs work</span><strong data-summary-slot="summaryNeedsWork">--</strong></div>
+            <div class="product-header-stat"><span>Queue</span><strong data-summary-slot="summaryQueue">--</strong></div>
+          </div>
+          <a class="product-home-button" href="${HOME_URL}" aria-label="Open tetizz chess projects home">
+            <span class="product-home-button__spark" aria-hidden="true"></span>
+            <span>Home</span>
+          </a>
         </div>
       </div>`;
     Object.entries(liveSummary).forEach(([id, node]) => {

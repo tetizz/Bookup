@@ -5,7 +5,8 @@ if (typeof document !== "undefined") {
 }
 const webMode = Boolean(defaults.web_mode);
 const REVIEW_KEY = "bookup-review-stats-v1";
-const PROFILE_SCHEMA_VERSION = 24;
+const PROFILE_SCHEMA_VERSION = 28;
+const GAMES_CACHE_SCHEMA_VERSION = 21;
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const CLASSIFICATION_ASSET_VERSION = "20260422c";
 let audioContext = null;
@@ -70,10 +71,13 @@ const el = {
   lichessUsername: document.getElementById("lichessUsernameInput"),
   username: document.getElementById("usernameInput"),
   timeClasses: document.getElementById("timeClassesInput"),
+  timeClassButtons: Array.from(document.querySelectorAll("[data-time-class-toggle]")),
+  timeClassAll: document.querySelector("[data-time-class-all]"),
   maxGames: document.getElementById("maxGamesInput"),
   importAllGames: document.getElementById("importAllGamesInput"),
   autoImportStartup: document.getElementById("autoImportStartupInput"),
   lichessToken: document.getElementById("lichessTokenInput"),
+  clearLichessToken: document.getElementById("clearLichessTokenBtn"),
   enginePath: document.getElementById("enginePathInput"),
   depth: document.getElementById("depthInput"),
   thinkTime: document.getElementById("thinkTimeInput"),
@@ -257,6 +261,7 @@ const state = {
   legalByFrom: {},
   boardPieceMap: {},
   selectedSquare: "",
+  boardFocusedSquare: "",
   dragFrom: "",
   dragPiece: "",
   dragGhost: null,
@@ -321,6 +326,7 @@ async function init() {
   preloadClassificationIcons();
   syncIdentityDefaults();
   el.timeClasses.value = defaults.time_classes || "all";
+  syncTimeClassToggleState(el.timeClasses.value);
   el.maxGames.value = defaults.max_games ?? 0;
   el.importAllGames.checked = Number(defaults.max_games ?? 0) === 0;
   if (el.autoImportStartup) el.autoImportStartup.checked = defaults.auto_import_on_startup !== false;
@@ -379,14 +385,20 @@ async function init() {
 
   el.analyze.addEventListener("click", runAnalysis);
   el.saveSetup?.addEventListener("click", () => { void saveSetupSettings(); });
+  el.clearLichessToken?.addEventListener("click", () => { void clearSavedLichessToken(); });
   el.importPgn?.addEventListener("click", importPgnGames);
   el.importChessnut?.addEventListener("click", importChessnutGames);
   el.importAllGames?.addEventListener("change", syncImportScope);
+  el.timeClassButtons.forEach((button) => {
+    button.addEventListener("click", () => toggleTimeClass(button));
+  });
+  el.timeClassAll?.addEventListener("click", () => toggleTimeClass(el.timeClassAll));
   el.autoImportStartup?.addEventListener("change", () => { void saveStartupImportSetting(); });
   el.reclassifyFresh?.addEventListener("click", () => { void resetLocalWorkspace({ rebuild: true }); });
   el.resetWorkspace?.addEventListener("click", () => { void resetLocalWorkspace({ rebuild: false }); });
   el.trainerReset?.addEventListener("click", resetTrainerLesson);
   el.trainerNext?.addEventListener("click", nextLesson);
+  el.board?.addEventListener("keydown", handleBoardKeydown);
   el.studyApplySettings?.addEventListener("click", () => { void saveStudySettings(); });
   el.realignUseStart?.addEventListener("click", () => {
     if (el.realignSourceFen) {
@@ -475,6 +487,7 @@ async function init() {
   el.thinkTime?.addEventListener("change", syncStudySettingsFromSetup);
   el.tabButtons.forEach((button) => {
     button.addEventListener("click", () => setActiveTab(button.dataset.tabTarget || "setup"));
+    button.addEventListener("keydown", handleWorkspaceTabKeydown);
   });
 
   document.addEventListener("click", (event) => {
@@ -507,7 +520,7 @@ async function init() {
     const makeRepertoireButton = target.closest("[data-make-repertoire]");
     const makeRepertoire = makeRepertoireButton instanceof HTMLElement ? makeRepertoireButton.dataset.makeRepertoire : "";
     if (makeRepertoire) {
-      saveManualRepertoireMove(makeRepertoire);
+      void saveManualRepertoireMove(makeRepertoire);
       return;
     }
     const openFenButton = target.closest("[data-open-fen]");
@@ -577,9 +590,9 @@ function normalizeFen(fen) {
 function syncStudySettingsFromSetup() {
   if (el.studyLichessToken) {
     el.studyLichessToken.value = el.lichessToken?.value || "";
-    if (defaults.lichess_token_configured && !el.studyLichessToken.value) {
-      el.studyLichessToken.placeholder = "Uses saved local token if blank";
-    }
+    el.studyLichessToken.placeholder = defaults.lichess_token_configured && !el.studyLichessToken.value
+      ? "Uses saved local token if blank"
+      : "Optional for direct Study export";
   }
   if (el.studyEnginePath) el.studyEnginePath.value = el.enginePath?.value || "";
   if (el.studyDepth) el.studyDepth.value = el.depth?.value || defaults.depth || 24;
@@ -630,15 +643,57 @@ function handleMainIdentityChange() {
   }
 }
 
+function parseSelectedTimeClasses(value = el.timeClasses?.value || "all") {
+  const supported = ["rapid", "blitz", "bullet", "daily"];
+  const values = String(value || "all").toLowerCase().split(",").map((item) => item.trim()).filter(Boolean);
+  if (!values.length || values.includes("all")) return supported;
+  return [...new Set(values.filter((item) => supported.includes(item)))];
+}
+
+function syncTimeClassToggleState(value = el.timeClasses?.value || "all") {
+  const supported = ["rapid", "blitz", "bullet", "daily"];
+  const selected = new Set(Array.isArray(value) ? value : parseSelectedTimeClasses(value));
+  el.timeClassButtons.forEach((button) => {
+    const active = selected.has(button.dataset.timeClassToggle);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  const allSelected = supported.every((mode) => selected.has(mode));
+  if (el.timeClassAll) {
+    el.timeClassAll.classList.toggle("active", allSelected);
+    el.timeClassAll.setAttribute("aria-pressed", allSelected ? "true" : "false");
+  }
+  if (el.timeClasses) {
+    el.timeClasses.value = allSelected ? "all" : supported.filter((mode) => selected.has(mode)).join(",");
+  }
+}
+
+function toggleTimeClass(button) {
+  const supported = ["rapid", "blitz", "bullet", "daily"];
+  if (button?.hasAttribute("data-time-class-all")) {
+    syncTimeClassToggleState(supported);
+    return;
+  }
+  const selected = new Set(parseSelectedTimeClasses());
+  const mode = String(button?.dataset.timeClassToggle || "");
+  if (selected.has(mode)) selected.delete(mode);
+  else if (supported.includes(mode)) selected.add(mode);
+  if (!selected.size) {
+    setProgress(0, "Choose at least one time control.", { allowDecrease: true });
+    return;
+  }
+  syncTimeClassToggleState([...selected]);
+}
+
 function applyStudySettingsToSetup(saved = {}) {
   if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token") && saved.lichess_token) {
     el.lichessToken.value = saved.lichess_token;
   }
   if (el.lichessToken && Object.prototype.hasOwnProperty.call(saved, "lichess_token_configured")) {
     defaults.lichess_token_configured = Boolean(saved.lichess_token_configured);
-    if (defaults.lichess_token_configured && !el.lichessToken.value) {
-      el.lichessToken.placeholder = "Saved local token configured";
-    }
+    el.lichessToken.placeholder = defaults.lichess_token_configured && !el.lichessToken.value
+      ? "Saved local token configured"
+      : "Only needed for direct Study export";
   }
   if (el.enginePath && Object.prototype.hasOwnProperty.call(saved, "engine_path")) el.enginePath.value = saved.engine_path || "";
   if (el.depth && Object.prototype.hasOwnProperty.call(saved, "depth")) el.depth.value = saved.depth;
@@ -666,6 +721,55 @@ function withOptionalLichessToken(payload = {}, token = currentLichessToken()) {
   const cleaned = String(token || "").trim();
   if (!cleaned) return payload;
   return { ...payload, lichess_token: cleaned };
+}
+
+async function clearSavedLichessToken() {
+  const button = el.clearLichessToken;
+  const original = button?.textContent || "Forget saved token";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Forgetting...";
+  }
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lichess_token: "" }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not forget the saved token.");
+    const returnedDefaults = data.defaults || { lichess_token_configured: false };
+    applyDefaultsToState(returnedDefaults);
+    applyStudySettingsToSetup(returnedDefaults);
+    [el.lichessToken, el.studyLichessToken, el.smartTheoryLichessToken].forEach((input) => {
+      if (input) input.value = "";
+    });
+    const environmentTokenRemains = Boolean(returnedDefaults.lichess_token_configured);
+    defaults.lichess_token_configured = environmentTokenRemains;
+    applyStudySettingsToSetup({ lichess_token_configured: environmentTokenRemains });
+    if (el.smartTheoryLichessToken) {
+      el.smartTheoryLichessToken.placeholder = environmentTokenRemains
+        ? "Uses environment token if blank"
+        : "Optional for direct Study export";
+    }
+    if (button) button.textContent = environmentTokenRemains ? "Config token cleared" : "Token forgotten";
+    setProgress(
+      100,
+      environmentTokenRemains
+        ? "Saved config token cleared. A Lichess Study token from the environment remains active."
+        : "Saved Lichess Study token removed from this computer.",
+    );
+  } catch (error) {
+    if (button) button.textContent = "Forget failed";
+    setProgress(0, error.message || "Could not forget the saved token.", { allowDecrease: true });
+  } finally {
+    window.setTimeout(() => {
+      if (button) {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }, 1400);
+  }
 }
 
 function hasConfiguredLichessToken() {
@@ -702,7 +806,7 @@ async function copyStudyValue(kind, button) {
 }
 
 function currentStudySettingsPayload() {
-  return withOptionalLichessToken({
+  return {
     engine_path: String(el.studyEnginePath?.value || el.enginePath?.value || "").trim(),
     depth: Number(el.studyDepth?.value || el.depth?.value || defaults.depth || 24),
     think_time_sec: Number(el.studyThinkTime?.value || el.thinkTime?.value || defaults.think_time_sec || 5),
@@ -710,11 +814,11 @@ function currentStudySettingsPayload() {
     threads: Number(el.studyThreads?.value || el.threads?.value || defaults.threads || 8),
     parallel_workers: Number(el.studyParallelWorkers?.value || el.parallelWorkers?.value || defaults.parallel_workers || 1),
     hash_mb: Number(el.studyHash?.value || el.hash?.value || defaults.hash_mb || 2048),
-  });
+  };
 }
 
-function currentSetupSettingsPayload() {
-  return withOptionalLichessToken({
+function currentSetupSettingsPayload(includeLichessToken = false) {
+  const payload = {
     username: resolveConfiguredUsername(),
     main_platform: String(el.mainPlatform?.value || defaults.main_platform || "chesscom").trim().toLowerCase(),
     main_username: String(el.mainUsername?.value || defaults.main_username || "").trim(),
@@ -725,7 +829,8 @@ function currentSetupSettingsPayload() {
     chessnut_db_path: String(el.chessnutDbPath?.value || defaults.chessnut_db_path || "").trim(),
     chessnut_player_color: String(el.chessnutPlayerColor?.value || defaults.chessnut_player_color || "white").trim().toLowerCase(),
     ...setupEngineSettingsPayload(),
-  }, el.lichessToken?.value || "");
+  };
+  return includeLichessToken ? withOptionalLichessToken(payload, el.lichessToken?.value || "") : payload;
 }
 
 async function saveStartupImportSetting() {
@@ -751,7 +856,7 @@ async function saveSetupSettings() {
     const response = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentSetupSettingsPayload()),
+      body: JSON.stringify(currentSetupSettingsPayload(true)),
     });
     const data = await response.json();
     if (!response.ok) {
@@ -777,7 +882,7 @@ async function saveSetupSettings() {
 
 async function saveStudySettings() {
   if (!el.studyApplySettings) return;
-  const payload = currentStudySettingsPayload();
+  const payload = withOptionalLichessToken(currentStudySettingsPayload());
   el.studyApplySettings.disabled = true;
   if (el.studySettingsStatus) {
     el.studySettingsStatus.textContent = "Saving Stockfish settings for live study...";
@@ -1750,10 +1855,15 @@ function normalizeTabName(name) {
 function setActiveTab(name) {
   const activeName = normalizeTabName(name);
   el.tabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.tabTarget === activeName);
+    const active = button.dataset.tabTarget === activeName;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
   });
   el.tabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.tabPanel === activeName);
+    const active = panel.dataset.tabPanel === activeName;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
   });
   document.body.dataset.activeTab = activeName;
   if (activeName === "trainer") {
@@ -1762,6 +1872,20 @@ function setActiveTab(name) {
   if (activeName === "stats" && state.progress) {
     setTimeout(() => renderProgressCharts(state.progress?.charts || {}), 40);
   }
+}
+
+function handleWorkspaceTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const current = Math.max(0, el.tabButtons.indexOf(event.currentTarget));
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? el.tabButtons.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + el.tabButtons.length) % el.tabButtons.length;
+  const button = el.tabButtons[next];
+  setActiveTab(button.dataset.tabTarget || "setup");
+  button.focus();
 }
 
 function setupEngineSettingsPayload() {
@@ -1800,26 +1924,24 @@ async function runAnalysis(options = {}) {
     state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
     state.games = payload.games || [];
     renderProfile(payload);
+    const importWarnings = Array.isArray(payload.import_warnings) ? payload.import_warnings : [];
+    const warningSuffix = importWarnings.length
+      ? ` ${importWarnings.length} archive warning${importWarnings.length === 1 ? "" : "s"}: ${importWarnings.slice(0, 2).join(" · ")}`
+      : "";
     if (payload.cached) {
       setProgress(
         100,
-        payload.explorer_enabled
-          ? `Loaded cached repertoire for ${payload.username}. ${payload.games_imported} games are already indexed, and Lichess database is active.`
-          : `Loaded cached repertoire for ${payload.username}. ${payload.games_imported} games are already indexed. Add a Lichess token for richer database branching.`
+        `Loaded cached repertoire for ${payload.username}. ${payload.games_imported} games and their exact positions are already indexed locally.${warningSuffix}`
       );
     } else if (payload.reused_games) {
       setProgress(
         100,
-        payload.explorer_enabled
-          ? `Reused ${payload.games_imported} saved games and refreshed the analysis. Lichess database is active.`
-          : `Reused ${payload.games_imported} saved games and refreshed the analysis. Add a Lichess token for richer database branching.`
+        `Reused ${payload.games_imported} saved games and refreshed the local position analysis.${warningSuffix}`
       );
     } else {
       setProgress(
         100,
-        payload.explorer_enabled
-          ? `Imported ${payload.games_imported} games. Lichess database is active.`
-          : `Imported ${payload.games_imported} games. Add a Lichess token for richer database branching.`
+        `Imported ${payload.games_imported} games and indexed their exact positions locally.${warningSuffix}`
       );
     }
   } catch (error) {
@@ -1877,12 +1999,12 @@ async function importPgnGames() {
     const response = await fetch("/api/import-pgn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(withOptionalLichessToken({
+      body: JSON.stringify({
         username: resolveConfiguredUsername() || "PGN Player",
         pgn,
         player_color: "white",
         ...fastImportEngineSettingsPayload(),
-      }, el.lichessToken.value.trim())),
+      }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "PGN import failed.");
@@ -1916,14 +2038,14 @@ async function importChessnutGames() {
     const response = await fetch("/api/import-chessnut", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(withOptionalLichessToken({
+      body: JSON.stringify({
         username: resolveConfiguredUsername() || "Chessnut Player",
         db_path: dbPath,
         player_color: playerColor,
         chessnut_db_path: dbPath,
         chessnut_player_color: playerColor,
         ...fastImportEngineSettingsPayload(),
-      }, el.lichessToken.value.trim())),
+      }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "NewChessnut import failed.");
@@ -1949,14 +2071,16 @@ async function fetchProfilePayload(username, options = {}) {
   const response = await fetch("/api/profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(withOptionalLichessToken({
+    body: JSON.stringify({
       username,
+      main_platform: "chesscom",
+      main_username: username,
       time_classes: el.timeClasses.value.trim(),
       max_games: el.importAllGames?.checked ? 0 : Number(el.maxGames.value),
       auto_import_on_startup: el.autoImportStartup?.checked !== false,
       force_refresh: Boolean(options.forceRefresh),
       ...fastImportEngineSettingsPayload(),
-    })),
+    }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Bookup could not build your repertoire.");
@@ -1977,6 +2101,7 @@ async function bootstrapLocalState() {
     const profile = payload.profile || {};
     const snapshotLooksCurrent =
       Number(payload.schema_version || 0) >= PROFILE_SCHEMA_VERSION &&
+      Number(payload.games_schema_version || 0) >= GAMES_CACHE_SCHEMA_VERSION &&
       Boolean(profile.repertoire_map && Array.isArray(profile.trainer_queue_due));
     if (snapshotLooksCurrent) {
       state.payload = {
@@ -1986,8 +2111,15 @@ async function bootstrapLocalState() {
         archives_found: payload.archives_found || 0,
       };
       state.reviewStats = mergeReviewStats(payload.training_progress || {}, loadReviewStats(payload.username));
-      state.manualNeedsWork = payload.training_summary?.manual_needs_work || [];
-      state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
+      const localWorkspace = loadReviewWorkspace(payload.username);
+      state.manualNeedsWork = [...new Set([
+        ...(localWorkspace.manual_needs_work || []),
+        ...(payload.training_summary?.manual_needs_work || []),
+      ])];
+      state.manualRepertoire = mergeManualRepertoire(
+        payload.training_summary?.manual_repertoire || {},
+        localWorkspace.manual_repertoire || {},
+      );
       state.games = payload.games || [];
       renderProfile(state.payload);
       setProgress(
@@ -2027,8 +2159,15 @@ function renderProfile(payload) {
   state.lessonMap = Object.fromEntries(state.lessons.map((lesson) => [lesson.lesson_id, lesson]));
   state.knownArchive = profile.known_line_archive || [];
   state.gameMoveTree = profile.game_move_tree || profile.move_tree || null;
-  state.manualNeedsWork = (payload.training_summary?.manual_needs_work || []);
-  state.manualRepertoire = payload.training_summary?.manual_repertoire || {};
+  const localWorkspace = loadReviewWorkspace(payload.username);
+  state.manualNeedsWork = [...new Set([
+    ...(localWorkspace.manual_needs_work || []),
+    ...(payload.training_summary?.manual_needs_work || []),
+  ])];
+  state.manualRepertoire = mergeManualRepertoire(
+    payload.training_summary?.manual_repertoire || {},
+    localWorkspace.manual_repertoire || {},
+  );
   refreshSmartTheorySourcePicker();
   rebuildQueue();
   const trainedKnownCount = Object.values(state.reviewStats || {})
@@ -2980,8 +3119,8 @@ function renderStudyDatabaseMove(line, candidateMap = {}) {
         </div>
         ${candidate?.move ? `<div class="line-badge">${escapeHtml(candidate.move)}</div>` : ""}
       </div>
-      <div class="study-database-preview">${candidate?.line_san ? escapeHtml(candidate.line_san) : "Practical move from the Lichess database."}</div>
-      ${line?.uci ? `<button class="tiny-action" type="button" data-trainer-move="${escapeHtml(line.uci)}">Play database move</button>` : ""}
+      <div class="study-database-preview">${candidate?.line_san ? escapeHtml(candidate.line_san) : "Move recorded in your imported games."}</div>
+      ${line?.uci ? `<button class="tiny-action" type="button" data-trainer-move="${escapeHtml(line.uci)}">Play imported move</button>` : ""}
     </article>
   `;
 }
@@ -3258,11 +3397,6 @@ function classificationDisplayMessage(san, classification) {
   return `${san} is ${article} ${label.toLowerCase()} move`;
 }
 
-function lichessExplorerUrlForFen(fen = state.boardFen) {
-  const analysisUrl = lichessAnalysisUrlForFen(fen);
-  return analysisUrl ? `${analysisUrl}#explorer` : "";
-}
-
 function joinMetaParts(parts = []) {
   return parts.filter(Boolean).join(" · ");
 }
@@ -3294,18 +3428,11 @@ function currentStudyPositionLink(lesson = currentLesson(), insight = currentLiv
 
 function currentStudyLinks(lesson = currentLesson(), insight = currentLiveInsight(lesson)) {
   const analysis = currentStudyPositionLink(lesson, insight);
-  const explorerHref = lichessExplorerUrlForFen(state.boardFen);
   const links = [];
   if (analysis?.href) {
     links.push({
       href: analysis.href,
       label: analysis.label || "Lichess analysis",
-    });
-  }
-  if (explorerHref) {
-    links.push({
-      href: explorerHref,
-      label: "Lichess explorer",
     });
   }
   return links;
@@ -3317,7 +3444,7 @@ function renderStudyLinksMarkup(links = []) {
     <button class="launch-btn study-link-btn utility" type="button" data-copy-study="pgn">Copy PGN</button>
   `;
   if (!links.length) {
-    return `${utilityButtons}<span class="line-note">Open a line to jump into Lichess analysis or explorer for the current position.</span>`;
+    return `${utilityButtons}<span class="line-note">Open a line to jump into Lichess analysis for the current position.</span>`;
   }
   return `${utilityButtons}${links.map((link) => `
     <a class="launch-btn study-link-btn" href="${escapeHtml(link.href)}" target="_blank" rel="noopener noreferrer">
@@ -3383,7 +3510,7 @@ function renderEmptyStudyWorkspace() {
     el.studyEvalCaption.textContent = "Ready for live analysis";
   }
   if (el.studyOpeningMeta) {
-    el.studyOpeningMeta.textContent = "Open a line to see its live engine and Lichess database context here.";
+    el.studyOpeningMeta.textContent = "Open a line to compare Stockfish with your imported position history.";
   }
   if (el.studyPositionLinks) {
     el.studyPositionLinks.innerHTML = renderStudyLinksMarkup([]);
@@ -3430,7 +3557,6 @@ function renderFreeStudyWorkspace() {
   const databaseError = String(insight?.database_error || "").trim();
   const evalCp = currentEvalCpForStudy(null, insight);
   const evalPercent = computeEvalPercent(evalCp);
-  const explorerEnabled = Boolean(currentLichessToken());
   const candidateMap = Object.fromEntries(candidateLines.map((line) => [String(line?.uci || ""), line]));
   const playedMoveClassification = state.lastMoveClassification || null;
   const playedMoveSan = String(state.lastMoveSan || "");
@@ -3456,7 +3582,7 @@ function renderFreeStudyWorkspace() {
     el.studyOpeningMeta.textContent = joinMetaParts([
       "Free analysis board",
       turnLabel,
-      explorerEnabled ? "Lichess database ready" : "Database fallback mode",
+      "Local imported-game context",
     ]);
   }
   if (el.studyPositionLinks) {
@@ -3473,7 +3599,7 @@ function renderFreeStudyWorkspace() {
     ]);
   }
   if (el.studyDatabaseMeta) {
-    el.studyDatabaseMeta.textContent = explorerEnabled ? "Lichess practical replies" : "Fallback / cached moves";
+    el.studyDatabaseMeta.textContent = "Imported positions";
   }
   if (el.studyEngineLines) {
     if (state.insightLoading && !candidateLines.length) {
@@ -3490,15 +3616,11 @@ function renderFreeStudyWorkspace() {
   if (el.studyDatabaseMoves) {
     if (state.insightLoading && !databaseMoves.length) {
       el.studyDatabaseMoves.className = "stack empty";
-      el.studyDatabaseMoves.textContent = explorerEnabled
-        ? "Loading database moves for this position..."
-        : "Loading fallback move context for this position...";
+      el.studyDatabaseMoves.textContent = "Checking imported games for this exact position...";
     } else if (!databaseMoves.length) {
       el.studyDatabaseMoves.className = "stack empty";
       el.studyDatabaseMoves.textContent = databaseError
-        || (explorerEnabled
-          ? "No database moves were returned for this exact position yet."
-          : "Add a Lichess token in Setup or Train for richer database move coverage.");
+        || "None of your imported games reached this exact position.";
     } else {
       el.studyDatabaseMoves.className = "stack";
       el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
@@ -3553,7 +3675,6 @@ function renderStudyWorkspace() {
   const databaseError = String(insight?.database_error || "").trim();
   const evalCp = currentEvalCpForStudy(lesson, insight);
   const evalPercent = computeEvalPercent(evalCp);
-  const explorerEnabled = Boolean(currentLichessToken());
   const candidateMap = Object.fromEntries(candidateLines.map((line) => [String(line?.uci || ""), line]));
   const playedMoveClassification = state.lastMoveClassification || null;
   const playedMoveSan = String(state.lastMoveSan || "");
@@ -3565,7 +3686,7 @@ function renderStudyWorkspace() {
   const openingMeta = joinMetaParts([
     lesson.opening_name || "Unnamed line",
     lesson.line_label || "",
-    explorerEnabled ? "Lichess database ready" : "Database fallback mode",
+    "Imported-game position history",
   ]);
 
   if (el.studyEvalFill) {
@@ -3602,9 +3723,7 @@ function renderStudyWorkspace() {
   }
 
   if (el.studyDatabaseMeta) {
-    el.studyDatabaseMeta.textContent = explorerEnabled
-      ? "Lichess practical replies"
-      : "Fallback / cached moves";
+    el.studyDatabaseMeta.textContent = "Your imported moves";
   }
 
   if (el.studyEngineLines) {
@@ -3623,15 +3742,11 @@ function renderStudyWorkspace() {
   if (el.studyDatabaseMoves) {
     if (state.insightLoading && !databaseMoves.length) {
       el.studyDatabaseMoves.className = "stack empty";
-      el.studyDatabaseMoves.textContent = explorerEnabled
-        ? "Loading database moves for this position..."
-        : "Loading fallback move context for this position...";
+      el.studyDatabaseMoves.textContent = "Loading moves from your imported games...";
     } else if (!databaseMoves.length) {
       el.studyDatabaseMoves.className = "stack empty";
       el.studyDatabaseMoves.textContent = databaseError
-        || (explorerEnabled
-          ? "No database moves were returned for this exact position yet."
-          : "Add a Lichess token in Setup or Train for richer database move coverage.");
+        || "No imported move history is available for this exact position.";
     } else {
       el.studyDatabaseMoves.className = "stack";
       el.studyDatabaseMoves.innerHTML = databaseMoves.slice(0, 6).map((line) => renderStudyDatabaseMove(line, candidateMap)).join("");
@@ -3739,14 +3854,14 @@ async function fetchPositionInsight(fen, playUci = [], yourMoveUci = "", yourMov
   const response = await fetch("/api/position-insight", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(withOptionalLichessToken({
+    body: JSON.stringify({
       ...currentStudySettingsPayload(),
       fen,
       play_uci: playUci,
       your_move_uci: yourMoveUci,
       your_move_san: yourMoveSan,
       your_move_count: yourMoveCount,
-    })),
+    }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load position insight.");
@@ -3757,10 +3872,10 @@ async function fetchDatabaseContext(fen, playUci = []) {
   const response = await fetch("/api/database-moves", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(withOptionalLichessToken({
+    body: JSON.stringify({
       fen,
       play_uci: playUci,
-    })),
+    }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Could not load database moves.");
@@ -3805,12 +3920,12 @@ function addLessonToNeedsWork(lessonId) {
   renderQueue();
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
-    void persistReviewStats(state.payload.username);
+    void persistReviewStatsQuietly(state.payload.username);
   }
   setActiveTab("trainer");
 }
 
-function saveManualRepertoireMove(lessonId) {
+async function saveManualRepertoireMove(lessonId) {
   const lesson = state.lessonMap[lessonId];
   if (!lesson) return;
   const moveUci = lesson.recommended_move_uci || lesson.best_reply_uci || lesson.preferred_branch_uci || "";
@@ -3829,11 +3944,20 @@ function saveManualRepertoireMove(lessonId) {
     saved_at: new Date().toISOString(),
   };
   const progressUser = state.payload?.username || resolveConfiguredUsername();
+  const savedLocally = progressUser ? saveReviewStats(progressUser) : false;
+  let syncError = null;
   if (progressUser) {
-    saveReviewStats(progressUser);
-    void persistReviewStats(progressUser);
+    try {
+      await persistReviewStats(progressUser);
+    } catch (error) {
+      syncError = error;
+    }
   }
-  const message = `Saved ${moveSan || moveUci} as your repertoire move for this position.`;
+  const message = syncError
+    ? (savedLocally
+      ? `Saved ${moveSan || moveUci} in this browser, but local profile sync failed: ${syncError.message}`
+      : `Could not save ${moveSan || moveUci}: ${syncError.message}`)
+    : `Saved ${moveSan || moveUci} as your repertoire move for this position.`;
   if (el.trainerFeedback) {
     el.trainerFeedback.textContent = message;
     el.trainerFeedback.classList.remove("empty");
@@ -4274,7 +4398,7 @@ function renderTrainerDecision(lesson) {
     el.trainerDecision.innerHTML = `
       <div class="trainer-decision-copy">Your move from the live position. Bookup will classify it and keep the board moving.</div>
       <div class="line-note">Legal moves: ${escapeHtml(legalPreview || "loading...")}</div>
-      <div class="line-note">Lichess moves: ${practicalMoves || "No explorer move data available."}</div>
+      <div class="line-note">Imported moves: ${practicalMoves || "No imported move data is available."}</div>
     `;
     return;
   }
@@ -4297,7 +4421,7 @@ function renderTrainerDecision(lesson) {
         </button>
       `).join("")}
     </div>
-    <div class="line-note">Moves played from this position on Lichess: ${practicalMoves || "No explorer move data available."}</div>
+    <div class="line-note">Moves from your imported games: ${practicalMoves || "No imported move data is available."}</div>
   `;
 }
 
@@ -4943,6 +5067,8 @@ function renderBoard(fen, options = {}) {
   const hasClassifiedMove = Boolean(moveHint?.classification && moveHint?.from && moveHint?.to);
   const displayFiles = state.boardOrientation === "black" ? [...files].reverse() : files;
   const displayRanks = state.boardOrientation === "black" ? [...ranks].reverse() : ranks;
+  const displaySquares = displayRanks.flatMap((rankLabel) => displayFiles.map((fileLabel) => `${fileLabel}${rankLabel}`));
+  if (!displaySquares.includes(state.boardFocusedSquare)) state.boardFocusedSquare = displaySquares[0] || "";
   el.board.innerHTML = "";
   displayRanks.forEach((rankLabel, rowIndex) => {
     displayFiles.forEach((fileLabel, colIndex) => {
@@ -4950,9 +5076,18 @@ function renderBoard(fen, options = {}) {
       const rank = 8 - Number(rankLabel);
       const squareName = `${fileLabel}${rankLabel}`;
       const piece = squares[(rank * 8) + file];
-      const square = document.createElement("div");
+      const square = document.createElement("button");
+      square.type = "button";
       square.className = `square ${(rowIndex + colIndex) % 2 === 0 ? "light" : "dark"} selectable`;
       square.dataset.square = squareName;
+      square.tabIndex = squareName === state.boardFocusedSquare ? 0 : -1;
+      square.setAttribute("aria-label", squareAccessibilityLabel(squareName, piece));
+      square.addEventListener("focus", () => {
+        state.boardFocusedSquare = squareName;
+        el.board.querySelectorAll("[data-square]").forEach((node) => {
+          node.tabIndex = node === square ? 0 : -1;
+        });
+      });
       if (state.selectedSquare === squareName) square.classList.add("selected");
       if (state.dragFrom === squareName) square.classList.add("drag-source");
       if (!hasClassifiedMove && state.lastMove?.from === squareName) square.classList.add("last-from");
@@ -4987,7 +5122,8 @@ function renderBoard(fen, options = {}) {
         const img = document.createElement("img");
         img.className = "piece";
         img.src = PIECE_ASSETS[piece];
-        img.alt = piece;
+        img.alt = "";
+        img.setAttribute("aria-hidden", "true");
         if (state.selectedSquare === squareName) img.classList.add("piece-selected");
         if (state.dragFrom === squareName && state.dragGhost instanceof HTMLElement) {
           img.classList.add("piece-dragging-source");
@@ -5017,6 +5153,31 @@ function renderBoard(fen, options = {}) {
   }
   state.previousRenderedPieces = pieceMapFromFen(state.boardFen);
   renderArrows(currentLiveInsight(lesson));
+}
+
+function squareAccessibilityLabel(squareName, piece) {
+  if (!piece) return `${squareName}, empty`;
+  const color = piece === piece.toUpperCase() ? "White" : "Black";
+  const names = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+  return `${squareName}, ${color} ${names[piece.toLowerCase()] || "piece"}`;
+}
+
+function handleBoardKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const squares = Array.from(el.board?.querySelectorAll("[data-square]") || []);
+  if (!squares.length) return;
+  event.preventDefault();
+  const current = Math.max(0, squares.indexOf(document.activeElement));
+  const row = Math.floor(current / 8);
+  const column = current % 8;
+  let next = current;
+  if (event.key === "ArrowLeft") next = row * 8 + Math.max(0, column - 1);
+  if (event.key === "ArrowRight") next = row * 8 + Math.min(7, column + 1);
+  if (event.key === "ArrowUp") next = Math.max(0, row - 1) * 8 + column;
+  if (event.key === "ArrowDown") next = Math.min(7, row + 1) * 8 + column;
+  if (event.key === "Home") next = row * 8;
+  if (event.key === "End") next = row * 8 + 7;
+  squares[next]?.focus();
 }
 
 async function handleGlobalPointerUp(event) {
@@ -5344,11 +5505,34 @@ function defaultReviewState() {
 }
 
 function loadReviewStats(username) {
+  return loadReviewWorkspace(username).lessons;
+}
+
+function mergeManualRepertoire(serverEntries = {}, localEntries = {}) {
+  const merged = { ...(serverEntries || {}) };
+  Object.entries(localEntries || {}).forEach(([positionKey, localEntry]) => {
+    const serverEntry = merged[positionKey];
+    const localTime = Date.parse(String(localEntry?.saved_at || "")) || 0;
+    const serverTime = Date.parse(String(serverEntry?.saved_at || "")) || 0;
+    if (!serverEntry || localTime >= serverTime) merged[positionKey] = localEntry;
+  });
+  return merged;
+}
+
+function loadReviewWorkspace(username) {
   try {
     const raw = JSON.parse(localStorage.getItem(REVIEW_KEY) || "{}");
-    return raw[username] || {};
+    const saved = raw[username] || {};
+    if (saved && typeof saved === "object" && saved.lessons && typeof saved.lessons === "object") {
+      return {
+        lessons: saved.lessons,
+        manual_repertoire: saved.manual_repertoire || {},
+        manual_needs_work: Array.isArray(saved.manual_needs_work) ? saved.manual_needs_work : [],
+      };
+    }
+    return { lessons: saved, manual_repertoire: {}, manual_needs_work: [] };
   } catch {
-    return {};
+    return { lessons: {}, manual_repertoire: {}, manual_needs_work: [] };
   }
 }
 
@@ -5370,10 +5554,15 @@ function mergeReviewStats(serverStats = {}, localStats = {}) {
 function saveReviewStats(username) {
   try {
     const raw = JSON.parse(localStorage.getItem(REVIEW_KEY) || "{}");
-    raw[username] = state.reviewStats;
+    raw[username] = {
+      lessons: state.reviewStats,
+      manual_repertoire: state.manualRepertoire,
+      manual_needs_work: state.manualNeedsWork,
+    };
     localStorage.setItem(REVIEW_KEY, JSON.stringify(raw));
+    return true;
   } catch {
-    // ignore storage failures
+    return false;
   }
 }
 
@@ -5399,7 +5588,7 @@ function recordReview(lessonId, correct) {
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
-    void persistReviewStats(state.payload.username);
+    void persistReviewStatsQuietly(state.payload.username);
   }
 }
 
@@ -5427,23 +5616,30 @@ function recordLessonCompletion(lessonId, clean) {
   };
   if (state.payload?.username) {
     saveReviewStats(state.payload.username);
-    void persistReviewStats(state.payload.username);
+    void persistReviewStatsQuietly(state.payload.username);
   }
 }
 
 async function persistReviewStats(username) {
+  const response = await fetch("/api/review-progress", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username,
+      lessons: state.reviewStats,
+      summary: buildReviewSummary(),
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Could not sync review progress.");
+  return payload;
+}
+
+async function persistReviewStatsQuietly(username) {
   try {
-    await fetch("/api/review-progress", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username,
-        lessons: state.reviewStats,
-        summary: buildReviewSummary(),
-      }),
-    });
+    await persistReviewStats(username);
   } catch {
-    // ignore sync failures
+    // Background review attempts remain available in local storage for retry.
   }
 }
 
@@ -6370,6 +6566,8 @@ function resolveSmartTheoryStartContext(startSource) {
     const entry = item.data || {};
     startFen = normalizeFen(entry.position_fen || item.id || START_FEN);
     movesUci = [String(entry.move_uci || "")].filter(Boolean);
+    const fenTurn = String(startFen).split(/\s+/)[1] === "b" ? "black" : "white";
+    playerColor = String(entry.player_color || fenTurn).toLowerCase() === "black" ? "black" : "white";
     label = item.label;
   }
   Object.assign(sourceContext, { label, fen: startFen, moves_uci: movesUci, player_color: playerColor });
@@ -6793,7 +6991,7 @@ async function runSmartTheoryGeneration() {
     const chapterStrategy = String(el.smartTheoryChapterStrategy?.value || defaults.bookup_chapter_strategy || "single").trim().toLowerCase();
     const maxChapters = Math.round(smartTheorySanitizeNumber(el.smartTheoryMaxChapters?.value, 62, 1, 80));
     const minChapterMoves = Math.round(smartTheorySanitizeNumber(el.smartTheoryMinChapterMoves?.value, chapterStrategy === "deep_focus" ? 40 : 0, 0, 80));
-    const payload = withOptionalLichessToken({
+    const generationPayload = {
       job_id: jobId,
       fen: startFen,
       starting_source: startSource,
@@ -6831,7 +7029,10 @@ async function runSmartTheoryGeneration() {
       avoid_absurd_moves: Boolean(el.smartTheoryAvoidAbsurd?.checked),
       eco_only_mode: Boolean(el.smartTheoryEcoOnly?.checked),
       cache_evaluations: Boolean(el.smartTheoryCacheEvals?.checked),
-    }, lichessTokenForGeneration);
+    };
+    const payload = autoSyncStudy
+      ? withOptionalLichessToken(generationPayload, lichessTokenForGeneration)
+      : generationPayload;
     state.smartTheoryTree = { nodes: [buildSmartTheoryRootNode(startFen, startSource)] };
     state.smartTheorySelectedNodeId = "root";
     renderSmartTheoryTree();
@@ -7251,32 +7452,53 @@ async function saveSmartTheoryCorrection() {
   if (!tree || !Array.isArray(tree.nodes) || !state.smartTheorySelectedNodeId) return;
   const node = tree.nodes.find((item) => String(item.id) === String(state.smartTheorySelectedNodeId));
   if (!node) return;
-  const correctedMove = String(node.correctedMove || node.bestMoveUci || "").trim();
-  if (!correctedMove) {
-    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = "No corrected move available on this node.";
-    return;
+  try {
+    const correctedMove = String(node.correctedMove || node.bestMoveUci || "").trim();
+    if (!correctedMove) throw new Error("No corrected move is available on this node.");
+    const positionFen = String(node.fenBefore || "").trim();
+    if (positionFen.split(/\s+/).length < 4) throw new Error("This correction does not have a valid exact position.");
+    const validationResponse = await fetch("/api/apply-move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fen: positionFen, move_uci: correctedMove }),
+    });
+    const validation = await validationResponse.json().catch(() => ({}));
+    if (!validationResponse.ok) throw new Error(validation.error || "The corrected move is not legal in this position.");
+    const playerColor = positionFen.split(/\s+/)[1] === "b" ? "black" : "white";
+    const positionKey = positionFen;
+    state.manualRepertoire[positionKey] = {
+      lesson_id: `smart:${node.id}`,
+      move_uci: correctedMove,
+      move_san: String(validation.played_san || node.bestMoveSan || correctedMove),
+      line_label: String(node.openingName || "Smart theory line"),
+      position_fen: positionFen,
+      player_color: playerColor,
+      opening_name: String(node.openingName || ""),
+      source: "manual_repertoire",
+      saved_at: new Date().toISOString(),
+    };
+    const progressUser = state.payload?.username || resolveConfiguredUsername();
+    const savedLocally = progressUser ? saveReviewStats(progressUser) : false;
+    if (progressUser) {
+      try {
+        await persistReviewStats(progressUser);
+      } catch (error) {
+        if (el.smartTheoryProgress) {
+          el.smartTheoryProgress.textContent = savedLocally
+            ? `Saved corrected move ${correctedMove} in this browser, but local profile sync failed: ${error.message}`
+            : `Could not save corrected move ${correctedMove}: ${error.message}`;
+        }
+        refreshSmartTheorySourcePicker();
+        return;
+      }
+    }
+    if (el.smartTheoryProgress) {
+      el.smartTheoryProgress.textContent = `Saved corrected move ${correctedMove} for ${playerColor}. Future Smart Theory runs will use this exact position and side.`;
+    }
+    refreshSmartTheorySourcePicker();
+  } catch (error) {
+    if (el.smartTheoryProgress) el.smartTheoryProgress.textContent = String(error.message || "Could not save this correction.");
   }
-  const positionFen = String(node.fenBefore || "").trim();
-  const positionKey = String(positionFen || node.id);
-  state.manualRepertoire[positionKey] = {
-    lesson_id: `smart:${node.id}`,
-    move_uci: correctedMove,
-    move_san: String(node.bestMoveSan || correctedMove),
-    line_label: String(node.openingName || "Smart theory line"),
-    position_fen: positionFen || undefined,
-    opening_name: String(node.openingName || ""),
-    source: "manual_repertoire",
-    saved_at: new Date().toISOString(),
-  };
-  const progressUser = state.payload?.username || resolveConfiguredUsername();
-  if (progressUser) {
-    saveReviewStats(progressUser);
-    await persistReviewStats(progressUser);
-  }
-  if (el.smartTheoryProgress) {
-    el.smartTheoryProgress.textContent = `Saved corrected move ${correctedMove}. Future Smart Theory runs will treat this as part of your repertoire style.`;
-  }
-  refreshSmartTheorySourcePicker();
 }
 
 init();

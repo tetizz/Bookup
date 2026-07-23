@@ -13,7 +13,6 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 import chess
-import requests
 
 try:
     from Openix import ChessOpeningsLibrary
@@ -39,12 +38,8 @@ EXPLORER_CACHE: dict[str, dict[str, Any]] = {}
 POSITION_INSIGHT_CACHE: dict[str, dict[str, Any]] = {}
 PERSISTENT_ENGINE_CACHE_LOAD: Callable[[str], dict[str, Any]] | None = None
 PERSISTENT_ENGINE_CACHE_SAVE: Callable[[str, dict[str, Any]], None] | None = None
-EXPLORER_AVAILABLE = True
-EXPLORER_LAST_ERROR = ""
-LICHESS_EXPLORER_URL = "https://explorer.lichess.ovh/lichess"
-EXPLORER_HEADERS = {
-    "User-Agent": "Bookup/1.0 (local repertoire trainer)",
-}
+EXPLORER_AVAILABLE = False
+EXPLORER_LAST_ERROR = "Online opening explorer is disabled; Bookup uses imported-game positions and Stockfish."
 KNOWN_LINE_THRESHOLD = 100
 OPENING_PLIES = 16
 EARLY_BOOK_FREE_PLIES = 5
@@ -54,7 +49,7 @@ REPEATED_MISTAKE_THRESHOLD = 2
 MAX_EXPLANATION_CP = 600
 MAX_ANALYZED_REPERTOIRE_NODES = 72
 PROFILE_ANALYSIS_TIME_SEC = 0.9
-ENGINE_CACHE_SCHEMA_VERSION = 11
+ENGINE_CACHE_SCHEMA_VERSION = 12
 SMART_THEORY_SCHEMA_VERSION = 2
 BRILLIANT_TRACKER_GAME_LIMIT = 0
 BRILLIANT_TRACKER_MAX_PLIES = 0  # 0 means no ply cap; scan every move made by the imported player.
@@ -109,15 +104,9 @@ def _analysis_progress_preview(
 
 def configure_lichess(token: str = "") -> None:
     global EXPLORER_AVAILABLE, EXPLORER_LAST_ERROR
-    normalized = token.strip()
-    if normalized.lower() in {"demo-token", "your-token", "lichess-token", "paste-token-here"}:
-        normalized = ""
-    EXPLORER_HEADERS.clear()
-    EXPLORER_HEADERS["User-Agent"] = "Bookup/1.0 (local repertoire trainer)"
-    EXPLORER_AVAILABLE = bool(normalized)
-    EXPLORER_LAST_ERROR = "" if normalized else "Add a real Lichess API token to show live explorer database moves."
-    if normalized:
-        EXPLORER_HEADERS["Authorization"] = f"Bearer {normalized}"
+    del token
+    EXPLORER_AVAILABLE = False
+    EXPLORER_LAST_ERROR = "Online opening explorer is disabled; Bookup uses imported-game positions and Stockfish."
     EXPLORER_CACHE.clear()
     ONLINE_OPENING_CACHE.clear()
 
@@ -160,7 +149,7 @@ def _engine_cache_key(
         "multipv": int(getattr(engine.settings, "multipv", limit) or limit),
         "limit": int(limit),
         "time_sec": time_key,
-        "explorer": bool(EXPLORER_AVAILABLE),
+        "position_context": "local-import-and-engine-v1",
         "extra": extra or {},
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -409,33 +398,9 @@ def _opening_library() -> ChessOpeningsLibrary | None:
 
 def _explorer_lookup(board: chess.Board, play_key: str) -> dict[str, Any]:
     global EXPLORER_LAST_ERROR
-    cache_key = f"{board.epd()}|{play_key}"
-    if cache_key in EXPLORER_CACHE:
-        return EXPLORER_CACHE[cache_key]
-    if not EXPLORER_AVAILABLE:
-        EXPLORER_LAST_ERROR = "Add a real Lichess API token to show live explorer database moves."
-        return {}
-    try:
-        response = requests.get(
-            LICHESS_EXPLORER_URL,
-            params={
-                "variant": "standard",
-                "fen": board.fen(),
-                "play": play_key,
-                "moves": 12,
-                "speeds": "bullet,blitz,rapid,classical",
-            },
-            headers=EXPLORER_HEADERS,
-            timeout=5,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        EXPLORER_LAST_ERROR = ""
-    except Exception:
-        EXPLORER_LAST_ERROR = "Lichess explorer rejected the token or could not be reached."
-        payload = {}
-    EXPLORER_CACHE[cache_key] = payload
-    return payload
+    del board, play_key
+    EXPLORER_LAST_ERROR = "Online opening explorer is disabled; Bookup uses imported-game positions and Stockfish."
+    return {}
 
 
 def _opening_lookup_payload(imported: ImportedGame, max_plies: int = 12) -> tuple[str, chess.Board, list[str], list[str]]:
@@ -505,9 +470,8 @@ def identify_opening(imported: ImportedGame, *, use_explorer: bool = False) -> d
         except Exception:
             pass
 
-    # Live explorer lookup is useful for one-off position views, but it is far
-    # too expensive during bulk import. The local Lichess opening dataset and
-    # PGN headers give us stable names without blocking game indexing.
+    # Retain the flag for stored-call compatibility, but do not make an opening
+    # explorer request. PGN headers and the bundled opening dataset are local.
     if use_explorer:
         explorer = _explorer_lookup(board, play_key)
         opening = explorer.get("opening") or {}
@@ -885,21 +849,8 @@ def _rank_nodes_for_analysis(nodes: dict[str, PositionNode]) -> list[PositionNod
 
 
 def _database_moves(board: chess.Board, play_uci: list[str], limit: int = 6) -> list[dict[str, Any]]:
-    explorer = _explorer_lookup(board, ",".join(play_uci))
-    moves = explorer.get("moves") or []
-    total = float(explorer.get("white", 0) or 0) + float(explorer.get("black", 0) or 0) + float(explorer.get("draws", 0) or 0)
-    items = []
-    for item in moves[:limit]:
-        count = float(item.get("white", 0) or 0) + float(item.get("black", 0) or 0) + float(item.get("draws", 0) or 0)
-        items.append(
-            {
-                "san": item.get("san") or item.get("uci") or "",
-                "uci": item.get("uci") or "",
-                "games": int(count),
-                "popularity": round((count / total) * 100, 1) if total and count else 0.0,
-            }
-        )
-    return items
+    del board, play_uci, limit
+    return []
 
 
 def database_context_for_board(board: chess.Board, play_uci: list[str] | None = None, limit: int = 8) -> dict[str, Any]:
@@ -908,7 +859,7 @@ def database_context_for_board(board: chess.Board, play_uci: list[str] | None = 
         "fen": board.fen(),
         "database_moves": moves,
         "database_error": EXPLORER_LAST_ERROR,
-        "database_source": "lichess" if moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
+        "database_source": "local-import",
         "position_identifier": _analysis_url_for_fen(board.fen()),
         "position_identifier_label": "Lichess analysis",
     }
@@ -1623,7 +1574,7 @@ def _move_reaction_for_board(
 
     if key == "book":
         headline = f"{san} is a book move." if book_active else f"{san} is no longer in book."
-        reasons.insert(0, "Still follows your repertoire or opening database." if book_active else "This branch has left the known book position.")
+        reasons.insert(0, "Still follows your repertoire or imported-game history." if book_active else "This branch has left the known book position.")
     elif key == "brilliant":
         headline = f"{san} is a brilliant resource."
         reasons.insert(0, "It keeps the position sound while investing material for a tactic.")
@@ -1861,7 +1812,7 @@ def _build_coach_explanation(
         top_reply = database_moves[0]
         popularity = top_reply.get("popularity", 0)
         if popularity:
-            database_note = f" That reply shows up in about {popularity}% of the Lichess database."
+            database_note = f" You played that reply in about {popularity}% of your imported games from this position."
     if your_move_uci and your_move_uci != best_move_uci:
         alt_line = next((line for line in candidate_lines if line["uci"] == your_move_uci), None)
         best_score = _clamp_cp(best_line.get("score_cp", 0))
@@ -1908,7 +1859,7 @@ def build_position_insight(
             "threat_lines": [],
             "database_moves": database_moves,
             "database_error": EXPLORER_LAST_ERROR,
-            "database_source": "lichess" if database_moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
+            "database_source": "local-import",
             "book_state": book_state,
             "cache_hit": cache_hit,
             "recommended_move": "",
@@ -1993,7 +1944,7 @@ def build_position_insight(
         "threat_lines": _threat_lines_for_board(board, candidate_lines),
         "database_moves": database_moves,
         "database_error": EXPLORER_LAST_ERROR,
-        "database_source": "lichess" if database_moves else ("disabled" if EXPLORER_LAST_ERROR else "lichess"),
+        "database_source": "local-import",
         "book_state": book_state,
         "cache_hit": cache_hit,
         "recommended_move": best_line["move"],
@@ -3769,7 +3720,7 @@ def _build_queue_explainer(
             {
                 "label": "Database weight",
                 "value": f"{top_database:.1f}%",
-                "detail": "Lichess/player-database replies make this position more practical to study.",
+                "detail": "Your imported move history makes this position more practical to study.",
                 "tone": "database",
             }
         )
@@ -3816,7 +3767,19 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
         time_sec=time_sec,
     )
     candidate_lines = insight["candidate_lines"]
-    database_moves = insight["database_moves"]
+    database_moves = [
+        {
+            "san": node.player_san.get(uci, uci),
+            "uci": uci,
+            "games": int(count),
+            "popularity": round((count / node.occurrences) * 100, 1) if node.occurrences else 0.0,
+            "source": "imported-games",
+        }
+        for uci, count in node.player_moves.most_common(8)
+    ]
+    insight["database_moves"] = database_moves
+    insight["database_error"] = ""
+    insight["database_source"] = "imported-games"
     if not candidate_lines:
         return {}
     root = candidate_lines[0]
@@ -4076,6 +4039,8 @@ def _build_lesson_from_node(node: PositionNode, engine: EngineSession, *, time_s
         "your_move_classification": your_move_classification,
         "common_replies": database_moves,
         "database_moves": database_moves,
+        "database_error": "",
+        "database_source": "imported-games",
         "discovery_nodes": discovery_nodes,
         "transposition_targets": [
             {

@@ -8,8 +8,8 @@
   <meta name="description" content="Bookup in the browser: import public games, find repeated best-move misses, train exact positions, generate theory, and review progress locally.">
   <link rel="icon" href="data:,">
   <link rel="preload" href="vendor/chess.min.js" as="script">
-  <link rel="stylesheet" href="styles.min.css?v=8">
-  <link rel="stylesheet" href="product-shell.css?v=14">
+  <link rel="stylesheet" href="styles.min.css?v=9">
+  <link rel="stylesheet" href="product-shell.css?v=15">
 </head>
 <body>
   <script>
@@ -55,38 +55,38 @@
   </header>
 
   <main class="app-shell">
-    <nav class="workspace-tabs">
-      <button class="workspace-tab active" data-tab-target="setup">Setup</button>
-      <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire</button>
-      <button class="workspace-tab" data-tab-target="trainer">Train</button>
-      <button class="workspace-tab" data-tab-target="stats">Progress</button>
-      <button class="workspace-tab" data-tab-target="smart-theory">Smart Theory</button>
+    <nav class="workspace-tabs" role="tablist" aria-label="Bookup workspace">
+      <button id="workspace-tab-setup" class="workspace-tab active" type="button" role="tab" aria-selected="true" aria-controls="workspace-panel-setup" tabindex="0" data-tab-target="setup">Setup</button>
+      <button id="workspace-tab-repertoire-map" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-repertoire-map" tabindex="-1" data-tab-target="repertoire-map">Repertoire</button>
+      <button id="workspace-tab-trainer" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-trainer" tabindex="-1" data-tab-target="trainer">Train</button>
+      <button id="workspace-tab-stats" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-stats" tabindex="-1" data-tab-target="stats">Progress</button>
+      <button id="workspace-tab-smart-theory" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-smart-theory" tabindex="-1" data-tab-target="smart-theory">Smart Theory</button>
     </nav>
+    <div id="workspaceNotice" class="status" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
-    <section class="workspace-panel active" data-tab-panel="setup">
+    <section id="workspace-panel-setup" class="workspace-panel active" role="tabpanel" aria-labelledby="workspace-tab-setup" data-tab-panel="setup">
       <div class="setup-layout">
         <section class="card setup-card">
           <div class="section-label">Import</div>
           <h2 class="section-title">Import your games, find repeated best-move misses, and start training.</h2>
           <div class="form-grid">
+            <input id="mainPlatformInput" type="hidden" value="chesscom">
             <label class="field">
-              <span>Main platform</span>
-              <select id="mainPlatformInput">
-                <option value="chesscom">Chess.com</option>
-              </select>
+              <span>Chess.com username</span>
+              <input id="mainUsernameInput" type="text" autocomplete="username" placeholder="Input username">
             </label>
-            <label class="field">
-              <span>Main username</span>
-              <input id="mainUsernameInput" type="text" placeholder="Input username">
-            </label>
-            <label class="field">
-              <span>Chess.com import username</span>
-              <input id="usernameInput" type="text" placeholder="Input username">
-            </label>
-            <label class="field">
-              <span>Time classes</span>
-              <input id="timeClassesInput" type="text" placeholder="all or rapid,blitz,bullet,daily">
-            </label>
+            <input id="usernameInput" type="hidden">
+            <div class="field">
+              <span id="timeClassToggleLabel">Time controls</span>
+              <div class="progress-mode-tabs chip-row" role="group" aria-labelledby="timeClassToggleLabel">
+                <button class="progress-mode-btn" type="button" aria-pressed="true" data-time-class-toggle="rapid">Rapid</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="true" data-time-class-toggle="blitz">Blitz</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="true" data-time-class-toggle="bullet">Bullet</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="false" data-time-class-toggle="daily">Daily</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="false" data-time-class-all>All</button>
+              </div>
+              <input id="timeClassesInput" type="hidden" value="rapid,blitz,bullet">
+            </div>
             <label class="field">
               <span>Max games</span>
               <input id="maxGamesInput" type="number" min="0" max="20000" placeholder="0 = all games">
@@ -104,10 +104,6 @@
                 <input id="autoImportStartupInput" type="checkbox">
                 <span>Auto-import new games on startup</span>
               </label>
-            </label>
-            <label class="field">
-              <span>Lichess token (optional)</span>
-              <input id="lichessTokenInput" type="password" placeholder="Optional; stored only in this browser session">
             </label>
             <label class="field compact">
               <span>Position analysis strength</span>
@@ -203,7 +199,7 @@
       </section>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="repertoire-map">
+    <section id="workspace-panel-repertoire-map" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-repertoire-map" data-tab-panel="repertoire-map" hidden>
       <section class="section-block">
         <div class="section-label">Health Dashboard</div>
         <h2 class="section-title">What needs attention right now</h2>
@@ -271,7 +267,7 @@
       </section>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="stats">
+    <section id="workspace-panel-stats" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-stats" data-tab-panel="stats" hidden>
       <section class="section-block progress-cockpit-section">
         <div class="progress-cockpit-head">
           <div>
@@ -279,15 +275,15 @@
             <p class="summary-copy">Live results, locally measured move accuracy, and the exact phase that deserves your next review.</p>
           </div>
           <div class="progress-cockpit-actions">
-            <div class="progress-mode-tabs" role="tablist" aria-label="Progress time control">
-              <button class="progress-mode-btn active" type="button" data-progress-mode="rapid">Rapid</button>
-              <button class="progress-mode-btn" type="button" data-progress-mode="blitz">Blitz</button>
-              <button class="progress-mode-btn" type="button" data-progress-mode="bullet">Bullet</button>
+            <div class="progress-mode-tabs" role="group" aria-label="Progress time control">
+              <button class="progress-mode-btn active" type="button" aria-pressed="true" data-progress-mode="rapid">Rapid</button>
+              <button class="progress-mode-btn" type="button" aria-pressed="false" data-progress-mode="blitz">Blitz</button>
+              <button class="progress-mode-btn" type="button" aria-pressed="false" data-progress-mode="bullet">Bullet</button>
             </div>
             <button id="progressRefreshBtn" class="launch-btn" type="button">Refresh Chess.com</button>
           </div>
         </div>
-        <div id="progressStatus" class="line-note">Progress tracker will load with your saved Chess.com username.</div>
+        <div id="progressStatus" class="line-note" role="status" aria-live="polite" aria-atomic="true">Progress tracker will load with your saved Chess.com username.</div>
         <div id="progressMetricGrid" class="progress-metric-grid-v2"></div>
         <div class="progress-primary-grid">
           <article class="progress-data-panel progress-rating-panel">
@@ -416,13 +412,13 @@
 
     </section>
 
-    <section class="workspace-panel" data-tab-panel="trainer">
+    <section id="workspace-panel-trainer" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-trainer" data-tab-panel="trainer" hidden>
       <div class="study-layout">
         <section class="card trainer-board-card study-board-card">
           <div class="trainer-head">
             <div>
               <div class="section-label">Analysis Board</div>
-              <h2 id="boardTitle" class="section-title">No lesson loaded</h2>
+              <h2 id="boardTitle" class="section-title" tabindex="-1">No lesson loaded</h2>
               <p id="boardSummary" class="summary-copy">Import games, then train the next exact decision position from your queue.</p>
             </div>
             <div class="trainer-actions">
@@ -443,25 +439,25 @@
             <div class="board-area">
               <div class="board-wrap">
                 <div id="boardArrows" class="board-arrows" aria-hidden="true"></div>
-                <div id="rankLabels" class="rank-labels"></div>
-                <div id="board" class="board-grid"></div>
-                <div id="fileLabels" class="file-labels"></div>
+                <div id="rankLabels" class="rank-labels" aria-hidden="true"></div>
+                <div id="board" class="board-grid" role="group" aria-label="Chess trainer board" aria-describedby="trainerDecision trainerFeedback"></div>
+                <div id="fileLabels" class="file-labels" aria-hidden="true"></div>
               </div>
             </div>
           </div>
 
           <div id="trainerCoach" class="trainer-feedback empty">Bookup will ask for Stockfish's best move in the exact position where your repeated move went wrong.</div>
-          <div id="trainerDecision" class="trainer-decision empty">No decision point loaded yet.</div>
+          <div id="trainerDecision" class="trainer-decision empty" role="status" aria-live="polite" aria-atomic="true">No decision point loaded yet.</div>
           <div id="trainerInsight" class="trainer-feedback empty">The board stays on the exact decision position after a wrong move so you can correct it immediately.</div>
           <div id="boardLine" class="board-line empty">No position loaded yet.</div>
-          <div id="trainerFeedback" class="trainer-feedback empty">Choose a due position from the queue or launch one from a needs-work card.</div>
+          <div id="trainerFeedback" class="trainer-feedback empty" role="status" aria-live="polite" aria-atomic="true">Choose a due position from the queue or launch one from a needs-work card.</div>
         </section>
 
         <aside class="study-side-column">
           <section class="card study-panel-card">
             <div class="section-label">Analysis</div>
             <h2 class="section-title">Live engine and database view</h2>
-            <p id="studyOpeningMeta" class="summary-copy">Open a line to see its live engine and Lichess database context here.</p>
+            <p id="studyOpeningMeta" class="summary-copy">Open a line to compare engine analysis with your imported position history.</p>
             <div id="studyPositionLinks" class="chip-row study-link-row"></div>
 
             <div class="study-panel-section">
@@ -474,7 +470,7 @@
 
             <div class="study-panel-section">
               <div class="study-section-header">
-                <span>Lichess Database</span>
+                <span>Imported Games</span>
                 <span id="studyDatabaseMeta" class="line-badge">No position loaded</span>
               </div>
               <div id="studyDatabaseMoves" class="stack empty">Load a study position to see database moves.</div>
@@ -492,18 +488,9 @@
             <div class="study-panel-section">
               <div class="study-section-header">
                 <span>Position Data</span>
-                <span class="line-badge">Session only</span>
+                <span class="line-badge">Local context</span>
               </div>
-              <div class="form-grid study-settings-grid">
-                <label class="field">
-                  <span>Lichess token</span>
-                  <input id="studyLichessTokenInput" type="password" placeholder="Optional; kept only for this browser session">
-                </label>
-              </div>
-              <div class="chip-row">
-                <button id="studyApplySettingsBtn" class="launch-btn" type="button">Use token this session</button>
-              </div>
-              <div id="studySettingsStatus" class="line-note">Exact lessons use local browser Stockfish. This optional token only unlocks extra Lichess opening-database context and is never saved.</div>
+              <div id="studySettingsStatus" class="line-note">Exact lessons use local browser Stockfish, imported-game positions, and cached cloud evaluation when available.</div>
             </div>
 
             <div class="study-panel-section">
@@ -537,7 +524,7 @@
       </div>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="smart-theory">
+    <section id="workspace-panel-smart-theory" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-smart-theory" data-tab-panel="smart-theory" hidden>
       <section class="section-block smart-theory-workspace">
         <header class="smart-theory-header">
           <div><div class="section-label">Smart Theory</div><h2 class="section-title">Build theory from the position you chose</h2><p>Your selected line stays in control until Stockfish finds a real reason to correct it.</p></div>
@@ -598,7 +585,7 @@
   <script defer src="vendor/chess.min.js"></script>
   <script defer src="position-analysis.min.js?v=8"></script>
   <script defer src="smart-theory-engine.min.js?v=2"></script>
-  <script defer src="web-app.min.js?v=10"></script>
+  <script defer src="web-app.min.js?v=11"></script>
   <script defer src="product-shell.js?v=14"></script>
 </body>
 </html>

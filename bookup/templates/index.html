@@ -15,6 +15,30 @@
 <body>
   <script>
     window.APP_DEFAULTS = {{ defaults|tojson }};
+    window.BOOKUP_REQUEST_TOKEN = {{ request_token|tojson }};
+    (() => {
+      const token = window.BOOKUP_REQUEST_TOKEN;
+      if (!token) return;
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = (input, init = {}) => {
+        const requestUrl = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url,
+          window.location.href,
+        );
+        const method = String(init.method || input?.method || "GET").toUpperCase();
+        if (
+          requestUrl.origin === window.location.origin &&
+          requestUrl.pathname.startsWith("/api/") &&
+          !["GET", "HEAD"].includes(method)
+        ) {
+          const headers = new Headers(input?.headers || {});
+          new Headers(init.headers || {}).forEach((value, key) => headers.set(key, value));
+          headers.set("X-Bookup-Request", token);
+          init = { ...init, headers };
+        }
+        return nativeFetch(input, init);
+      };
+    })();
   </script>
 
   <header class="topbar">
@@ -44,43 +68,38 @@
   </header>
 
   <main class="app-shell">
-    <nav class="workspace-tabs">
-      <button class="workspace-tab active" data-tab-target="setup">Setup</button>
-      <button class="workspace-tab" data-tab-target="repertoire-map">Repertoire</button>
-      <button class="workspace-tab" data-tab-target="trainer">Train</button>
-      <button class="workspace-tab" data-tab-target="stats">Progress</button>
-      <button class="workspace-tab" data-tab-target="smart-theory">Smart Theory</button>
+    <nav class="workspace-tabs" role="tablist" aria-label="Bookup workspace">
+      <button id="workspace-tab-setup" class="workspace-tab active" type="button" role="tab" aria-selected="true" aria-controls="workspace-panel-setup" tabindex="0" data-tab-target="setup">Setup</button>
+      <button id="workspace-tab-repertoire-map" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-repertoire-map" tabindex="-1" data-tab-target="repertoire-map">Repertoire</button>
+      <button id="workspace-tab-trainer" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-trainer" tabindex="-1" data-tab-target="trainer">Train</button>
+      <button id="workspace-tab-stats" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-stats" tabindex="-1" data-tab-target="stats">Progress</button>
+      <button id="workspace-tab-smart-theory" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="workspace-panel-smart-theory" tabindex="-1" data-tab-target="smart-theory">Smart Theory</button>
     </nav>
 
-    <section class="workspace-panel active" data-tab-panel="setup">
+    <section id="workspace-panel-setup" class="workspace-panel active" role="tabpanel" aria-labelledby="workspace-tab-setup" data-tab-panel="setup">
       <div class="setup-layout">
         <section class="card setup-card">
           <div class="section-label">Import</div>
           <h2 class="section-title">Import your games, build your repertoire tree, and start training.</h2>
           <div class="form-grid">
+            <input id="mainPlatformInput" type="hidden" value="chesscom">
             <label class="field">
-              <span>Main platform</span>
-              <select id="mainPlatformInput">
-                <option value="chesscom">Chess.com</option>
-                <option value="lichess">Lichess</option>
-              </select>
+              <span>Chess.com username</span>
+              <input id="mainUsernameInput" type="text" autocomplete="username" placeholder="Input username">
             </label>
-            <label class="field">
-              <span>Main username</span>
-              <input id="mainUsernameInput" type="text" placeholder="your main chess account">
-            </label>
-            <label class="field">
-              <span>Lichess username (optional)</span>
-              <input id="lichessUsernameInput" type="text" placeholder="your lichess handle">
-            </label>
-            <label class="field">
-              <span>Chess.com import username</span>
-              <input id="usernameInput" type="text" placeholder="your Chess.com handle">
-            </label>
-            <label class="field">
-              <span>Time classes</span>
-              <input id="timeClassesInput" type="text" placeholder="all or rapid,blitz,bullet,daily">
-            </label>
+            <input id="lichessUsernameInput" type="hidden">
+            <input id="usernameInput" type="hidden">
+            <div class="field">
+              <span id="timeClassToggleLabel">Time controls</span>
+              <div class="progress-mode-tabs chip-row" role="group" aria-labelledby="timeClassToggleLabel">
+                <button class="progress-mode-btn" type="button" aria-pressed="true" data-time-class-toggle="rapid">Rapid</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="true" data-time-class-toggle="blitz">Blitz</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="true" data-time-class-toggle="bullet">Bullet</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="false" data-time-class-toggle="daily">Daily</button>
+                <button class="progress-mode-btn" type="button" aria-pressed="false" data-time-class-all>All</button>
+              </div>
+              <input id="timeClassesInput" type="hidden" value="rapid,blitz,bullet">
+            </div>
             <label class="field">
               <span>Max games</span>
               <input id="maxGamesInput" type="number" min="0" max="20000" placeholder="0 = all games">
@@ -99,10 +118,13 @@
                 <span>Auto-import new games on startup</span>
               </label>
             </label>
-            <label class="field">
-              <span>Lichess token (optional)</span>
-              <input id="lichessTokenInput" type="password" placeholder="Use the Lichess opening database">
-            </label>
+            <div class="field token-field">
+              <span>Lichess Study token (optional)</span>
+              <div class="token-input-row">
+                <input id="lichessTokenInput" type="password" aria-label="Lichess Study token" placeholder="Only needed for direct Study export">
+                <button id="clearLichessTokenBtn" class="ghost-btn" type="button">Forget saved token</button>
+              </div>
+            </div>
             <label class="field">
               <span>Stockfish path</span>
               <input id="enginePathInput" type="text" placeholder="C:\path\to\stockfish.exe">
@@ -227,7 +249,7 @@
       </section>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="repertoire-map">
+    <section id="workspace-panel-repertoire-map" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-repertoire-map" data-tab-panel="repertoire-map" hidden>
       <section class="section-block">
         <div class="section-label">Health Dashboard</div>
         <h2 class="section-title">What needs attention right now</h2>
@@ -294,7 +316,7 @@
       </section>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="stats">
+    <section id="workspace-panel-stats" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-stats" data-tab-panel="stats" hidden>
       <section class="section-block progress-cockpit-section">
         <div class="section-label">Progress Dashboard</div>
         <div class="progress-cockpit-head">
@@ -384,7 +406,7 @@
 
     </section>
 
-    <section class="workspace-panel" data-tab-panel="trainer">
+    <section id="workspace-panel-trainer" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-trainer" data-tab-panel="trainer" hidden>
       <div class="study-layout">
         <section class="card trainer-board-card study-board-card">
           <div class="trainer-head">
@@ -412,7 +434,7 @@
               <div class="board-wrap">
                 <div id="boardArrows" class="board-arrows" aria-hidden="true"></div>
                 <div id="rankLabels" class="rank-labels"></div>
-                <div id="board" class="board-grid"></div>
+                <div id="board" class="board-grid" role="group" aria-label="Bookup analysis board" aria-describedby="trainerDecision trainerFeedback"></div>
                 <div id="fileLabels" class="file-labels"></div>
               </div>
             </div>
@@ -429,7 +451,7 @@
           <section class="card study-panel-card">
             <div class="section-label">Analysis</div>
             <h2 class="section-title">Live engine and database view</h2>
-            <p id="studyOpeningMeta" class="summary-copy">Open a line to see its live engine and Lichess database context here.</p>
+            <p id="studyOpeningMeta" class="summary-copy">Open a line to compare Stockfish with your imported position history.</p>
             <div id="studyPositionLinks" class="chip-row study-link-row"></div>
 
             <div class="study-panel-section">
@@ -442,7 +464,7 @@
 
             <div class="study-panel-section">
               <div class="study-section-header">
-                <span>Lichess Database</span>
+                <span>Imported Games</span>
                 <span id="studyDatabaseMeta" class="line-badge">No position loaded</span>
               </div>
               <div id="studyDatabaseMoves" class="stack empty">Load a study position to see database moves.</div>
@@ -464,8 +486,8 @@
               </div>
               <div class="form-grid study-settings-grid">
                 <label class="field">
-                  <span>Lichess token</span>
-                  <input id="studyLichessTokenInput" type="password" placeholder="Optional for live database moves">
+                  <span>Lichess Study token</span>
+                  <input id="studyLichessTokenInput" type="password" placeholder="Only needed for direct Study export">
                 </label>
                 <label class="field">
                   <span>Engine path</span>
@@ -543,7 +565,7 @@
       </div>
     </section>
 
-    <section class="workspace-panel" data-tab-panel="smart-theory">
+    <section id="workspace-panel-smart-theory" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-smart-theory" data-tab-panel="smart-theory" hidden>
       <section class="section-block smart-theory-workspace">
         <header class="smart-theory-header">
           <div>

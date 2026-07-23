@@ -1,6 +1,6 @@
 # Bookup
 
-Bookup is a GPL repertoire trainer built from your real games. It imports your public Chess.com archive, learns the opening positions and branches you actually reach, uses Stockfish plus the Lichess opening database to study those positions, and lets you work through lines on a legal-move board.
+Bookup is a GPL repertoire trainer built from your real games. It imports your public Chess.com archive, learns the opening positions and branches you actually reach, uses Stockfish to study those positions, and lets you work through lines on a legal-move board.
 
 ## Website
 
@@ -10,8 +10,8 @@ Bookup includes a GitHub Pages website in `docs/`.
 - Bookup Web has a real Chess.com public stats lookup for rapid, blitz, and bullet. It does not invent live ratings when the public API cannot be reached.
 - The web and desktop editions share five focused areas: Setup, Repertoire, Train, Progress, and Smart Theory.
 - Public games and PGN files are parsed locally into repertoire branches, review queues, health metrics, theory trees, and a legal-move training board.
-- Browser analysis uses a responsive Stockfish worker pool with cached evaluations. Opening data comes from the imported real-game corpus and public opening-database responses.
-- Settings, sessions, reviews, and repertoire summaries are stored in browser local storage. Lichess tokens are never persisted or committed.
+- Browser analysis uses a responsive Stockfish worker pool with cached evaluations. Opening move history comes from the imported real-game corpus; Bookup does not call an online opening explorer.
+- Settings, sessions, reviews, and repertoire summaries are stored in browser local storage. Bookup Web never requests a Lichess token; the desktop app can keep one for direct Study API actions in its ignored local configuration, which must never be committed.
 - Repertoire PGN, Bookup JSON, and Smart Theory exports are generated entirely in the browser.
 - The production site uses minified assets, native system fonts, lazy workspace rendering, idle-time persistence, cached analysis requests, and a precomputed repertoire position index.
 - GitHub Pages deploys it from `.github/workflows/pages.yml`.
@@ -51,13 +51,13 @@ build_web_assets.bat
 - proposes drift fixes when your recent first moves stop matching your longer-term repertoire
 - explains import speed with indexed positions, analyzed positions, skipped positions, and cache notes
 - uses Stockfish for best moves, candidate lines, eval, coach explanations, and move classifications
-- uses the Lichess opening database when available for practical move popularity and common replies
+- uses imported-game position history for practical move popularity and common replies
 - tracks live book state so `Book` labels stop once a line leaves the opening/repertoire context
 - reuses cached Stockfish position analysis for repeated FEN/settings combinations instead of reanalyzing the same position
 - builds a practical theory tree from imported games, split by games where you played White or Black
 - generates on-demand theory lines from the current position or after a move you want to test
 - suggests one-click theory seeds from common replies and due-line repairs
-- builds database-weighted training positions so common replies become playable drills
+- builds imported-game-weighted training positions so common replies become playable drills
 - keeps the active training queue focused on repeated inaccurate, mistake, and blunder classifications
 - explains each training position with its repeated-miss evidence and recommended correction
 - classifies moves with Chess.com-style labels such as `Book`, `Best`, `Excellent`, `Great`, `Brilliant`, `Mistake`, and `Blunder`
@@ -75,7 +75,7 @@ build_web_assets.bat
   Work through a correction queue on the board with:
   - a live eval bar
   - Stockfish candidate lines
-  - database moves from the current position
+  - imported moves from the current position
   - copy buttons for the current FEN and played PGN path
   - move classifications
   - a move trail
@@ -96,8 +96,8 @@ It combines:
 - the central training board
 - a live evaluation rail
 - top Stockfish lines for the current position
-- practical Lichess/database moves from that same position
-- a database-only fallback refresh when Stockfish is unavailable or still loading
+- practical moves from imported-game position history
+- an imported-history fallback while Stockfish is unavailable or still loading
 - move classifications for the move played and the recommended move
 - live board arrows for ideas and threats
 - in-tab Stockfish settings so you can tune analysis without leaving the study view
@@ -130,7 +130,7 @@ Smart Theory is a connected source-to-tree workflow rather than a random positio
 - choose Current board, Saved line, Imported game, or My repertoire
 - generate from the exact selected FEN
 - follow known good moves and correct weak moves with Stockfish
-- combine repertoire, imported-game, public database, and engine replies
+- combine repertoire, imported-game history, and engine replies
 - click any tree node to synchronize the board and explanation
 - validate every parent, move, and resulting FEN before accepting a node
 - cache completed analysis locally for offline reuse
@@ -148,7 +148,7 @@ Smart Theory is a connected source-to-tree workflow rather than a random positio
   Use `0` to import all available public games.
 
 - `Lichess token`
-  Optional. Enables richer live Lichess opening-database responses in study and repertoire views.
+  Optional. Used only for direct Lichess Study API actions in the desktop app. It is never reused for opening analysis.
 
 - `Stockfish path`
   Required when running from source unless the bundled engine is already available locally.
@@ -261,7 +261,7 @@ If you rerun the exact same import and analysis settings, Bookup should load fro
 - Add a local Lichess token only when you want direct desktop study export.
 - Exact first-time loads can still take longer because Stockfish is doing real repertoire analysis.
 - Repeat loads of the same request should be much faster because Bookup now reuses cached games and cached analyzed profiles.
-- The Lichess database panel can update separately from Stockfish, so database moves are still useful when engine analysis is slow.
+- Imported-position history remains available separately from Stockfish, so your recorded moves are still visible while engine analysis is running.
 - PGN import is local and uses the same analysis/cache pipeline as Chess.com imports.
 
 ## Current Direction

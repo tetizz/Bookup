@@ -3,23 +3,26 @@ from __future__ import annotations
 import atexit
 import ctypes
 import hashlib
+import hmac
 import io
 import json
 import os
 import re
+import secrets
 import sys
 import threading
 import time
 import webbrowser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 import chess
 import chess.pgn
 from flask import Flask, jsonify, render_template, request
+from werkzeug.serving import make_server
 try:
     import webview
 except Exception:
@@ -59,8 +62,8 @@ CONFIG_PATH = RUNTIME_DIR / "config.json"
 DATA_DIR = RUNTIME_DIR / "bookup_data"
 STORE = LocalStore(DATA_DIR)
 configure_engine_cache(STORE.load_engine_cache, STORE.save_engine_cache)
-PROFILE_SCHEMA_VERSION = 26
-GAMES_CACHE_SCHEMA_VERSION = 20
+PROFILE_SCHEMA_VERSION = 28
+GAMES_CACHE_SCHEMA_VERSION = 21
 ENGINE_DEFAULTS_VERSION = 7
 MAX_SAFE_PARALLEL_WORKERS = 8
 WEB_MODE = False
@@ -86,6 +89,69 @@ app = Flask(
     template_folder=str(RESOURCE_DIR / "bookup" / "templates"),
     static_folder=str(RESOURCE_DIR / "bookup" / "static"),
 )
+LOCAL_REQUEST_TOKEN = secrets.token_urlsafe(32)
+LOCAL_REQUEST_SECURITY_ACTIVE = False
+LOCAL_REQUEST_PORT = 8877
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def configure_local_request_security(active: bool, *, port: int = 8877) -> None:
+    global LOCAL_REQUEST_SECURITY_ACTIVE, LOCAL_REQUEST_PORT
+    LOCAL_REQUEST_SECURITY_ACTIVE = bool(active)
+    LOCAL_REQUEST_PORT = int(port)
+
+
+def _local_authority(value: str) -> tuple[str, int | None]:
+    try:
+        parsed = urlsplit(f"//{str(value or '').strip()}")
+        return str(parsed.hostname or "").lower(), parsed.port
+    except ValueError:
+        return "", None
+
+
+@app.before_request
+def protect_local_app_requests() -> tuple | None:
+    if not LOCAL_REQUEST_SECURITY_ACTIVE:
+        return None
+
+    host, port = _local_authority(request.host)
+    if host not in LOCAL_HOSTS or port not in {None, LOCAL_REQUEST_PORT}:
+        return jsonify({"error": "Bookup only accepts requests from its local app address."}), 403
+
+    if request.method in {"GET", "HEAD"}:
+        return None
+
+    origin = str(request.headers.get("Origin", "") or "").strip()
+    if origin:
+        try:
+            parsed_origin = urlsplit(origin)
+            origin_host = str(parsed_origin.hostname or "").lower()
+            origin_port = parsed_origin.port
+        except ValueError:
+            return jsonify({"error": "Request origin did not match the local Bookup app."}), 403
+        if (
+            parsed_origin.scheme != "http"
+            or origin_host not in LOCAL_HOSTS
+            or origin_port not in {None, LOCAL_REQUEST_PORT}
+            or origin.rstrip("/") != f"http://{request.host}"
+        ):
+            return jsonify({"error": "Request origin did not match the local Bookup app."}), 403
+
+    supplied = str(request.headers.get("X-Bookup-Request", "") or "")
+    if not hmac.compare_digest(supplied, LOCAL_REQUEST_TOKEN):
+        return jsonify({"error": "Missing or invalid Bookup request token."}), 403
+    return None
+
+
+@app.after_request
+def prevent_request_token_page_caching(response):
+    if LOCAL_REQUEST_SECURITY_ACTIVE:
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        response.headers["X-Frame-Options"] = "DENY"
+        if request.path == "/":
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Bookup-Launch"] = LOCAL_REQUEST_TOKEN
+    return response
 
 
 def _load_local_env_file() -> None:
@@ -2184,7 +2250,6 @@ def _run_smart_theory_job(
 
     try:
         board = chess.Board(board_fen)
-        configure_lichess(lichess_token)
         engine = shared_engine_for(settings)
         tree_cache_key = _smart_theory_tree_cache_key(board_fen, payload, settings)
         cached_tree_payload = STORE.load_engine_cache(tree_cache_key) if bool(payload.get("cache_evaluations", False)) else {}
@@ -2620,7 +2685,7 @@ def profile_request_key(
             "username": username,
             "time_classes": sorted(normalized_time_classes),
             "max_games": 0 if max_games is None else max_games,
-            "explorer_enabled": bool(lichess_token.strip()),
+            "position_context": "local-import-and-engine-v1",
             "engine": {
                 "path": settings.path,
                 "depth": settings.depth,
@@ -2676,6 +2741,8 @@ def profile_response_payload(
     lichess_token: str,
     cached: bool,
     reused_games: bool = False,
+    import_warnings: list[str] | None = None,
+    failed_archives: list[str] | None = None,
 ) -> dict:
     progress = normalize_training_progress(progress)
     return {
@@ -2684,12 +2751,12 @@ def profile_response_payload(
         "archives_found": archives_found,
         "games_imported": len(games),
         "games": games,
-        "explorer_enabled": bool(lichess_token),
-        "explorer_notice": (
-            "Lichess explorer is authenticated and can be used for richer repertoire move popularity."
-            if lichess_token
-            else "Add a Lichess token to use the live Lichess opening database for richer repertoire branching."
-        ),
+        "explorer_enabled": False,
+        "explorer_notice": "Opening context comes from imported games and Stockfish; Bookup does not query an online opening explorer.",
+        "lichess_export_configured": bool(lichess_token),
+        "import_warnings": list(import_warnings or []),
+        "failed_archives": list(failed_archives or []),
+        "archives_complete": not failed_archives,
         "schema_version": PROFILE_SCHEMA_VERSION,
         "profile": browser_profile_view(profile_data),
         "training_progress": progress.get("lessons", {}),
@@ -2919,7 +2986,11 @@ def index() -> str:
     else:
         engine_path = config.get("engine_path", "") or default_engine
     defaults = build_defaults_payload({**config, "engine_path": engine_path})
-    return render_template("index.html", defaults=defaults)
+    return render_template(
+        "index.html",
+        defaults=defaults,
+        request_token=LOCAL_REQUEST_TOKEN if LOCAL_REQUEST_SECURITY_ACTIVE else "",
+    )
 
 
 @app.get("/api/local-state")
@@ -2937,6 +3008,7 @@ def local_state() -> tuple:
                 "training_progress": {},
                 "training_summary": {},
                 "schema_version": 0,
+                "games_schema_version": 0,
             }
         )
     snapshot = STORE.load_snapshot(username)
@@ -2952,6 +3024,7 @@ def local_state() -> tuple:
             "training_progress": progress.get("lessons", {}),
             "training_summary": progress.get("summary", {}),
             "schema_version": snapshot.get("schema_version", 0),
+            "games_schema_version": snapshot.get("games_schema_version", 0),
         }
     )
 
@@ -2971,7 +3044,15 @@ def save_settings() -> tuple:
         config["lichess_username"] = str(payload.get("lichess_username", "") or "").strip()
     if "time_classes" in payload:
         raw_time_classes = str(payload.get("time_classes", "all") or "all").strip()
-        config["time_classes"] = raw_time_classes or "all"
+        try:
+            selected_time_classes = normalize_time_classes(raw_time_classes.split(","))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        config["time_classes"] = (
+            ",".join(mode for mode in ("rapid", "blitz", "bullet", "daily") if mode in selected_time_classes)
+            if selected_time_classes
+            else "all"
+        )
     if "max_games" in payload:
         try:
             config["max_games"] = max(0, min(20000, int(payload.get("max_games", 0) or 0)))
@@ -3071,7 +3152,6 @@ def save_settings() -> tuple:
     settings = request_engine_settings(payload, config)
     config = apply_engine_settings_to_config(config, settings)
     save_config(config)
-    configure_lichess(local_lichess_token(config))
     with ENGINE_LOCK:
         close_live_engine()
 
@@ -3093,7 +3173,10 @@ def auto_import_status() -> tuple:
 
     raw_time_classes = str(payload.get("time_classes", config.get("time_classes", "all"))).strip()
     time_classes = [item.strip() for item in raw_time_classes.split(",") if item.strip()]
-    normalized_time_classes = normalize_time_classes(time_classes)
+    try:
+        normalized_time_classes = normalize_time_classes(time_classes)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     raw_max_games = payload.get("max_games", config.get("max_games", 0))
     try:
         parsed_max_games = int(raw_max_games or 0)
@@ -3105,13 +3188,30 @@ def auto_import_status() -> tuple:
     cached_games = snapshot.get("games") or []
     cached_profile = snapshot.get("profile")
     cached_schema = int(snapshot.get("schema_version", 0) or 0)
-    if cached_schema < PROFILE_SCHEMA_VERSION or not isinstance(cached_profile, dict) or not cached_games:
+    cached_games_schema = int(snapshot.get("games_schema_version", 0) or 0)
+    if (
+        cached_schema < PROFILE_SCHEMA_VERSION
+        or cached_games_schema < GAMES_CACHE_SCHEMA_VERSION
+        or not isinstance(cached_profile, dict)
+        or not cached_games
+    ):
         return jsonify(
             {
                 "needs_import": True,
                 "reason": "no_current_workspace",
                 "new_games": 0,
                 "message": "No current local repertoire was found, so Bookup can build one automatically.",
+            }
+        )
+    cached_failures = list(snapshot.get("failed_archives", []) or [])
+    cached_warnings = list(snapshot.get("import_warnings", []) or [])
+    if cached_failures or cached_warnings:
+        return jsonify(
+            {
+                "needs_import": True,
+                "reason": "incomplete_archive_retry",
+                "new_games": 0,
+                "message": "A previous import missed one or more archives, so Bookup will retry them.",
             }
         )
 
@@ -3265,7 +3365,15 @@ def profile() -> tuple:
 
     raw_time_classes = str(payload.get("time_classes", "all")).strip()
     time_classes = [item.strip() for item in raw_time_classes.split(",") if item.strip()]
-    normalized_time_classes = normalize_time_classes(time_classes)
+    try:
+        normalized_time_classes = normalize_time_classes(time_classes)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    canonical_time_classes = (
+        ",".join(mode for mode in ("rapid", "blitz", "bullet", "daily") if mode in normalized_time_classes)
+        if normalized_time_classes
+        else "all"
+    )
     raw_max_games = payload.get("max_games", 0)
     try:
         parsed_max_games = int(raw_max_games or 0)
@@ -3281,7 +3389,6 @@ def profile() -> tuple:
     requested_settings = build_engine_settings(payload)
     settings = import_engine_settings(requested_settings, payload)
     force_refresh = bool(payload.get("force_refresh"))
-    configure_lichess(lichess_token)
     request_key = profile_request_key(
         username,
         normalized_time_classes,
@@ -3294,8 +3401,11 @@ def profile() -> tuple:
     save_config(
         apply_engine_settings_to_config(
             {
+                **config,
                 "username": username,
-                "time_classes": raw_time_classes or "all",
+                "main_platform": "chesscom",
+                "main_username": username,
+                "time_classes": canonical_time_classes,
                 "max_games": 0 if max_games is None else max_games,
                 "lichess_token": lichess_token,
                 "engine_path": engine_path,
@@ -3311,21 +3421,28 @@ def profile() -> tuple:
     cached_request_key = str(snapshot.get("request_key", ""))
     cached_games_request_key = str(snapshot.get("games_request_key", ""))
     cached_schema = int(snapshot.get("schema_version", 0) or 0)
+    cached_games_schema = int(snapshot.get("games_schema_version", 0) or 0)
     progress = STORE.load_progress(username)
     keyed_profile_cache = STORE.load_cached_profile(username, request_key)
     keyed_games_cache = STORE.load_cached_games(username, games_cache_key)
     keyed_profile_schema = int(keyed_profile_cache.get("schema_version", 0) or 0)
+    keyed_profile_games_schema = int(keyed_profile_cache.get("games_schema_version", 0) or 0)
     keyed_games_schema = int(keyed_games_cache.get("schema_version", 0) or 0)
     keyed_profile_data = keyed_profile_cache.get("profile")
     keyed_profile_games = keyed_profile_cache.get("games") or []
     keyed_games = keyed_games_cache.get("games") or []
     keyed_archives_found = int(keyed_profile_cache.get("archives_found", 0) or keyed_games_cache.get("archives_found", 0) or 0)
+    keyed_profile_warnings = list(keyed_profile_cache.get("import_warnings", []) or [])
+    keyed_games_warnings = list(keyed_games_cache.get("import_warnings", []) or [])
+    snapshot_warnings = list(snapshot.get("import_warnings", []) or [])
     if (
         not force_refresh
         and
         keyed_profile_schema >= PROFILE_SCHEMA_VERSION
+        and keyed_profile_games_schema >= GAMES_CACHE_SCHEMA_VERSION
         and isinstance(keyed_profile_data, dict)
         and keyed_profile_games
+        and not keyed_profile_warnings
     ):
         return jsonify(
             profile_response_payload(
@@ -3338,15 +3455,18 @@ def profile() -> tuple:
                 lichess_token=lichess_token,
                 cached=True,
                 reused_games=True,
+                import_warnings=[],
             )
         )
     if (
         not force_refresh
         and
         cached_schema >= PROFILE_SCHEMA_VERSION
+        and cached_games_schema >= GAMES_CACHE_SCHEMA_VERSION
         and cached_request_key == request_key
         and isinstance(cached_profile, dict)
         and cached_games
+        and not snapshot_warnings
     ):
         return jsonify(
             profile_response_payload(
@@ -3359,6 +3479,7 @@ def profile() -> tuple:
                 lichess_token=lichess_token,
                 cached=True,
                 reused_games=True,
+                import_warnings=[],
             )
         )
 
@@ -3378,16 +3499,21 @@ def profile() -> tuple:
 
     archives_found = int(snapshot.get("archives_found", 0) or 0)
     archive_urls = list(snapshot.get("archive_urls", []) or [])
+    import_warnings = list(snapshot.get("import_warnings", []) or [])
+    failed_archives = list(snapshot.get("failed_archives", []) or [])
     reused_games = False
     if (
         not force_refresh
         and
         keyed_games_schema >= GAMES_CACHE_SCHEMA_VERSION
         and keyed_games
+        and not keyed_games_warnings
     ):
         games = deserialize_games(list(keyed_games))
         archives_found = keyed_archives_found
         archive_urls = list(keyed_games_cache.get("archive_urls", []) or archive_urls)
+        import_warnings = []
+        failed_archives = []
         reused_games = bool(games)
         update_analysis_status(
             settings=settings,
@@ -3399,11 +3525,14 @@ def profile() -> tuple:
     elif (
         not force_refresh
         and
-        cached_schema >= GAMES_CACHE_SCHEMA_VERSION
+        cached_games_schema >= GAMES_CACHE_SCHEMA_VERSION
         and cached_games_request_key == games_cache_key
         and cached_games
+        and not snapshot_warnings
     ):
         games = deserialize_games(list(cached_games))
+        import_warnings = []
+        failed_archives = []
         reused_games = bool(games)
         update_analysis_status(
             settings=settings,
@@ -3430,6 +3559,8 @@ def profile() -> tuple:
                 message=f"Importing {raw_time_classes or 'all'} Chess.com games...",
             )
             games = fetch_games(username, normalized_time_classes, max_games, archives=archives)
+            import_warnings = list(getattr(games, "warnings", []) or [])
+            failed_archives = list(getattr(games, "failed_archives", []) or [])
             archives_found = len(archives)
             archive_urls = archives
         except Exception as exc:
@@ -3464,6 +3595,9 @@ def profile() -> tuple:
             "archive_urls": archive_urls,
             "games_imported": len(games),
             "games": serialized_games,
+            "import_warnings": import_warnings,
+            "failed_archives": failed_archives,
+            "archives_complete": not failed_archives,
         },
     )
     STORE.save_cached_profile(
@@ -3471,18 +3605,23 @@ def profile() -> tuple:
         request_key,
         {
             "schema_version": PROFILE_SCHEMA_VERSION,
+            "games_schema_version": GAMES_CACHE_SCHEMA_VERSION,
             "games_request_key": games_cache_key,
             "archives_found": archives_found,
             "archive_urls": archive_urls,
             "games_imported": len(games),
             "games": serialized_games,
             "profile": profile_data,
+            "import_warnings": import_warnings,
+            "failed_archives": failed_archives,
+            "archives_complete": not failed_archives,
         },
     )
     STORE.save_snapshot(
         username,
         {
             "schema_version": PROFILE_SCHEMA_VERSION,
+            "games_schema_version": GAMES_CACHE_SCHEMA_VERSION,
             "request_key": request_key,
             "games_request_key": games_cache_key,
             "archives_found": archives_found,
@@ -3490,6 +3629,9 @@ def profile() -> tuple:
             "games_imported": len(games),
             "games": serialized_games,
             "profile": profile_data,
+            "import_warnings": import_warnings,
+            "failed_archives": failed_archives,
+            "archives_complete": not failed_archives,
         },
     )
 
@@ -3504,6 +3646,8 @@ def profile() -> tuple:
             lichess_token=lichess_token,
             cached=False,
             reused_games=reused_games,
+            import_warnings=import_warnings,
+            failed_archives=failed_archives,
         )
     )
 
@@ -3528,14 +3672,10 @@ def import_pgn() -> tuple:
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
-    configure_lichess(lichess_token)
-
     save_config(
         apply_engine_settings_to_config(
             {
-                "username": username,
-                "time_classes": "pgn",
-                "max_games": len(games),
+                **config,
                 "lichess_token": lichess_token,
                 "engine_path": engine_path,
             },
@@ -3582,6 +3722,7 @@ def import_pgn() -> tuple:
         username,
         {
             "schema_version": PROFILE_SCHEMA_VERSION,
+            "games_schema_version": GAMES_CACHE_SCHEMA_VERSION,
             "request_key": request_key,
             "games_request_key": f"pgn:{pgn_hash}",
             "archives_found": 0,
@@ -3629,15 +3770,10 @@ def import_chessnut() -> tuple:
     engine_path = str(payload.get("engine_path", "")).strip() or default_engine_path()
     if not engine_path:
         return jsonify({"error": "Stockfish path is required."}), 400
-    configure_lichess(lichess_token)
-
     save_config(
         apply_engine_settings_to_config(
             {
                 **config,
-                "username": username,
-                "time_classes": "chessnut",
-                "max_games": len(games),
                 "lichess_token": lichess_token,
                 "engine_path": engine_path,
                 "chessnut_db_path": bundle.db_path,
@@ -3688,6 +3824,7 @@ def import_chessnut() -> tuple:
         username,
         {
             "schema_version": PROFILE_SCHEMA_VERSION,
+            "games_schema_version": GAMES_CACHE_SCHEMA_VERSION,
             "request_key": request_key,
             "games_request_key": f"chessnut:{pgn_hash}",
             "archives_found": 0,
@@ -3740,8 +3877,6 @@ def position_insight() -> tuple:
 
     config = load_config()
     settings = request_engine_settings(payload, config)
-    request_token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
-    configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     your_move_uci = str(payload.get("your_move_uci", "")).strip()
     your_move_san = str(payload.get("your_move_san", "")).strip()
@@ -3778,9 +3913,6 @@ def database_moves() -> tuple:
     except ValueError:
         return jsonify({"error": "Invalid FEN."}), 400
 
-    config = load_config()
-    request_token = str(payload.get("lichess_token") or local_lichess_token(config)).strip()
-    configure_lichess(request_token)
     play_uci = [str(item) for item in payload.get("play_uci", []) if str(item)]
     return jsonify(database_context_for_board(board, play_uci=play_uci, limit=8))
 
@@ -4467,8 +4599,7 @@ def run_app() -> None:
     if webview is None:
         run_browser_app()
         return
-    port = 8877
-    url = _start_local_server(port)
+    url = _start_local_server()
     webview.create_window(
         "Bookup",
         url,
@@ -4490,18 +4621,21 @@ def run_app() -> None:
             return
 
 
-def _start_local_server(port: int) -> str:
-    url = f"http://127.0.0.1:{port}/"
-    server = threading.Thread(
-        target=lambda: app.run(host="127.0.0.1", port=port, debug=False, threaded=True, use_reloader=False),
+def _start_local_server(port: int = 0) -> str:
+    http_server = make_server("127.0.0.1", port, app, threaded=True)
+    actual_port = int(http_server.server_port)
+    configure_local_request_security(True, port=actual_port)
+    url = f"http://127.0.0.1:{actual_port}/"
+    server_thread = threading.Thread(
+        target=http_server.serve_forever,
         daemon=True,
     )
-    server.start()
+    server_thread.start()
 
     for _ in range(80):
         try:
             with urlopen(url, timeout=0.25) as response:
-                if response.status == 200:
+                if response.status == 200 and response.headers.get("X-Bookup-Launch") == LOCAL_REQUEST_TOKEN:
                     break
         except URLError:
             pass
@@ -4513,7 +4647,7 @@ def _start_local_server(port: int) -> str:
 
 def run_browser_app() -> None:
     configure_runtime_mode(web_mode=True)
-    url = _start_local_server(8877)
+    url = _start_local_server()
     webbrowser.open(url, new=2)
     try:
         while True:

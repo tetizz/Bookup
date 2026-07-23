@@ -856,6 +856,22 @@ h1 {
   margin-bottom: 8px;
 }
 
+.token-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.token-input-row .ghost-btn {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.setup-card .token-field {
+  grid-column: span 2;
+}
+
 input,
 select {
   width: 100%;
@@ -884,6 +900,12 @@ select:focus {
 }
 
 .field-check { align-self: end; }
+
+@media (max-width: 620px) {
+  .token-input-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 
 .checkbox-row {
   display: flex;
@@ -3390,6 +3412,10 @@ select:focus {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 .square-classification-overlay {
