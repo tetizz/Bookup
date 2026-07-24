@@ -13,6 +13,7 @@ from bookup.progress_tracker import (
     build_goals,
     build_progress_payload,
     build_projection,
+    estimate_duration_minutes,
     load_progress_state,
     save_progress_state,
     save_session,
@@ -58,6 +59,29 @@ def test_projection_deduplicates_custom_presets() -> None:
     require([item["games"] for item in result["simple"]] == [538, 1000], "projection_counts_unique")
     require([item["games"] for item in result["time"]] == [538, 1000], "time_counts_unique")
     require(result["time"][1]["max_minutes"] == 20_000, "thousand_games_twenty_thousand_minutes")
+
+
+def test_duration_requires_measured_clocks() -> None:
+    require(estimate_duration_minutes("", "") is None, "missing_clock_is_not_duration_sample")
+    require(estimate_duration_minutes("600", "1. e4 e5 2. Nf3 Nc6") is None, "time_control_is_not_actual_duration")
+    measured = estimate_duration_minutes(
+        "60+1",
+        "1. e4 {[%clk 0:01:00]} e5 {[%clk 0:01:00]} "
+        "2. Nf3 {[%clk 0:00:55]} Nc6 {[%clk 0:00:54]}",
+    )
+    require(measured is not None and 0 < measured < 10, "clock_tags_produce_duration_sample")
+    empty_profile = {
+        **fallback_profile(),
+        "duration_summary": {
+            "average": None,
+            "shortest": None,
+            "longest": None,
+            "games_used": 0,
+            "sample_warning": True,
+        },
+    }
+    empty_projection = build_projection({"settings": {"custom_games": 538, "dropoff_table": []}}, empty_profile)
+    require(empty_projection["time"] == [], "projection_has_no_unmeasured_time_rows")
 
 
 def test_rating_goal_uses_visible_progress() -> None:
@@ -109,6 +133,7 @@ def test_session_phase_values_round_trip() -> None:
 
 def main() -> None:
     test_projection_deduplicates_custom_presets()
+    test_duration_requires_measured_clocks()
     test_rating_goal_uses_visible_progress()
     test_manual_phase_values_are_not_measured()
     test_session_phase_values_round_trip()

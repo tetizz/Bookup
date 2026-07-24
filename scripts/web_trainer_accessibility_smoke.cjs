@@ -42,6 +42,44 @@ function check(name, condition, detail = "") {
 const hooks = context.BookupTrainerTestHooks;
 check("test_hooks_loaded", Boolean(hooks));
 
+const emptyBullet = hooks.progressModeSample("bullet", [
+  { timeClass: "rapid", outcome: "win", timeControl: "600" },
+]);
+check(
+  "empty_bullet_has_explicit_no_sample_state",
+  emptyBullet.hasGames === false
+    && emptyBullet.winRate === null
+    && emptyBullet.scorePercentage === null,
+);
+const emptyBulletDuration = hooks.progressDurationSample("bullet", [
+  { timeClass: "rapid", outcome: "win", timeControl: "600" },
+]);
+check(
+  "empty_bullet_never_uses_twenty_minute_fallback",
+  emptyBulletDuration.hasSample === false && emptyBulletDuration.average === null,
+);
+const legacyFallbackDuration = hooks.progressDurationSample("bullet", [
+  { timeClass: "bullet", outcome: "win", timeControl: "60+1", durationMinutes: 20 },
+]);
+check(
+  "legacy_cached_duration_fallback_is_ignored",
+  legacyFallbackDuration.hasSample === false && legacyFallbackDuration.average === null,
+);
+const measuredBulletDuration = hooks.progressDurationSample("bullet", [
+  {
+    timeClass: "bullet",
+    outcome: "win",
+    timeControl: "60+1",
+    pgn: "1. e4 {[%clk 0:01:00]} e5 {[%clk 0:01:00]} 2. Nf3 {[%clk 0:00:55]} Nc6 {[%clk 0:00:54]}",
+  },
+]);
+check(
+  "bullet_duration_comes_from_its_own_clock",
+  measuredBulletDuration.hasSample === true
+    && measuredBulletDuration.average > 0
+    && measuredBulletDuration.average < 10,
+);
+
 const start = new context.Chess();
 const startFen = start.fen();
 const whiteManual = hooks.manualEntryPlan({
@@ -163,6 +201,51 @@ check(
   "newest_manual_correction_wins",
   desktopSource.includes("function mergeManualRepertoire(serverEntries = {}, localEntries = {})") &&
     desktopSource.includes("if (!serverEntry || localTime >= serverTime)"),
+);
+
+function extractFunction(functionName) {
+  const marker = `function ${functionName}(`;
+  const startIndex = desktopSource.indexOf(marker);
+  if (startIndex < 0) throw new Error(`FAIL desktop helper missing: ${functionName}`);
+  const bodyStart = desktopSource.indexOf("{", desktopSource.indexOf(")", startIndex));
+  let depth = 0;
+  for (let index = bodyStart; index < desktopSource.length; index += 1) {
+    if (desktopSource[index] === "{") depth += 1;
+    if (desktopSource[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return desktopSource.slice(startIndex, index + 1);
+    }
+  }
+  throw new Error(`FAIL desktop helper incomplete: ${functionName}`);
+}
+
+const desktopProgressContext = {};
+vm.createContext(desktopProgressContext);
+vm.runInContext(
+  `${extractFunction("ratingText")}\n${extractFunction("progressDisplayState")}\nthis.testHooks = { ratingText, progressDisplayState };`,
+  desktopProgressContext,
+);
+const desktopHooks = desktopProgressContext.testHooks;
+const desktopEmptyBullet = desktopHooks.progressDisplayState({
+  fallback_active: true,
+  rating: 1507,
+  total_games: 1096,
+  recent: { games: 0, score_percentage: 0 },
+  duration_summary: { average: 20, games_used: 0 },
+}, "bullet");
+check(
+  "desktop_hides_unverified_fallback_profile",
+  desktopEmptyBullet.hasLiveProfile === false
+    && desktopEmptyBullet.hasRecentGames === false
+    && desktopEmptyBullet.hasDurationSample === false,
+);
+check("desktop_missing_rating_is_not_zero", desktopHooks.ratingText(null) === "--");
+check(
+  "desktop_progress_suppresses_unsupported_outputs",
+  /if \(!measurement\.hasRecentGames\)/.test(desktopSource)
+    && /if \(!display\.hasRecentGames\)/.test(desktopSource)
+    && /if \(!display\.hasDurationSample\)/.test(desktopSource)
+    && !/summary\.average \|\| 20/.test(desktopSource),
 );
 
 console.log("ALL WEB TRAINER ACCESSIBILITY CHECKS PASSED");

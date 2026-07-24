@@ -117,6 +117,22 @@
     }, { once: true });
   });
 
+  function progressModeSample(mode = state.mode, games = state.games) {
+    const normalizedMode = MODES.includes(String(mode)) ? String(mode) : "rapid";
+    const recent = (Array.isArray(games) ? games : [])
+      .filter((game) => game?.timeClass === normalizedMode)
+      .slice(-30);
+    const wins = recent.filter((game) => game.outcome === "win").length;
+    const draws = recent.filter((game) => game.outcome === "draw").length;
+    return {
+      mode: normalizedMode,
+      recent,
+      hasGames: recent.length > 0,
+      winRate: recent.length ? wins / recent.length * 100 : null,
+      scorePercentage: recent.length ? (wins + draws * 0.5) / recent.length * 100 : null,
+    };
+  }
+
   function workspaceCacheKey(username, settings = state.settings) {
     const normalizedUsername = String(username || "").trim().toLowerCase();
     if (!normalizedUsername) return "local";
@@ -254,6 +270,7 @@
       timeControl: game.timeControl,
       accuracy: game.accuracy,
       durationMinutes: game.durationMinutes,
+      durationSource: game.durationSource,
     };
   }
 
@@ -567,13 +584,18 @@
   function estimatePgnMinutes(pgn, timeControl) {
     const clocks = [...String(pgn || "").matchAll(/\[%clk\s+(?:(\d+):)?(\d+):(\d+)\]/g)]
       .map((match) => num(match[1]) * 3600 + num(match[2]) * 60 + num(match[3]));
-    if (clocks.length >= 4) {
-      const start = Math.max(...clocks.slice(0, 6));
-      const finish = Math.min(...clocks.slice(-8));
-      return clamp((start - finish) * 2 / 60, 2, 240);
-    }
-    const [base, inc] = String(timeControl || "").split("+").map(num);
-    return base ? clamp((base * 2 + inc * 70) / 60, 2, 240) : 20;
+    const control = String(timeControl || "").split("/").at(-1);
+    const [baseRaw, incrementRaw = "0"] = control.split("+");
+    const base = num(baseRaw);
+    const increment = num(incrementRaw);
+    if (base <= 0 || clocks.length < 2) return null;
+    const white = clocks.filter((_, index) => index % 2 === 0);
+    const black = clocks.filter((_, index) => index % 2 === 1);
+    if (!white.length || !black.length) return null;
+    const whiteUsed = Math.max(0, base + increment * white.length - white.at(-1));
+    const blackUsed = Math.max(0, base + increment * black.length - black.at(-1));
+    const measured = (whiteUsed + blackUsed) / 60;
+    return measured > 0 ? clamp(measured, 1, 240) : null;
   }
 
   function parseGame(raw, options = {}) {
@@ -594,6 +616,7 @@
     const outcome = won ? "win" : lost ? "loss" : "draw";
     const player = color === "white" ? raw.white : raw.black;
     const timeControl = raw.time_control || headers.TimeControl || "";
+    const durationMinutes = estimatePgnMinutes(raw.pgn, timeControl);
     return {
       id: raw.uuid || raw.url || `${headers.Date || ""}-${moves.join("-")}`,
       pgn: raw.pgn || "",
@@ -607,7 +630,8 @@
       url: raw.url || "",
       timeControl,
       accuracy: num(color === "white" ? raw.accuracies?.white : raw.accuracies?.black, 0),
-      durationMinutes: estimatePgnMinutes(raw.pgn, timeControl),
+      durationMinutes,
+      durationSource: durationMinutes == null ? "unavailable" : "clock",
     };
   }
 
@@ -1331,9 +1355,13 @@
   function renderProgress() {
     const data = state.stats[state.mode];
     syncProgressModeState();
-    const recent = state.games.filter((game) => game.timeClass === state.mode).slice(-30);
+    const sample = progressModeSample();
+    const recent = sample.recent;
     const measured = summarizeModeAccuracy(state.mode);
     if (!data) {
+      ["progressProjectionMode", "progressCustomGames", "progressSaveProjectionBtn"].forEach((id) => {
+        if ($(id)) $(id).disabled = true;
+      });
       setHtml("progressMetricGrid", [
         ["Live rating", "--", `No Chess.com ${state.mode} rating loaded`],
         ["Imported games", count(recent.length), `${state.mode} games on this device`],
@@ -1355,19 +1383,18 @@
       setHtml("progressGoalGrid", `<p class="line-note">Load Chess.com stats to track rating goals.</p>`);
       setHtml("progressProjectionPanel", `<p class="line-note">Load a live rating to calculate projections.</p>`);
       setHtml("progressProjectionBands", "");
-      renderTimeCalculator();
-      renderRecommendations(0, measured.moves ? {
+      renderTimeCalculator(sample);
+      renderRecommendations(null, measured.moves ? {
         average: measured.average,
         opening: measured.phaseStats.opening.accuracy,
         middlegame: measured.phaseStats.middlegame.accuracy,
         endgame: measured.phaseStats.endgame.accuracy,
-      } : null);
+      } : null, sample);
       renderSessions();
       return;
     }
     const snapshots = state.snapshots.filter((item) => item.mode === state.mode).slice(-90);
-    const recentWins = recent.filter((game) => game.outcome === "win").length;
-    const recentScore = recent.length ? recentWins / recent.length * 100 : 0;
+    const recentScore = sample.winRate;
     const imported = importedStats();
     const accuracy = measured.moves ? {
       average: measured.average,
@@ -1378,11 +1405,13 @@
     setHtml("progressMetricGrid", [
       ["Current rating", rating(data.rating), `${state.mode} from Chess.com`],
       ["Record", `${count(data.wins)}W ${count(data.draws)}D ${count(data.losses)}L`, `${count(data.games)} games`],
-      ["Recent score", percent(recent.length ? (recentWins + recent.filter((game) => game.outcome === "draw").length * 0.5) / recent.length * 100 : 0), `${recent.length} imported ${state.mode} games`],
+      ["Recent score", sample.hasGames ? percent(sample.scorePercentage) : "--", sample.hasGames ? `${recent.length} imported ${state.mode} games` : `No imported ${state.mode} games`],
       ["Bookup accuracy", measured.moves ? percent(measured.average) : "--", measured.moves ? `${measured.moves} moves measured` : "run local analysis"],
       ["Needs work", count(state.lessons.filter(lessonNeedsWork).length), "repeated best-move misses"],
     ].map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join(""));
-    setText("progressStatus", `Live ${state.mode} stats for ${state.username}. Accuracy is measured locally and cached offline.`);
+    setText("progressStatus", sample.hasGames
+      ? `Live ${state.mode} stats for ${state.username}. Accuracy is measured locally and cached offline.`
+      : `Live ${state.mode} rating loaded for ${state.username}, but no imported ${state.mode} games are available. Import this time control in Setup to unlock recent score, goals, projections, and time estimates.`);
     const ratingPoints = snapshots.length >= 2
       ? snapshots.map((item) => ({ x: item.date, y: item.rating }))
       : recent.map((game) => ({ x: game.endTime, y: game.rating }));
@@ -1410,10 +1439,10 @@
       y: game.accuracy,
     })), "#c79bff", { suffix: "%" });
     renderAccuracyLab(measured);
-    renderGoals(data, recentScore, accuracy);
-    renderProjection(data);
-    renderTimeCalculator();
-    renderRecommendations(recentScore, accuracy);
+    renderGoals(data, recentScore, accuracy, sample);
+    renderProjection(data, sample);
+    renderTimeCalculator(sample);
+    renderRecommendations(recentScore, accuracy, sample);
     renderSessions();
   }
 
@@ -1627,7 +1656,14 @@
     return `<div class="goal-row"><div><span>${label}</span><strong>${suffix === "rating" ? rating(value) : `${num(value).toFixed(suffix === "%" ? 1 : 0)}${suffix === "%" ? "%" : ""}`} / ${target}</strong></div><div class="goal-track"><div style="width:${progress}%"></div></div></div>`;
   }
 
-  function renderGoals(data, recentWinRate, accuracy = null) {
+  function renderGoals(data, recentWinRate, accuracy = null, sample = progressModeSample()) {
+    if (!sample.hasGames) {
+      setHtml("progressGoalGrid", `<article class="progress-recommendation-card">
+        <strong>No ${escapeHtml(sample.mode)} goals yet</strong>
+        <p class="line-note">Import ${escapeHtml(sample.mode)} games before Bookup shows sample-based goals. Live rating data alone is not enough to infer a useful training target.</p>
+      </article>`);
+      return;
+    }
     const rows = [1600, 1700, 1800, 1900, 2000].map((target) => goalRow(`${target} rating`, data.rating, target, "rating"));
     const gamesSinceBaseline = Math.max(0, num(data.games) - num(state.goalBaselines[state.mode], data.games));
     rows.push(goalRow("538 more games", Math.min(538, gamesSinceBaseline), 538));
@@ -1676,7 +1712,18 @@
     return { wins: Math.round(wins), draws: Math.round(draws), losses: Math.round(losses), change, final: data.rating + change };
   }
 
-  function renderProjection(data) {
+  function renderProjection(data, sample = progressModeSample()) {
+    ["progressProjectionMode", "progressCustomGames", "progressSaveProjectionBtn"].forEach((id) => {
+      if ($(id)) $(id).disabled = !sample.hasGames;
+    });
+    if (!sample.hasGames) {
+      setHtml("progressProjectionPanel", `<article class="progress-recommendation-card">
+        <strong>Projection unavailable</strong>
+        <p class="line-note">Import ${escapeHtml(sample.mode)} games before calculating a rating scenario. Bookup will not project from generic win/loss assumptions.</p>
+      </article>`);
+      setHtml("progressProjectionBands", "");
+      return;
+    }
     const custom = clamp(num($("progressCustomGames")?.value, state.customGames), 1, 5000);
     state.customGames = custom;
     state.projectionMode = $("progressProjectionMode")?.value || state.projectionMode;
@@ -1703,19 +1750,10 @@
   }
 
   function estimateMinutes(game) {
-    if (num(game.durationMinutes) > 0) return num(game.durationMinutes);
-    const clocks = [...String(game.pgn || "").matchAll(/\[%clk\s+(?:(\d+):)?(\d+):(\d+)\]/g)]
-      .map((match) => num(match[1]) * 3600 + num(match[2]) * 60 + num(match[3]));
-    if (clocks.length >= 4) {
-      const start = Math.max(...clocks.slice(0, 6));
-      const finish = Math.min(...clocks.slice(-8));
-      return clamp((start - finish) * 2 / 60, 2, 80);
+    if (game?.durationSource === "clock" && num(game.durationMinutes) > 0) {
+      return num(game.durationMinutes);
     }
-    const [baseRaw, incRaw] = String(game.timeControl || "").split("+");
-    const base = num(baseRaw);
-    const inc = num(incRaw, 0);
-    const estimate = base ? (base * 2 + inc * 70) / 60 : 20;
-    return Number.isFinite(estimate) ? clamp(estimate, 2, 80) : 20;
+    return estimatePgnMinutes(game?.pgn, game?.timeControl);
   }
 
   function durationText(minutes) {
@@ -1724,25 +1762,54 @@
     return `${count(rounded)} min · ${Math.floor(rounded / 60)}h ${rounded % 60}m${days}`;
   }
 
-  function renderTimeCalculator() {
-    const games = state.games.filter((game) => game.timeClass === state.mode).slice(-50);
-    const lengths = games.map(estimateMinutes).filter((value) => Number.isFinite(value) && value > 0);
-    const avg = lengths.length ? lengths.reduce((sum, value) => sum + value, 0) / lengths.length : 20;
+  function progressDurationSample(mode = state.mode, games = state.games) {
+    const normalizedMode = MODES.includes(String(mode)) ? String(mode) : "rapid";
+    const matching = (Array.isArray(games) ? games : [])
+      .filter((game) => game?.timeClass === normalizedMode)
+      .slice(-50);
+    const lengths = matching.map(estimateMinutes).filter((value) => Number.isFinite(value) && value > 0);
+    return {
+      mode: normalizedMode,
+      games: matching,
+      lengths,
+      hasSample: lengths.length > 0,
+      average: lengths.length ? lengths.reduce((sum, value) => sum + value, 0) / lengths.length : null,
+    };
+  }
+
+  function renderTimeCalculator(sample = progressModeSample()) {
+    const duration = progressDurationSample(sample.mode);
+    if (!sample.hasGames || !duration.hasSample) {
+      setHtml("progressTimePanel", `<article class="progress-recommendation-card">
+        <strong>No ${escapeHtml(sample.mode)} duration sample</strong>
+        <p class="line-note">Import ${escapeHtml(sample.mode)} games with a known clock before Bookup estimates playing time. No generic minutes-per-game fallback is used.</p>
+      </article>`);
+      return;
+    }
+    const games = duration.games;
+    const lengths = duration.lengths;
+    const avg = duration.average;
     const custom = state.customGames;
-    const rows = [...new Set([538, 1000, custom])].map((gamesCount) => card(`${count(gamesCount)} games`, `Max ${durationText(gamesCount * 20)} · real ${durationText(gamesCount * avg)}`, `${avg.toFixed(1)} min average`));
+    const rows = [...new Set([538, 1000, custom])].map((gamesCount) => card(
+      `${count(gamesCount)} games`,
+      `Estimated ${durationText(gamesCount * avg)} from the imported ${escapeHtml(sample.mode)} sample`,
+      `${avg.toFixed(1)} min average`
+    ));
     const days = [10, 15, 20, 25, 40].map((perDay) => `${perDay}/day: ${Math.ceil(custom / perDay)} days`).join(" · ");
-    rows.push(card("Recent duration sample", `${games.length ? `${Math.min(...lengths).toFixed(1)} shortest · ${Math.max(...lengths).toFixed(1)} longest` : "No clock sample; using 20 min/game."}<br>${days}`, `${games.length} games used${games.length < 10 ? " · small sample" : ""}`));
+    rows.push(card("Recent duration sample", `${Math.min(...lengths).toFixed(1)} shortest · ${Math.max(...lengths).toFixed(1)} longest<br>${days}`, `${lengths.length} games used${lengths.length < 10 ? " · small sample" : ""}`));
     setHtml("progressTimePanel", rows.join(""));
   }
 
-  function renderRecommendations(recentWinRate, accuracy = null) {
+  function renderRecommendations(recentWinRate, accuracy = null, sample = progressModeSample()) {
     const weakLines = state.lessons.filter(lessonNeedsWork).slice(0, 3)
       .map((lesson) => `${lesson.yourRepeatedMove} → ${lesson.recommendedMove}`).join("; ");
     const items = [
       card("Opening", weakLines ? `Review these exact move corrections first: ${weakLines}.` : "Import games to identify repeated decision mistakes.", accuracy?.opening == null ? "needs analysis" : percent(accuracy.opening)),
       card("Middlegame", accuracy?.middlegame == null ? "Analyze recent games before assigning a middlegame priority." : accuracy.middlegame < 73 ? "Pause on forcing moves, pawn breaks, and worst-piece improvement before committing." : "Maintain plan recognition with annotated game reviews.", accuracy?.middlegame == null ? "needs analysis" : percent(accuracy.middlegame)),
       card("Endgame", accuracy?.endgame == null ? "Analyze recent games before assigning an endgame priority." : accuracy.endgame < 80 ? "Prioritize king activity, rook activity, and pawn-race counting." : "Maintain two endgame sessions each week.", accuracy?.endgame == null ? "needs analysis" : percent(accuracy.endgame)),
-      card("Tactics", recentWinRate < 52 ? "Do a short clean tactics block before playing, then review every loss immediately." : "Keep tactics short and daily; avoid exhausting calculation before games.", percent(recentWinRate)),
+      sample.hasGames
+        ? card("Tactics", recentWinRate < 52 ? "Do a short clean tactics block before playing, then review every loss immediately." : "Keep tactics short and daily; avoid exhausting calculation before games.", percent(recentWinRate))
+        : card("Tactics", `Import ${escapeHtml(sample.mode)} games before Bookup assigns a result-based tactics priority.`, "needs games"),
     ];
     const phases = accuracy
       ? [["opening", accuracy.opening], ["middlegame", accuracy.middlegame], ["endgame", accuracy.endgame]]
@@ -3648,6 +3715,8 @@
       flushSave,
       lessonStartPlan,
       manualEntryPlan,
+      progressDurationSample,
+      progressModeSample,
       squareAccessibilityLabel,
       workspaceCacheKey,
     });

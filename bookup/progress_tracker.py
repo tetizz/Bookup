@@ -262,9 +262,9 @@ def mode_from_stats(username: str, stats: dict[str, Any], mode: str, recent_game
         "rating_series": [{"date": game["date"], "value": game["user_rating"], "url": game.get("url", "")} for game in reversed(recent_games) if game.get("user_rating") is not None][-140:],
         "recent_games": recent_games[:80],
         "duration_summary": {
-            "average": round(sum(duration_values) / len(duration_values), 1) if duration_values else 20.0,
-            "shortest": round(min(duration_values), 1) if duration_values else 20.0,
-            "longest": round(max(duration_values), 1) if duration_values else 20.0,
+            "average": round(sum(duration_values) / len(duration_values), 1) if duration_values else None,
+            "shortest": round(min(duration_values), 1) if duration_values else None,
+            "longest": round(max(duration_values), 1) if duration_values else None,
             "games_used": len(duration_values),
             "sample_warning": len(duration_values) < 20,
         },
@@ -310,19 +310,17 @@ def infer_time_class(game: dict[str, Any]) -> str:
     )
 
 
-def estimate_duration_minutes(time_control: str, pgn: str) -> float:
+def estimate_duration_minutes(time_control: str, pgn: str) -> float | None:
     base, inc = parse_time_control(time_control)
     clocks = [clock_to_seconds(item) for item in CLOCK_RE.findall(pgn or "")]
     clocks = [item for item in clocks if item is not None]
     if base > 0 and len(clocks) >= 2:
         white = clocks[0::2]
         black = clocks[1::2]
-        used = max(0, base + inc * max(0, len(white) - 1) - white[-1]) + max(0, base + inc * max(0, len(black) - 1) - black[-1])
+        used = max(0, base + inc * len(white) - white[-1]) + max(0, base + inc * len(black) - black[-1])
         if used > 0:
             return round(max(1.0, min(240.0, used / 60)), 1)
-    if base <= 0:
-        return 20.0
-    return round(max(3.0, min(60.0, (((base * 2) + (inc * 70)) / 60) * 0.72)), 1)
+    return None
 
 
 def parse_time_control(raw_value: str) -> tuple[int, int]:
@@ -377,7 +375,7 @@ def active_profile(data: dict[str, Any], username: str, mode: str) -> dict[str, 
             "recent": {"games": 0, "wins": 0, "draws": 0, "losses": 0, "win_rate": 0, "score_percentage": 0},
             "rating_series": [],
             "recent_games": [],
-            "duration_summary": {"average": 20.0, "shortest": 20.0, "longest": 20.0, "games_used": 0, "sample_warning": True},
+            "duration_summary": {"average": None, "shortest": None, "longest": None, "games_used": 0, "sample_warning": True},
             "fallback_active": True,
             "available_modes": list(MODES),
         }
@@ -476,14 +474,16 @@ def build_projection(data: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     custom = safe_int(settings.get("custom_games")) or 538
     counts = list(dict.fromkeys((538, 1000, custom)))
     table = normalize_dropoff(settings.get("dropoff_table"))
-    average = safe_float(profile.get("duration_summary", {}).get("average")) or 20.0
+    duration_summary = profile.get("duration_summary", {})
+    average = safe_float(duration_summary.get("average"))
+    has_duration_sample = average is not None and (safe_int(duration_summary.get("games_used")) or 0) > 0
     return {
         "custom_games": custom,
         "dropoff_table": table,
         "simple": [simple_projection(profile, count) for count in counts],
         "dropoff": [dropoff_projection(safe_int(profile.get("rating")) or 0, count, table) for count in counts],
-        "time": [time_estimate(count, average) for count in counts],
-        "duration_summary": profile.get("duration_summary", {}),
+        "time": [time_estimate(count, average) for count in counts] if has_duration_sample else [],
+        "duration_summary": duration_summary,
         "max_1000_note": {"minutes": 20000, "label": "333h 20m · about 13.9 nonstop days"},
     }
 

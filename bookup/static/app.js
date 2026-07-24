@@ -2470,14 +2470,36 @@ async function saveProgressSession() {
 }
 
 function ratingText(value) {
-  const numeric = Number(value || 0);
-  return Number.isFinite(numeric) ? String(Math.round(numeric)) : "--";
+  if (value == null || value === "") return "--";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? String(Math.round(numeric)) : "--";
 }
 
 function formatNumber(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) return escapeHtml(value);
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: Number.isInteger(numeric) ? 0 : 1 }).format(numeric);
+}
+
+function progressDisplayState(profile = {}, mode = "rapid") {
+  const normalizedMode = ["rapid", "blitz", "bullet"].includes(String(mode)) ? String(mode) : "rapid";
+  const recent = profile?.recent && typeof profile.recent === "object" ? profile.recent : {};
+  const hasLiveProfile = !profile?.fallback_active
+    && Number.isFinite(Number(profile?.rating))
+    && Number(profile?.rating) > 0
+    && Number(profile?.total_games || 0) > 0;
+  const recentGames = hasLiveProfile ? Math.max(0, Number(recent.games || 0)) : 0;
+  const durationGames = hasLiveProfile
+    ? Math.max(0, Number(profile?.duration_summary?.games_used || 0))
+    : 0;
+  return {
+    mode: normalizedMode,
+    hasLiveProfile,
+    hasRecentGames: recentGames > 0,
+    hasDurationSample: durationGames > 0 && Number.isFinite(Number(profile?.duration_summary?.average)),
+    recentGames,
+    durationGames,
+  };
 }
 
 function renderProgressCockpit(progress) {
@@ -2495,28 +2517,35 @@ function renderProgressCockpit(progress) {
   });
   if (el.progressCustomGames) el.progressCustomGames.value = progress.projection?.custom_games || 538;
   const fetched = profile.fetched_at ? new Date(profile.fetched_at).toLocaleString() : "using saved fallback";
-  el.progressStatus.textContent = `${mode[0].toUpperCase()}${mode.slice(1)} progress · ${profile.fallback_active ? "fallback values" : `live Chess.com data refreshed ${fetched}`}`;
   const recent = profile.recent || {};
+  const display = progressDisplayState(profile, mode);
+  if (!display.hasLiveProfile) {
+    el.progressStatus.textContent = `No live ${mode} profile is available. Bookup is hiding fallback ratings, goals, and projections until real Chess.com data loads.`;
+  } else if (!display.hasRecentGames) {
+    el.progressStatus.textContent = `Live ${mode} profile refreshed ${fetched}, but no recent ${mode} game sample is available. Goals, projections, and time estimates are hidden.`;
+  } else {
+    el.progressStatus.textContent = `${mode[0].toUpperCase()}${mode.slice(1)} progress · live Chess.com data refreshed ${fetched}`;
+  }
   el.progressMetricGrid.innerHTML = `
-    <article class="progress-stat-card"><span>Current rating</span><strong>${ratingText(profile.rating)}</strong><small>${mode} rating from ${profile.fallback_active ? "fallback" : "Chess.com"}</small></article>
-    <article class="progress-stat-card"><span>Games played</span><strong>${formatNumber(profile.total_games)}</strong><small>${formatNumber(profile.wins)}W ${formatNumber(profile.draws)}D ${formatNumber(profile.losses)}L</small></article>
-    <article class="progress-stat-card"><span>Win rate</span><strong>${Number(profile.win_rate || 0).toFixed(1)}%</strong><small>All-time ${mode}</small></article>
-    <article class="progress-stat-card"><span>Score %</span><strong>${Number(profile.score_percentage || 0).toFixed(1)}%</strong><small>Draw = 0.5</small></article>
-    <article class="progress-stat-card"><span>Recent form</span><strong>${recent.games ? `${recent.wins}W ${recent.draws}D ${recent.losses}L` : "--"}</strong><small>${recent.games ? `${recent.games} recent games · ${Number(recent.score_percentage || 0).toFixed(1)}% score` : "Refresh for recent games"}</small></article>
+    <article class="progress-stat-card"><span>Current rating</span><strong>${display.hasLiveProfile ? ratingText(profile.rating) : "--"}</strong><small>${display.hasLiveProfile ? `${mode} rating from Chess.com` : `No live ${mode} rating`}</small></article>
+    <article class="progress-stat-card"><span>Games played</span><strong>${display.hasLiveProfile ? formatNumber(profile.total_games) : "--"}</strong><small>${display.hasLiveProfile ? `${formatNumber(profile.wins)}W ${formatNumber(profile.draws)}D ${formatNumber(profile.losses)}L` : "No verified record"}</small></article>
+    <article class="progress-stat-card"><span>Win rate</span><strong>${display.hasLiveProfile ? `${Number(profile.win_rate).toFixed(1)}%` : "--"}</strong><small>${display.hasLiveProfile ? `All-time ${mode}` : "Waiting for live data"}</small></article>
+    <article class="progress-stat-card"><span>Score %</span><strong>${display.hasLiveProfile ? `${Number(profile.score_percentage).toFixed(1)}%` : "--"}</strong><small>${display.hasLiveProfile ? "Draw = 0.5" : "Waiting for live data"}</small></article>
+    <article class="progress-stat-card"><span>Recent form</span><strong>${display.hasRecentGames ? `${recent.wins}W ${recent.draws}D ${recent.losses}L` : "--"}</strong><small>${display.hasRecentGames ? `${recent.games} recent games · ${Number(recent.score_percentage).toFixed(1)}% score` : `No recent ${mode} games`}</small></article>
   `;
   const averageIsMeasured = Boolean(profile.accuracy?.average_is_measured);
   const phaseIsMeasured = Boolean(profile.accuracy?.phase_is_measured);
-  const honestCharts = {
+  const honestCharts = display.hasLiveProfile ? {
     ...(progress.charts || {}),
     phase_accuracy: phaseIsMeasured ? (progress.charts?.phase_accuracy || []) : [],
     accuracy: averageIsMeasured ? (progress.charts?.accuracy || []) : [],
-  };
+  } : {};
   renderProgressCharts(honestCharts);
   renderProgressWeakness(profile);
-  renderProgressGoals(progress.goals || [], { averageIsMeasured, phaseIsMeasured });
-  renderProgressProjection(progress.projection || {});
-  renderProgressTime(progress.projection || {});
-  renderProgressRecommendations(progress.recommendations || [], phaseIsMeasured);
+  renderProgressGoals(progress.goals || [], { averageIsMeasured, phaseIsMeasured, ...display });
+  renderProgressProjection(progress.projection || {}, display);
+  renderProgressTime(progress.projection || {}, display);
+  renderProgressRecommendations(progress.recommendations || [], phaseIsMeasured, display);
   renderProgressSessions(progress.sessions || []);
 }
 
@@ -2552,6 +2581,13 @@ function renderProgressWeakness(profile) {
 
 function renderProgressGoals(goals, measurement = {}) {
   if (!el.progressGoalGrid) return;
+  if (!measurement.hasRecentGames) {
+    el.progressGoalGrid.innerHTML = `<article class="progress-recommendation-card">
+      <strong>No ${escapeHtml(measurement.mode || "selected-mode")} goals yet</strong>
+      <p class="summary-copy">Bookup does not show hard-coded rating goals without a recent verified game sample.</p>
+    </article>`;
+    return;
+  }
   const visibleGoals = goals.filter((goal) => {
     const label = String(goal.label || "");
     if (/Avg accuracy/i.test(label)) return Boolean(measurement.averageIsMeasured);
@@ -2572,8 +2608,18 @@ function renderProgressGoals(goals, measurement = {}) {
     : "");
 }
 
-function renderProgressProjection(projection) {
+function renderProgressProjection(projection, display = {}) {
   if (!el.progressProjection) return;
+  if (el.progressCustomGames) el.progressCustomGames.disabled = !display.hasRecentGames;
+  if (el.progressSaveProjection) el.progressSaveProjection.disabled = !display.hasRecentGames;
+  if (!display.hasRecentGames) {
+    el.progressProjection.className = "stack empty";
+    el.progressProjection.innerHTML = `<article class="progress-recommendation-card">
+      <strong>Projection unavailable</strong>
+      <p class="summary-copy">Load recent ${escapeHtml(display.mode || "selected-mode")} games before calculating a rating scenario. Generic win/loss assumptions are not shown as a forecast.</p>
+    </article>`;
+    return;
+  }
   const simple = projection.simple || [];
   const dropoff = projection.dropoff || [];
   el.progressProjection.className = "stack";
@@ -2590,12 +2636,20 @@ function renderProgressProjection(projection) {
   }).join("");
 }
 
-function renderProgressTime(projection) {
+function renderProgressTime(projection, display = {}) {
   if (!el.progressTime) return;
   const summary = projection.duration_summary || {};
+  if (!display.hasDurationSample) {
+    el.progressTime.className = "stack empty";
+    el.progressTime.innerHTML = `<article class="progress-recommendation-card">
+      <strong>No ${escapeHtml(display.mode || "selected-mode")} duration sample</strong>
+      <p class="summary-copy">Bookup needs games with usable clock data before estimating playing time. It does not substitute a generic minutes-per-game value.</p>
+    </article>`;
+    return;
+  }
   el.progressTime.className = "stack";
   el.progressTime.innerHTML = `
-    <article class="progress-recommendation-card"><strong>Average ${Number(summary.average || 20).toFixed(1)} min</strong><p class="summary-copy">Shortest ${Number(summary.shortest || 20).toFixed(1)} · longest ${Number(summary.longest || 20).toFixed(1)} · ${Number(summary.games_used || 0)} games used${summary.sample_warning ? " · small sample" : ""}</p></article>
+    <article class="progress-recommendation-card"><strong>Average ${Number(summary.average).toFixed(1)} min</strong><p class="summary-copy">Shortest ${Number(summary.shortest).toFixed(1)} · longest ${Number(summary.longest).toFixed(1)} · ${Number(summary.games_used || 0)} games used${summary.sample_warning ? " · small sample" : ""}</p></article>
     ${(projection.time || []).map((row) => `
       <article class="progress-time-row">
         <strong>${Number(row.games || 0)} games</strong>
@@ -2607,8 +2661,16 @@ function renderProgressTime(projection) {
   `;
 }
 
-function renderProgressRecommendations(items, accuracyIsMeasured = false) {
+function renderProgressRecommendations(items, accuracyIsMeasured = false, display = {}) {
   if (!el.progressRecommendations) return;
+  if (!display.hasRecentGames) {
+    el.progressRecommendations.className = "stack empty";
+    el.progressRecommendations.innerHTML = `<article class="progress-recommendation-card">
+      <strong>No result-based plan yet</strong>
+      <p class="summary-copy">Load recent ${escapeHtml(display.mode || "selected-mode")} games before Bookup assigns priorities from results.</p>
+    </article>`;
+    return;
+  }
   const visibleItems = items.filter((item) => accuracyIsMeasured || !["opening", "middlegame", "endgame"].includes(String(item.area || "").toLowerCase()));
   el.progressRecommendations.className = "stack";
   el.progressRecommendations.innerHTML = visibleItems.map((item) => `

@@ -1,0 +1,83 @@
+name: Test Bookup
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python regressions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install "Flask>=3.1.0" "python-chess>=1.999" "requests>=2.32.0"
+
+      - name: Compile Python sources
+        run: python -m compileall -q bookup scripts
+
+      - name: Run Python regression packs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/classification_threshold_regression.py
+          python scripts/reviewed_classification_regression.py
+          python scripts/product_regression.py
+          python scripts/import_security_regression.py
+          python scripts/bookup_api_smoke.py
+          python scripts/smart_theory_regression.py
+          python scripts/smart_theory_lichess_regression.py
+
+  browser:
+    name: Browser regressions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check docs/web-app.js
+          node --check docs/web-app.min.js
+          node --check docs/position-analysis.js
+          node --check docs/smart-theory-engine.js
+          node --check bookup/static/app.js
+
+      - name: Verify deployed bundle matches source
+        run: |
+          npx --yes esbuild@0.28.1 docs/web-app.js --minify --target=es2020 --outfile="$RUNNER_TEMP/web-app.min.js"
+          cmp docs/web-app.min.js "$RUNNER_TEMP/web-app.min.js"
+
+      - name: Run browser regression packs
+        run: |
+          node scripts/web_import_regression.cjs
+          node scripts/web_smart_theory_schema_smoke.cjs
+          node scripts/web_smart_theory_generation_smoke.cjs
+          node scripts/web_trainer_accessibility_smoke.cjs
