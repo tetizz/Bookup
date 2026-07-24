@@ -95,6 +95,9 @@
     cacheKey: "local",
     cacheRestored: false,
     userWorkspaces: {},
+    repertoireFilter: "needs_work",
+    repertoireSide: "all",
+    repertoireVisible: 6,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -1156,6 +1159,49 @@
       .slice(0, 32);
   }
 
+  function trainingNextTarget(
+    due = dueLessons(),
+    lessons = state.lessons,
+    manualRepertoire = state.manualRepertoire,
+  ) {
+    if (due[0]) return { type: "lesson", item: due[0] };
+    const nextWeak = (Array.isArray(lessons) ? lessons : [])
+      .filter(lessonNeedsWork)
+      .sort((left, right) => num(right.priority) - num(left.priority))[0];
+    if (nextWeak) return { type: "lesson", item: nextWeak };
+    const saved = Object.values(manualRepertoire && typeof manualRepertoire === "object" ? manualRepertoire : {})
+      .filter((entry) => entry?.id && entry?.fen && entry?.uci)
+      .sort((left, right) => num(right.savedAt) - num(left.savedAt))[0];
+    return saved ? { type: "manual", item: saved } : null;
+  }
+
+  function renderTrainingLaunchpads() {
+    const due = dueLessons();
+    const weak = state.lessons.filter(lessonNeedsWork);
+    const manual = Object.values(state.manualRepertoire || {}).filter((entry) => entry?.fen && entry?.uci);
+    const target = trainingNextTarget(due, weak, state.manualRepertoire);
+    const summary = target
+      ? `${count(due.length)} due now · ${count(weak.length)} positions need work · ${count(manual.length)} exact moves saved.`
+      : "Import games or save an exact-position move to create your training queue.";
+    ["repertoireQueueSummary", "progressTrainingSummary"].forEach((id) => setText(id, summary));
+    ["repertoireTrainNextBtn", "progressTrainNextBtn"].forEach((id) => {
+      const button = $(id);
+      if (!button) return;
+      button.disabled = !target;
+      button.textContent = target?.type === "manual" ? "Train saved move" : "Train next";
+    });
+  }
+
+  function launchNextTraining() {
+    const target = trainingNextTarget();
+    if (!target) {
+      workspaceNotice("Import games or save an exact-position move before starting training.", "error");
+      return;
+    }
+    if (target.type === "manual") openManualRepertoire(target.item.id);
+    else openLesson(target.item.lessonId);
+  }
+
   function lessonCard(lesson, includeAction = true) {
     const action = includeAction
       ? `<button class="ghost-btn" data-open-lesson="${escapeHtml(lesson.lessonId)}" type="button">Train position</button>`
@@ -1244,18 +1290,47 @@
         "manual repertoire",
         `<button class="ghost-btn" data-open-manual="${escapeHtml(entry.id)}" type="button">Train position</button>`
       ));
-    const whiteCards = [
-      ...manualCards("white"),
-      ...white.slice(0, 24).map((branch) => branchCard(branch, branch._index)),
-      ...whiteLessons.slice(0, 12).map((lesson) => lessonCard(lesson)),
-    ];
-    const blackCards = [
-      ...manualCards("black"),
-      ...black.slice(0, 24).map((branch) => branchCard(branch, branch._index)),
-      ...blackLessons.slice(0, 12).map((lesson) => lessonCard(lesson)),
-    ];
-    setHtml("repertoireMapWhite", whiteCards.join("") || "No saved or imported White repertoire lines were found.", !whiteCards.length);
-    setHtml("repertoireMapBlack", blackCards.join("") || "No saved or imported Black repertoire lines were found.", !blackCards.length);
+    const allLessonCards = (color) => state.lessons
+      .filter((lesson) => lesson.color === color)
+      .sort((left, right) => num(right.priority) - num(left.priority))
+      .map((lesson) => lessonCard(lesson));
+    const filteredCards = (color, branches) => state.repertoireFilter === "needs_work"
+      ? (color === "white" ? whiteLessons : blackLessons).map((lesson) => lessonCard(lesson))
+      : [
+          ...manualCards(color),
+          ...allLessonCards(color),
+          ...branches.map((branch) => branchCard(branch, branch._index)),
+        ];
+    const whiteCards = filteredCards("white", white);
+    const blackCards = filteredCards("black", black);
+    const whiteVisible = state.repertoireSide === "black" ? [] : whiteCards.slice(0, state.repertoireVisible);
+    const blackVisible = state.repertoireSide === "white" ? [] : blackCards.slice(0, state.repertoireVisible);
+    const whiteColumn = $("repertoireWhiteColumn");
+    const blackColumn = $("repertoireBlackColumn");
+    if (whiteColumn) whiteColumn.hidden = state.repertoireSide === "black";
+    if (blackColumn) blackColumn.hidden = state.repertoireSide === "white";
+    setHtml("repertoireMapWhite", whiteVisible.join("") || "No White positions match these filters.", !whiteVisible.length);
+    setHtml("repertoireMapBlack", blackVisible.join("") || "No Black positions match these filters.", !blackVisible.length);
+    const visibleTotal = whiteVisible.length + blackVisible.length;
+    const filteredTotal = (state.repertoireSide === "black" ? 0 : whiteCards.length)
+      + (state.repertoireSide === "white" ? 0 : blackCards.length);
+    setText("repertoireFilterSummary", `${count(visibleTotal)} of ${count(filteredTotal)} ${state.repertoireFilter === "needs_work" ? "needs-work" : "saved and imported"} positions shown.`);
+    qsa("[data-repertoire-filter]").forEach((button) => {
+      const active = button.dataset.repertoireFilter === state.repertoireFilter;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    qsa("[data-repertoire-side]").forEach((button) => {
+      const active = button.dataset.repertoireSide === state.repertoireSide;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    const showMore = $("repertoireShowMoreBtn");
+    if (showMore) {
+      const remaining = Math.max(0, filteredTotal - visibleTotal);
+      showMore.hidden = remaining === 0;
+      showMore.textContent = remaining ? `Show more positions (${count(remaining)} remaining)` : "All matching positions shown";
+    }
     const preview = state.selectedLesson || [...whiteLessons, ...blackLessons].sort((a, b) => b.priority - a.priority)[0];
     setHtml("previewPanel", preview ? lessonCard(preview) : "No exact-position lesson is available to preview.", !preview);
     const knownIds = new Set(state.reviews.filter((item) => item.result === "known" && item.lessonId).map((item) => item.lessonId));
@@ -1284,6 +1359,7 @@
       paths.slice(0, 3).map(escapeHtml).join("<br>"),
       fen.split(" ").slice(0, 2).join(" ")
     )).join("") || "No true FEN transpositions found in this import.", !transpositions.length);
+    renderTrainingLaunchpads();
   }
 
   function renderMoveTree() {
@@ -1444,6 +1520,7 @@
     renderTimeCalculator(sample);
     renderRecommendations(recentScore, accuracy, sample);
     renderSessions();
+    renderTrainingLaunchpads();
   }
 
   function summarizeModeAccuracy(mode) {
@@ -3244,6 +3321,26 @@
       save();
       renderProgress();
     }));
+    qsa("[data-repertoire-filter]").forEach((button) => button.addEventListener("click", () => {
+      state.repertoireFilter = button.dataset.repertoireFilter === "all" ? "all" : "needs_work";
+      state.repertoireVisible = 6;
+      renderRepertoire();
+    }));
+    qsa("[data-repertoire-side]").forEach((button) => button.addEventListener("click", () => {
+      const side = button.dataset.repertoireSide;
+      state.repertoireSide = ["white", "black"].includes(side) ? side : "all";
+      state.repertoireVisible = 6;
+      renderRepertoire();
+    }));
+    $("repertoireShowMoreBtn")?.addEventListener("click", () => {
+      state.repertoireVisible += 8;
+      renderRepertoire();
+    });
+    $("repertoireTrainNextBtn")?.addEventListener("click", launchNextTraining);
+    $("progressTrainNextBtn")?.addEventListener("click", launchNextTraining);
+    $("progressDeepDetails")?.addEventListener("toggle", (event) => {
+      if (event.currentTarget.open) requestAnimationFrame(() => renderProgress());
+    });
     qsa("[data-time-class-toggle], [data-time-class-all]").forEach((button) => {
       button.addEventListener("click", () => toggleTimeClass(button));
     });
@@ -3718,6 +3815,7 @@
       progressDurationSample,
       progressModeSample,
       squareAccessibilityLabel,
+      trainingNextTarget,
       workspaceCacheKey,
     });
   }

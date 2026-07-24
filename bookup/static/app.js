@@ -113,6 +113,15 @@ const el = {
   firstMoveBlack: document.getElementById("firstMoveBlack"),
   repertoireMapWhite: document.getElementById("repertoireMapWhite"),
   repertoireMapBlack: document.getElementById("repertoireMapBlack"),
+  repertoireWhiteColumn: document.getElementById("repertoireWhiteColumn"),
+  repertoireBlackColumn: document.getElementById("repertoireBlackColumn"),
+  repertoireFilterSummary: document.getElementById("repertoireFilterSummary"),
+  repertoireShowMore: document.getElementById("repertoireShowMoreBtn"),
+  repertoireTrainNext: document.getElementById("repertoireTrainNextBtn"),
+  progressTrainNext: document.getElementById("progressTrainNextBtn"),
+  repertoireQueueSummary: document.getElementById("repertoireQueueSummary"),
+  progressTrainingSummary: document.getElementById("progressTrainingSummary"),
+  progressDeepDetails: document.getElementById("progressDeepDetails"),
   healthDashboard: document.getElementById("healthDashboard"),
   progressStatus: document.getElementById("progressStatus"),
   progressRefresh: document.getElementById("progressRefreshBtn"),
@@ -316,6 +325,10 @@ const state = {
   smartTheoryTreeFocus: "all",
   smartTheoryTreeSearch: "",
   smartTheorySourceContext: null,
+  repertoireMap: { white: [], black: [] },
+  repertoireFilter: "needs_work",
+  repertoireSide: "all",
+  repertoireVisible: 6,
 };
 
 async function init() {
@@ -437,6 +450,33 @@ async function init() {
   el.progressModeButtons?.forEach((button) => {
     button.addEventListener("click", () => { void saveProgressMode(button.dataset.progressMode || "rapid"); });
   });
+  document.querySelectorAll("[data-repertoire-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.repertoireFilter = button.dataset.repertoireFilter === "all" ? "all" : "needs_work";
+      state.repertoireVisible = 6;
+      renderRepertoireMap(state.repertoireMap);
+    });
+  });
+  document.querySelectorAll("[data-repertoire-side]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.repertoireSide = ["white", "black"].includes(button.dataset.repertoireSide)
+        ? button.dataset.repertoireSide
+        : "all";
+      state.repertoireVisible = 6;
+      renderRepertoireMap(state.repertoireMap);
+    });
+  });
+  el.repertoireShowMore?.addEventListener("click", () => {
+    state.repertoireVisible += 8;
+    renderRepertoireMap(state.repertoireMap);
+  });
+  el.repertoireTrainNext?.addEventListener("click", launchNextTraining);
+  el.progressTrainNext?.addEventListener("click", launchNextTraining);
+  el.progressDeepDetails?.addEventListener("toggle", () => {
+    if (el.progressDeepDetails.open && state.progress) {
+      requestAnimationFrame(() => renderProgressCharts(state.progress?.charts || {}));
+    }
+  });
   [
     el.smartTheoryLichessStudyName,
     el.smartTheoryLichessStudyId,
@@ -521,6 +561,12 @@ async function init() {
     const makeRepertoire = makeRepertoireButton instanceof HTMLElement ? makeRepertoireButton.dataset.makeRepertoire : "";
     if (makeRepertoire) {
       void saveManualRepertoireMove(makeRepertoire);
+      return;
+    }
+    const manualTrainButton = target.closest("[data-train-manual-key]");
+    const manualKey = manualTrainButton instanceof HTMLElement ? manualTrainButton.dataset.trainManualKey : "";
+    if (manualKey && state.manualRepertoire[manualKey]) {
+      loadManualRepertoirePosition(manualKey, state.manualRepertoire[manualKey]);
       return;
     }
     const openFenButton = target.closest("[data-open-fen]");
@@ -2513,8 +2559,11 @@ function renderProgressCockpit(progress) {
   const profile = progress.profile;
   const mode = String(progress.mode || profile.mode || "rapid");
   el.progressModeButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.progressMode === mode);
+    const active = button.dataset.progressMode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
   });
+  renderTrainingLaunchpads();
   if (el.progressCustomGames) el.progressCustomGames.value = progress.projection?.custom_games || 538;
   const fetched = profile.fetched_at ? new Date(profile.fetched_at).toLocaleString() : "using saved fallback";
   const recent = profile.recent || {};
@@ -3033,15 +3082,44 @@ async function openFenOnAnalysisBoard(fen, label = "Analysis position") {
   await updateFreeAnalysisInsight();
 }
 
-function renderRepertoireMapColumn(node, items, emptyText) {
-  if (!items.length) {
-    node.className = "stack empty";
-    node.textContent = emptyText;
-    return;
-  }
-  node.className = "stack";
-  node.innerHTML = items
-    .map((item, index) => `
+function manualRepertoireSide(positionKey, entry) {
+  const explicit = String(entry?.player_color || entry?.playerColor || "").toLowerCase();
+  if (explicit === "white" || explicit === "black") return explicit;
+  const fen = String(entry?.position_fen || entry?.positionFen || entry?.fen || positionKey || START_FEN);
+  return sideToMove(fen) === "b" ? "black" : "white";
+}
+
+function renderManualRepertoireCard(positionKey, entry) {
+  const move = entry?.move_san || entry?.moveSan || entry?.san || entry?.move_uci || entry?.uci || "Saved move";
+  const label = entry?.line_label || entry?.lineLabel || entry?.opening_name || "Exact saved position";
+  return `
+    <article class="opening-family-card repertoire-node-card manual-repertoire-card">
+      <div class="opening-family-header">
+        <div>
+          <div class="opening-family-title">${escapeHtml(label)}</div>
+          <div class="tree-meta">Saved exact-position repertoire</div>
+        </div>
+        <div class="line-badge known">Saved</div>
+      </div>
+      <div class="line-note">Your saved move is <strong>${escapeHtml(move)}</strong>.</div>
+      <div class="chip-row">
+        <button class="launch-btn" type="button" data-train-manual-key="${escapeHtml(positionKey)}">Train saved move</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderRepertoireMapColumn(node, items, emptyText, color) {
+  const filtered = state.repertoireFilter === "needs_work"
+    ? items.filter((item) => item?.line_status === "needs_work" || state.manualNeedsWork.includes(item?.lesson_id))
+    : items;
+  const manual = state.repertoireFilter === "all"
+    ? Object.entries(state.manualRepertoire || {}).filter(([key, entry]) => manualRepertoireSide(key, entry) === color)
+    : [];
+  const total = filtered.length + manual.length;
+  const visible = [
+    ...manual.map(([key, entry]) => renderManualRepertoireCard(key, entry)),
+    ...filtered.map((item, index) => `
       <article class="opening-family-card repertoire-node-card">
         <div class="opening-family-header">
           <div>
@@ -3067,13 +3145,49 @@ function renderRepertoireMapColumn(node, items, emptyText) {
           ${item.position_identifier ? `<a class="launch-btn" href="${item.position_identifier}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.position_identifier_label || "Lichess analysis")}</a>` : ""}
         </div>
       </article>
-    `)
-    .join("");
+    `),
+  ].slice(0, state.repertoireVisible);
+  if (!visible.length) {
+    node.className = "stack empty";
+    node.textContent = emptyText;
+    return { total, visible: 0 };
+  }
+  node.className = "stack";
+  node.innerHTML = visible.join("");
+  return { total, visible: visible.length };
 }
 
 function renderRepertoireMap(mapByColor) {
-  renderRepertoireMapColumn(el.repertoireMapWhite, mapByColor.white || [], "No white repertoire positions yet.");
-  renderRepertoireMapColumn(el.repertoireMapBlack, mapByColor.black || [], "No black repertoire positions yet.");
+  state.repertoireMap = mapByColor || { white: [], black: [] };
+  if (el.repertoireWhiteColumn) el.repertoireWhiteColumn.hidden = state.repertoireSide === "black";
+  if (el.repertoireBlackColumn) el.repertoireBlackColumn.hidden = state.repertoireSide === "white";
+  const white = state.repertoireSide === "black"
+    ? { total: 0, visible: 0 }
+    : renderRepertoireMapColumn(el.repertoireMapWhite, state.repertoireMap.white || [], "No White lines match these filters.", "white");
+  const black = state.repertoireSide === "white"
+    ? { total: 0, visible: 0 }
+    : renderRepertoireMapColumn(el.repertoireMapBlack, state.repertoireMap.black || [], "No Black lines match these filters.", "black");
+  const total = white.total + black.total;
+  const visible = white.visible + black.visible;
+  document.querySelectorAll("[data-repertoire-filter]").forEach((button) => {
+    const active = button.dataset.repertoireFilter === state.repertoireFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-repertoire-side]").forEach((button) => {
+    const active = button.dataset.repertoireSide === state.repertoireSide;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  if (el.repertoireFilterSummary) {
+    el.repertoireFilterSummary.textContent = `${visible} of ${total} ${state.repertoireFilter === "needs_work" ? "needs-work" : "saved and imported"} lines shown.`;
+  }
+  if (el.repertoireShowMore) {
+    const remaining = Math.max(0, total - visible);
+    el.repertoireShowMore.hidden = remaining === 0;
+    el.repertoireShowMore.textContent = remaining ? `Show more positions (${remaining} remaining)` : "All matching positions shown";
+  }
+  renderTrainingLaunchpads();
 }
 
 function clearPreview() {
@@ -4125,6 +4239,78 @@ function renderQueue() {
     state.queueNew,
     "No fresh lines are waiting right now."
   );
+  renderTrainingLaunchpads();
+}
+
+function desktopTrainingNextTarget(
+  queueDue = state.queueDue,
+  queueNew = state.queueNew,
+  manualRepertoire = state.manualRepertoire,
+) {
+  const nextLesson = [...(queueDue || []), ...(queueNew || [])][0];
+  if (nextLesson) return { type: "lesson", item: nextLesson };
+  const manual = Object.entries(manualRepertoire || {})
+    .filter(([, entry]) => entry?.move_uci || entry?.uci)
+    .sort(([, left], [, right]) => String(right?.saved_at || "").localeCompare(String(left?.saved_at || "")))[0];
+  return manual ? { type: "manual", key: manual[0], item: manual[1] } : null;
+}
+
+function renderTrainingLaunchpads() {
+  const manualCount = Object.keys(state.manualRepertoire || {}).length;
+  const dueNow = state.queueDue.filter((item) => item.dueSoon).length;
+  const total = state.queueDue.length + state.queueNew.length;
+  const target = desktopTrainingNextTarget();
+  const summary = target
+    ? `${dueNow} due now · ${total} trainable lines · ${manualCount} exact moves saved.`
+    : "Build a repertoire or save an exact-position move to create your training queue.";
+  [el.repertoireQueueSummary, el.progressTrainingSummary].forEach((node) => {
+    if (node) node.textContent = summary;
+  });
+  [el.repertoireTrainNext, el.progressTrainNext].forEach((button) => {
+    if (!button) return;
+    button.disabled = !target;
+    button.textContent = target?.type === "manual" ? "Train saved move" : "Train next";
+  });
+}
+
+function loadManualRepertoirePosition(positionKey, entry) {
+  if (!entry) return;
+  const startFen = String(entry.position_fen || entry.positionFen || entry.fen || positionKey || START_FEN);
+  const moveUci = String(entry.move_uci || entry.uci || "").trim();
+  if (!moveUci) return;
+  const lessonId = String(entry.lesson_id || `manual:${positionKey}`);
+  const color = manualRepertoireSide(positionKey, entry);
+  const lesson = {
+    lesson_id: lessonId,
+    color,
+    player_color: color,
+    line_start_fen: startFen,
+    position_fen: startFen,
+    training_line_uci: [moveUci],
+    training_line_san: String(entry.move_san || entry.san || moveUci),
+    recommended_move_uci: moveUci,
+    best_reply_uci: moveUci,
+    recommended_move: String(entry.move_san || entry.san || moveUci),
+    best_reply: String(entry.move_san || entry.san || moveUci),
+    line_label: String(entry.line_label || entry.opening_name || "Saved repertoire position"),
+    opening_name: String(entry.opening_name || "Saved repertoire"),
+    line_status: "new",
+    frequency: 1,
+    priority: 1,
+    memory_score: 0,
+  };
+  state.lessonMap[lessonId] = lesson;
+  loadLessonById(lessonId);
+}
+
+function launchNextTraining() {
+  const target = desktopTrainingNextTarget();
+  if (!target) {
+    if (el.progressStatus) el.progressStatus.textContent = "Build a repertoire or save an exact-position move before starting training.";
+    return;
+  }
+  if (target.type === "manual") loadManualRepertoirePosition(target.key, target.item);
+  else loadLessonById(target.item.lesson_id);
 }
 
 function currentLessonId() {

@@ -8,7 +8,7 @@
   <meta name="description" content="Bookup in the browser: import public games, find repeated best-move misses, train exact positions, generate theory, and review progress locally.">
   <link rel="icon" href="data:,">
   <link rel="preload" href="vendor/chess.min.js" as="script">
-  <link rel="stylesheet" href="styles.min.css?v=9">
+  <link rel="stylesheet" href="styles.min.css?v=10">
   <link rel="stylesheet" href="product-shell.css?v=15">
 </head>
 <body>
@@ -200,6 +200,15 @@
     </section>
 
     <section id="workspace-panel-repertoire-map" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-repertoire-map" data-tab-panel="repertoire-map" hidden>
+      <section class="section-block training-launchpad" aria-labelledby="repertoireTrainingTitle">
+        <div>
+          <div class="section-label">Today’s Queue</div>
+          <h2 id="repertoireTrainingTitle" class="section-title">Train the next position, then browse</h2>
+          <p id="repertoireQueueSummary" class="summary-copy" role="status" aria-live="polite" aria-atomic="true">Import games or save a repertoire move to build your training queue.</p>
+        </div>
+        <button id="repertoireTrainNextBtn" class="primary-btn training-next-btn" type="button">Train next</button>
+      </section>
+
       <section class="section-block">
         <div class="section-label">Health Dashboard</div>
         <h2 class="section-title">What needs attention right now</h2>
@@ -207,36 +216,32 @@
       </section>
 
       <section class="section-block">
-        <div class="section-label">First Moves</div>
-        <h2 class="section-title">How your repertoire starts</h2>
-        <div class="split-grid">
-          <article class="card">
-            <h3>When You Play White</h3>
-            <p class="line-note">Your first move.</p>
-            <div id="firstMoveWhite" class="stack empty">No white first-move data yet.</div>
-          </article>
-          <article class="card">
-            <h3>When You Play Black</h3>
-            <p class="line-note">What your opponent opens with.</p>
-            <div id="firstMoveBlack" class="stack empty">No black first-move data yet.</div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-block">
         <div class="section-label">Repertoire Map</div>
         <h2 class="section-title">Positions and branches you actually reach</h2>
-        <div class="split-grid">
-          <article class="card">
+        <div class="repertoire-toolbar">
+          <div class="filter-group" role="group" aria-label="Repertoire status">
+            <button class="filter-chip active" type="button" aria-pressed="true" data-repertoire-filter="needs_work">Needs work</button>
+            <button class="filter-chip" type="button" aria-pressed="false" data-repertoire-filter="all">All</button>
+          </div>
+          <div class="filter-group" role="group" aria-label="Repertoire side">
+            <button class="filter-chip active" type="button" aria-pressed="true" data-repertoire-side="all">Both sides</button>
+            <button class="filter-chip" type="button" aria-pressed="false" data-repertoire-side="white">White</button>
+            <button class="filter-chip" type="button" aria-pressed="false" data-repertoire-side="black">Black</button>
+          </div>
+          <span id="repertoireFilterSummary" class="filter-summary" role="status" aria-live="polite">Showing positions that need work.</span>
+        </div>
+        <div class="split-grid repertoire-results-grid">
+          <article id="repertoireWhiteColumn" class="card">
             <h3>White repertoire</h3>
             <div id="repertoireMapWhite" class="stack empty">No white repertoire positions yet.</div>
           </article>
-          <article class="card">
+          <article id="repertoireBlackColumn" class="card">
             <h3>Your replies as Black</h3>
             <p class="line-note">Grouped by the first move your opponent played.</p>
             <div id="repertoireMapBlack" class="stack empty">No black repertoire positions yet.</div>
           </article>
         </div>
+        <button id="repertoireShowMoreBtn" class="ghost-btn repertoire-show-more" type="button" aria-controls="repertoireMapWhite repertoireMapBlack" hidden>Show more positions</button>
       </section>
 
       <section class="section-block">
@@ -245,26 +250,48 @@
         <div id="previewPanel" class="card preview-panel empty">Use Work on line on any repertoire card to open that exact branch in the Trainer.</div>
       </section>
 
-      <section class="section-block">
-        <div class="section-label">Known Line Archive</div>
-        <h2 class="section-title">Lines you already know well enough to keep out of the urgent queue</h2>
-        <div id="knownArchiveList" class="stack empty">Complete clean reps to build the known-lines archive.</div>
-      </section>
+      <details class="section-disclosure repertoire-library">
+        <summary><span>Browse full repertoire library</span><small>Starting moves, known lines, transpositions, and the deep tree</small></summary>
+        <div class="disclosure-body">
+          <section class="section-block">
+            <div class="section-label">First Moves</div>
+            <h2 class="section-title">How your repertoire starts</h2>
+            <div class="split-grid">
+              <article class="card">
+                <h3>When You Play White</h3>
+                <p class="line-note">Your first move.</p>
+                <div id="firstMoveWhite" class="stack empty">No white first-move data yet.</div>
+              </article>
+              <article class="card">
+                <h3>When You Play Black</h3>
+                <p class="line-note">What your opponent opens with.</p>
+                <div id="firstMoveBlack" class="stack empty">No black first-move data yet.</div>
+              </article>
+            </div>
+          </section>
 
-      <section class="section-block">
-        <div class="section-label">Transpositions</div>
-        <h2 class="section-title">Different paths into the same position</h2>
-        <div id="transpositionList" class="stack empty">Import games to detect shared positions and transpositions.</div>
-      </section>
+          <section class="section-block">
+            <div class="section-label">Known Line Archive</div>
+            <h2 class="section-title">Lines you already know well enough to keep out of the urgent queue</h2>
+            <div id="knownArchiveList" class="stack empty">Complete clean reps to build the known-lines archive.</div>
+          </section>
 
-      <section class="section-block product-repertoire-tree">
-        <div class="section-label">Repertoire Tree</div>
-        <h2 class="section-title">Navigate the lines from your imported games</h2>
-        <article class="card">
-          <p class="summary-copy">This exact-position tree separates games where you played White from games where you played Black. Select any branch to open it on the training board.</p>
-          <div id="gameMoveTree" class="move-tree empty">Import games to build your move tree.</div>
-        </article>
-      </section>
+          <section class="section-block">
+            <div class="section-label">Transpositions</div>
+            <h2 class="section-title">Different paths into the same position</h2>
+            <div id="transpositionList" class="stack empty">Import games to detect shared positions and transpositions.</div>
+          </section>
+
+          <section class="section-block product-repertoire-tree">
+            <div class="section-label">Repertoire Tree</div>
+            <h2 class="section-title">Navigate the lines from your imported games</h2>
+            <article class="card">
+              <p class="summary-copy">This exact-position tree separates games where you played White from games where you played Black. Select any branch to open it on the training board.</p>
+              <div id="gameMoveTree" class="move-tree empty">Import games to build your move tree.</div>
+            </article>
+          </section>
+        </div>
+      </details>
     </section>
 
     <section id="workspace-panel-stats" class="workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-stats" data-tab-panel="stats" hidden>
@@ -284,7 +311,18 @@
           </div>
         </div>
         <div id="progressStatus" class="line-note" role="status" aria-live="polite" aria-atomic="true">Progress tracker will load with your saved Chess.com username.</div>
+        <div class="training-launchpad progress-training-launchpad" aria-labelledby="progressTrainingTitle">
+          <div>
+            <div class="section-label">Next Study Action</div>
+            <h3 id="progressTrainingTitle">Turn this progress into one clean repetition</h3>
+            <p id="progressTrainingSummary" class="summary-copy" role="status" aria-live="polite" aria-atomic="true">Your next exact-position review will appear here.</p>
+          </div>
+          <button id="progressTrainNextBtn" class="primary-btn training-next-btn" type="button">Train next</button>
+        </div>
         <div id="progressMetricGrid" class="progress-metric-grid-v2"></div>
+        <details id="progressDeepDetails" class="section-disclosure progress-deep-disclosure">
+          <summary><span>Open charts and full progress tools</span><small>Ratings, accuracy, goals, projections, and saved sessions</small></summary>
+          <div class="disclosure-body">
         <div class="progress-primary-grid">
           <article class="progress-data-panel progress-rating-panel">
             <div class="progress-panel-head">
@@ -408,6 +446,8 @@
             <div id="progressSessionList" class="stack empty">No local progress sessions yet.</div>
           </article>
         </div>
+          </div>
+        </details>
       </section>
 
     </section>
@@ -585,7 +625,7 @@
   <script defer src="vendor/chess.min.js"></script>
   <script defer src="position-analysis.min.js?v=8"></script>
   <script defer src="smart-theory-engine.min.js?v=2"></script>
-  <script defer src="web-app.min.js?v=12"></script>
+  <script defer src="web-app.min.js?v=13"></script>
   <script defer src="product-shell.js?v=14"></script>
 </body>
 </html>
