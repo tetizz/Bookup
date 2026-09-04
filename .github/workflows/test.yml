@@ -77,6 +77,7 @@ jobs:
 
       - name: Run browser regression packs
         run: |
+          node scripts/astra_interface_smoke.cjs
           node scripts/training_first_workflow_smoke.cjs
           node scripts/web_import_regression.cjs
           node scripts/web_smart_theory_schema_smoke.cjs

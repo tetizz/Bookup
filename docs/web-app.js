@@ -509,6 +509,13 @@
     if (node) node.dataset.tone = tone;
   }
 
+  function fieldStatus(id, message, tone = "") {
+    const node = $(id);
+    if (!node) return;
+    node.textContent = message;
+    node.dataset.tone = tone;
+  }
+
   function workspaceNotice(message = "", tone = "") {
     const node = $("workspaceNotice");
     if (!node) return;
@@ -688,6 +695,12 @@
     if (fill) {
       fill.classList.toggle("indeterminate", !total);
       fill.style.inlineSize = total ? `${percentDone}%` : "35%";
+    }
+    const track = $("progressTrack");
+    if (track) {
+      track.setAttribute("aria-valuetext", total ? `${percentDone}% complete` : (message || "Working"));
+      if (total) track.setAttribute("aria-valuenow", String(percentDone));
+      else track.removeAttribute("aria-valuenow");
     }
     if (message) status(message);
   }
@@ -986,15 +999,20 @@
     buttons.forEach((button) => { button.disabled = true; });
     const stopButton = $("stopImportBtn");
     if (stopButton) stopButton.hidden = false;
-    const username = String($("usernameInput")?.value || $("mainUsernameInput")?.value || state.username).trim();
+    const usernameField = $("usernameInput") || $("mainUsernameInput");
+    const username = String(usernameField ? usernameField.value : state.username).trim();
     if (!username) {
       status("Enter a Chess.com username.", "error");
+      const usernameInput = $("mainUsernameInput");
+      usernameInput?.setAttribute("aria-invalid", "true");
+      usernameInput?.focus();
       state.loading = false;
       document.body.classList.remove("is-loading");
       buttons.forEach((item) => { item.disabled = false; });
       if (stopButton) stopButton.hidden = true;
       return;
     }
+    $("mainUsernameInput")?.removeAttribute("aria-invalid");
     const nextMaxGames = clamp(num($("maxGamesInput")?.value, 240), 1, 20000);
     let nextTimeClasses;
     try {
@@ -1066,6 +1084,11 @@
         : (error.message || "Bookup could not load public games.");
       status(stopped ? "Import stopped. Your previous offline cache is still intact." : message, stopped ? "" : "error");
       setText("progressLabel", stopped ? "Stopped" : "Error");
+      const track = $("progressTrack");
+      if (track) {
+        track.setAttribute("aria-valuenow", "0");
+        track.setAttribute("aria-valuetext", stopped ? "Import stopped" : "Import failed");
+      }
       const fill = $("progressFill");
       if (fill) {
         fill.classList.remove("indeterminate");
@@ -1426,6 +1449,22 @@
       return;
     }
     syncTimeClassToggleState([...selected]);
+  }
+
+  function syncImportScope() {
+    const allGames = Boolean($("importAllGamesInput")?.checked);
+    const maxGames = $("maxGamesInput");
+    if (!maxGames) return;
+    maxGames.disabled = allGames;
+    maxGames.setAttribute("aria-disabled", allGames ? "true" : "false");
+    syncImportOptionsSummary();
+  }
+
+  function syncImportOptionsSummary() {
+    const allGames = Boolean($("importAllGamesInput")?.checked);
+    const limit = clamp(num($("maxGamesInput")?.value, state.settings.maxGames || 240), 1, 20000);
+    const strength = $("thinkTimeInput")?.selectedOptions?.[0]?.textContent?.toLowerCase() || "balanced";
+    setText("importOptionsSummary", `${allGames ? "All public games" : `${limit} games`} · ${strength} analysis`);
   }
 
   function renderProgress() {
@@ -3211,11 +3250,13 @@
     state.tabFrame = requestAnimationFrame(() => {
       state.tabFrame = 0;
       if (state.activeTab === name) renderTab(name);
+      if (!options.focusPanel) {
+        requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
+      }
       if (options.focusPanel && name === "trainer") {
         focusBoardSquare(state.trainer.focusedSquare);
       }
     });
-    window.scrollTo({ top: document.querySelector(".workspace-tabs")?.offsetTop || 0, behavior: "auto" });
   }
 
   function splitPgnGames(text) {
@@ -3371,12 +3412,17 @@
     $("stopImportBtn")?.addEventListener("click", () => state.importController?.abort());
     $("mainUsernameInput")?.addEventListener("input", (event) => {
       if ($("usernameInput")) $("usernameInput").value = event.currentTarget.value;
+      event.currentTarget.removeAttribute("aria-invalid");
     });
     $("usernameInput")?.addEventListener("input", (event) => {
       if ($("mainUsernameInput")) $("mainUsernameInput").value = event.currentTarget.value;
     });
+    $("importAllGamesInput")?.addEventListener("change", syncImportScope);
+    $("maxGamesInput")?.addEventListener("input", syncImportOptionsSummary);
+    $("thinkTimeInput")?.addEventListener("change", syncImportOptionsSummary);
     $("saveSetupBtn")?.addEventListener("click", () => {
-      const nextUsername = String($("usernameInput")?.value || state.username).trim();
+      const usernameField = $("usernameInput") || $("mainUsernameInput");
+      const nextUsername = String(usernameField ? usernameField.value : state.username).trim();
       if (userWorkspaceKey(nextUsername) !== userWorkspaceKey(state.username)) {
         stashUserWorkspace(state.username);
         applyUserWorkspace(nextUsername);
@@ -3404,6 +3450,7 @@
       location.reload();
     });
     $("reclassifyFreshBtn")?.addEventListener("click", () => {
+      if (!confirm("Reset all Bookup position-review history on this device? Imported games and engine lessons will stay available.")) return;
       state.reviews = [];
       state.branches = buildBranches(state.games);
       markDataDirty();
@@ -3415,20 +3462,20 @@
       state.importController = new AbortController();
       try {
         const report = await importPgnText($("pgnImportInput")?.value, { source: "Local PGN", signal: state.importController.signal });
-        setText("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`);
-      } catch (error) { setText("pgnImportStatus", error.name === "AbortError" ? "Import stopped." : error.message); }
+        fieldStatus("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`, "success");
+      } catch (error) { fieldStatus("pgnImportStatus", error.name === "AbortError" ? "Import stopped." : error.message, error.name === "AbortError" ? "" : "error"); }
       finally { state.importController = null; }
     });
     $("importChessnutBtn")?.addEventListener("click", async () => {
       const file = $("chessnutDbPathInput")?.files?.[0];
-      if (!file) { setText("chessnutImportStatus", "Select a PGN export first."); return; }
+      if (!file) { fieldStatus("chessnutImportStatus", "Select a PGN export first.", "error"); return; }
       try {
         const report = await importPgnText(await file.text(), {
           source: "NewChessnut PGN",
           playerColor: $("chessnutPlayerColorInput")?.value || "white",
         });
-        setText("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`);
-      } catch (error) { setText("chessnutImportStatus", error.message); }
+        fieldStatus("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`, "success");
+      } catch (error) { fieldStatus("chessnutImportStatus", error.message, "error"); }
     });
     $("trainerResetBtn")?.addEventListener("click", () => {
       if (state.selectedLesson && state.manualRepertoire[fenKey(state.selectedLesson.decisionFen)]?.id === state.selectedLesson.lessonId) {
@@ -3767,6 +3814,7 @@
     Object.entries(defaults).forEach(([id, value]) => { if ($(id)) $(id).value = String(value); });
     if ($("importAllGamesInput")) $("importAllGamesInput").checked = Boolean(state.settings.importAllGames);
     if ($("autoImportStartupInput")) $("autoImportStartupInput").checked = Boolean(state.settings.autoImportStartup);
+    syncImportScope();
     [
       ["smartTheoryIncludeRare", "includeRare"],
       ["smartTheoryIncludeMistakes", "includeMistakes"],

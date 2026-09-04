@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "bookup-";
-const CACHE_NAME = `${CACHE_PREFIX}shell-v12`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-v14`;
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -73,15 +73,23 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  event.respondWith(
-    fetch(event.request).then((response) => {
-      if (response.ok && response.type === "basic") {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-      }
-      return response;
-    }).catch(() => caches.match(event.request).then((cached) => (
-      cached || caches.match(event.request, { ignoreSearch: true })
-    )))
-  );
+  // Normalize cache-busting query strings to one key so a refreshed asset
+  // replaces the install-time entry instead of competing with it forever.
+  const cacheKey = `${requestUrl.origin}${requestUrl.pathname}`;
+  const cached = caches.match(cacheKey);
+  const update = fetch(event.request).then(async (response) => {
+    if (response.ok && response.type === "basic") {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(cacheKey, response.clone());
+    }
+    return response;
+  });
+
+  event.waitUntil(update.then(() => undefined).catch(() => undefined));
+  event.respondWith(cached.then((match) => match || update.catch(() => (
+    new Response("Bookup could not load this local asset.", {
+      status: 503,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    })
+  ))));
 });
