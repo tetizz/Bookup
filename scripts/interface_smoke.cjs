@@ -20,8 +20,9 @@ const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
 check("html_ids_are_unique", duplicateIds.length === 0, duplicateIds.join(", "));
 check("generated_html_mirror_matches", html === mirrorHtml);
 check(
-  "static_shell_header_has_h1",
-  /<h1>Bookup<\/h1>/.test(html) && /class="product-header"/.test(html),
+  "original_header_keeps_an_accessible_heading",
+  /<h1>Find the move you keep missing\.<\/h1>/.test(html)
+    && shell.includes('role="heading" aria-level="1"'),
 );
 check(
   "skip_link_targets_workspace",
@@ -87,15 +88,12 @@ check(
     && shell.includes("scheduleBoardSize"),
 );
 check(
-  "shell_css_has_no_ambient_motion_or_blur",
-  !shellCss.includes("productAmbientGrid")
-    && !shellCss.includes("productSignalDrift")
-    && !shellCss.includes("backdrop-filter"),
+  "ambient_motion_stays_disabled",
+  shellCss.includes("body, body::before, body::after { animation: none; }"),
 );
 check(
-  "shell_css_is_within_transfer_budget",
-  fs.statSync(shellCssPath).size < 65000,
-  `${fs.statSync(shellCssPath).size} bytes`,
+  "original_theme_is_restored",
+  shellCss.includes('--product-bg: #080d14') && shell.includes('unified-product-v9'),
 );
 check(
   "phone_shell_can_shrink",
@@ -110,11 +108,11 @@ check(
 );
 check(
   "service_worker_uses_fast_repeat_asset_path",
-  sw.includes("shell-v14")
+  sw.includes("shell-v15")
     && sw.includes("const cacheKey = `${requestUrl.origin}${requestUrl.pathname}`")
     && sw.includes("caches.match(cacheKey)")
     && sw.includes("cache.put(cacheKey")
     && sw.includes("event.waitUntil(update"),
 );
 
-console.log("ALL ASTRA INTERFACE CHECKS PASSED");
+console.log("ALL INTERFACE CHECKS PASSED");

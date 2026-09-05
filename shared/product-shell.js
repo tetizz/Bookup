@@ -2,11 +2,11 @@
   "use strict";
 
   const WORKSPACES = [
-    { target: "setup", label: "Setup", mobileLabel: "Setup", hint: "Import and build a plan" },
-    { target: "repertoire-map", label: "Repertoire", mobileLabel: "Lines", hint: "Review lines and coverage" },
-    { target: "trainer", label: "Train", mobileLabel: "Train", hint: "Practice the next position" },
-    { target: "stats", label: "Progress", mobileLabel: "Progress", hint: "Turn results into work" },
-    { target: "smart-theory", label: "Smart Theory", mobileLabel: "Theory", hint: "Build a legal variation tree" },
+    { target: "setup", label: "Setup" },
+    { target: "repertoire-map", label: "Repertoire" },
+    { target: "trainer", label: "Train" },
+    { target: "stats", label: "Progress" },
+    { target: "smart-theory", label: "Smart Theory" },
   ];
   const HOME_URL = "https://tetizz.github.io/Home/";
   let boardFrame = 0;
@@ -18,36 +18,32 @@
   function compactHeader() {
     const header = document.querySelector(".topbar");
     if (!header || header.querySelector(".product-header")) return;
-
     const liveSummary = {
       summaryPositions: byId("summaryPositions"),
       summaryNeedsWork: byId("summaryNeedsWork"),
       summaryQueue: byId("summaryQueue"),
     };
-
     header.innerHTML = `
       <div class="product-header">
         <div class="product-brand">
           <div class="product-mark" aria-hidden="true">B</div>
           <div class="product-brand-copy">
-            <span class="product-kicker">Opening study desk</span>
-            <h1>Bookup</h1>
-            <p>Your games, one repertoire, one training plan</p>
+            <strong role="heading" aria-level="1">Bookup</strong>
+            <span>Your games, one repertoire, one training plan</span>
           </div>
         </div>
         <div class="product-header-actions">
-          <dl class="product-header-stats" aria-label="Workspace summary">
-            <div class="product-header-stat"><dt>Positions</dt><dd data-summary-slot="summaryPositions">--</dd></div>
-            <div class="product-header-stat"><dt>Needs work</dt><dd data-summary-slot="summaryNeedsWork">--</dd></div>
-            <div class="product-header-stat"><dt>Queue</dt><dd data-summary-slot="summaryQueue">--</dd></div>
-          </dl>
+          <div class="product-header-stats" aria-label="Workspace summary">
+            <div class="product-header-stat"><span>Positions</span><strong data-summary-slot="summaryPositions">--</strong></div>
+            <div class="product-header-stat"><span>Needs work</span><strong data-summary-slot="summaryNeedsWork">--</strong></div>
+            <div class="product-header-stat"><span>Queue</span><strong data-summary-slot="summaryQueue">--</strong></div>
+          </div>
           <a class="product-home-button" href="${HOME_URL}" aria-label="Open tetizz chess projects home">
             <span class="product-home-button__spark" aria-hidden="true"></span>
             <span>Home</span>
           </a>
         </div>
       </div>`;
-
     Object.entries(liveSummary).forEach(([id, node]) => {
       const slot = header.querySelector(`[data-summary-slot="${id}"]`);
       if (slot && node) slot.replaceWith(node);
@@ -62,14 +58,11 @@
       [...nav.querySelectorAll("[data-tab-target]")].map((button) => [button.dataset.tabTarget, button])
     );
 
-    WORKSPACES.forEach(({ target, label, mobileLabel, hint }, index) => {
+    WORKSPACES.forEach(({ target, label }) => {
       const button = buttons.get(target);
       if (!button) return;
-      button.setAttribute("aria-label", `${label}: ${hint}`);
-      button.innerHTML = `
-        <span class="workspace-tab__index" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
-        <span class="workspace-tab__copy"><strong>${label}</strong><small>${hint}</small></span>
-        <span class="workspace-tab__mobile" aria-hidden="true">${mobileLabel}</span>`;
+      button.textContent = label;
+      button.setAttribute("aria-label", label);
       nav.appendChild(button);
     });
 
@@ -103,13 +96,9 @@
       || document.querySelector('[data-tab-panel="smart-theory"].active')
       || document.querySelector(".workspace-panel.active");
     if (!panel) return;
-
-    const compact = window.innerWidth <= 620;
-    const viewportAllowance = Math.max(180, window.innerHeight - (compact ? 210 : 176));
-    const panelWidth = panel.getBoundingClientRect().width;
-    const sidePanelAllowance = window.innerWidth > 1180 ? 452 : 0;
-    const available = Math.max(180, panelWidth - sidePanelAllowance - (compact ? 18 : 28));
-    const size = Math.floor(Math.min(720, viewportAllowance, available));
+    const viewportAllowance = Math.max(180, window.innerHeight - (window.innerWidth <= 620 ? 230 : 190));
+    const available = Math.max(180, panel.getBoundingClientRect().width - (window.innerWidth > 1180 ? 460 : 24));
+    const size = Math.floor(Math.min(760, viewportAllowance, available));
     document.documentElement.style.setProperty("--bookup-board-size", `${size}px`);
   }
 
@@ -132,7 +121,7 @@
   function annotateEdition() {
     const isWeb = Boolean(document.querySelector('script[src*="web-app"]'));
     document.documentElement.dataset.bookupEdition = isWeb ? "web" : "desktop";
-    document.documentElement.dataset.bookupUi = "astra-study-desk-v10";
+    document.documentElement.dataset.bookupUi = "unified-product-v9";
   }
 
   function observeLayout() {
@@ -140,9 +129,8 @@
     if ("ResizeObserver" in window && shell) {
       const observer = new ResizeObserver(scheduleBoardSize);
       observer.observe(shell);
-    } else {
-      window.addEventListener("resize", scheduleBoardSize, { passive: true });
     }
+    window.addEventListener("resize", scheduleBoardSize, { passive: true });
 
     const orientationQuery = window.matchMedia("(max-width: 1180px)");
     orientationQuery.addEventListener?.("change", () => {
