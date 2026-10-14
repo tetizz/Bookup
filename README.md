@@ -278,6 +278,19 @@ The current product direction is:
 - legal, validated variation trees that keep repertoire moves when they are good and make engine corrections when they are not
 - a legal-move study board that helps you work on the lines that matter most
 
+## Browser Release Provenance
+
+The public browser release selects tracked files from `docs`, separately from
+the desktop/backend application. Its minified app is built with esbuild 0.28.1,
+`--minify --target=es2020`; CI checks that bundle and runs the archive-batch
+regression alongside the existing browser checks.
+
+The prepared Windows release has 17 text files with CRLF line endings while
+their Git blobs use LF. They match after CRLF-to-LF normalization, not as raw
+bytes. The release selection records the exact staged byte counts and SHA-256
+hashes; those staged hashes identify what is published. Source revision alone
+does not attest the raw uploaded bytes. Binary assets remain unchanged.
+
 ## Next Improvements
 
 - background analysis for new positions before you open them

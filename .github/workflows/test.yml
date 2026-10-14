@@ -56,6 +56,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The archive parity fixture reads the pinned pre-change revision.
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -80,6 +83,7 @@ jobs:
           node scripts/interface_smoke.cjs
           node scripts/training_first_workflow_smoke.cjs
           node scripts/web_import_regression.cjs
+          node scripts/web_archive_batch_regression.cjs
           node scripts/web_smart_theory_schema_smoke.cjs
           node scripts/web_smart_theory_generation_smoke.cjs
           node scripts/web_trainer_accessibility_smoke.cjs
