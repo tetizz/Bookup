@@ -108,7 +108,7 @@ check(
 );
 check(
   "service_worker_uses_fast_repeat_asset_path",
-  sw.includes("shell-v17")
+  sw.includes("shell-v18")
     && sw.includes("const cacheKey = `${requestUrl.origin}${requestUrl.pathname}`")
     && sw.includes("caches.match(cacheKey)")
     && sw.includes("cache.put(cacheKey")

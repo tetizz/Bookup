@@ -1199,7 +1199,7 @@
   function lessonIsDue(lesson) {
     if (!lessonNeedsWork(lesson)) return false;
     const review = latestLessonReview(lesson.lessonId);
-    return !review || review.result === "missed" || String(review.due || today()) <= today();
+    return !review || String(review.due || today()) <= today();
   }
 
   function dueLessons() {
@@ -2196,7 +2196,7 @@
     if (boardHadFocus && document.activeElement !== state.trainer.boardNodes.get(focusedSquare)) {
       state.trainer.boardNodes.get(focusedSquare)?.focus({ preventScroll: true });
     }
-    setText("studyEvalScore", cloudScore());
+    setText("studyEvalScore", correctionConcealed() ? "—" : cloudScore());
     const score = cloudCp();
     const whiteShare = clamp(50 + score / 16, 5, 95);
     const fill = $("studyEvalFill");
@@ -2837,9 +2837,28 @@
     }
   }
 
+  function refreshPositionContext(fen) {
+    if (state.positionContextFen !== fen) {
+      setText("realignStatus", "Generate a plan for the current board.");
+      setHtml("realignOutput", "No plan generated for this position.", true);
+      state.positionContextFen = fen;
+    }
+    state.database = localPositionData(fen);
+    const total = num(state.database.white) + num(state.database.draws) + num(state.database.black);
+    setText("studyOpeningMeta", `Your imported games · ${count(total)} matching games`);
+    setText("studyDatabaseMeta", `${count(total)} games · local corpus`);
+    setHtml("studyPositionLinks", `<a class="ghost-btn" href="https://lichess.org/analysis/standard/${escapeHtml(fen.replaceAll(" ", "_"))}" target="_blank" rel="noopener">Open position in Lichess</a>`);
+    if (correctionConcealed()) {
+      setText("studyEvalCaption", "Analysis appears after your attempt");
+      setText("studyEvalScore", "—");
+      if ($("studyEvalFill")) $("studyEvalFill").style.height = "50%";
+    }
+  }
+
   async function requestPositionData() {
     const fen = state.trainer.chess.fen();
     const requestId = ++state.positionRequestId;
+    refreshPositionContext(fen);
     if (correctionConcealed()) { concealCorrection(); return; }
     setText("studyOpeningMeta", "Loading imported-game database and public cloud evaluation...");
     setText("studyDatabaseMeta", "Loading");
@@ -3932,7 +3951,7 @@
 
   if (window.__BOOKUP_TEST__) {
     window.BookupTrainerTestHooks = Object.freeze({
-      state, openLesson, clickSquare, playOpponentMoves, renderPositionData, renderTrainerArrows, requestPositionData, lessonCard, lessonLossText, lineScore, finishTrainer,
+      generateRealignPlan, lessonIsDue, state, openLesson, clickSquare, playOpponentMoves, renderPositionData, renderTrainerArrows, requestPositionData, lessonCard, lessonLossText, lineScore, finishTrainer,
       boardAxes,
       colorForTurn,
       flushSave,
