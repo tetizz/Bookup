@@ -533,6 +533,7 @@
 
   async function fetchJson(url, options = {}, timeoutMs = 18000, retries = 2) {
     const externalSignal = options.signal;
+    if (externalSignal?.aborted) throw new DOMException("Import stopped.", "AbortError");
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       const controller = new AbortController();
       const abort = () => controller.abort(externalSignal?.reason);
@@ -875,7 +876,7 @@
     } else if (state.cacheKey !== requestedCacheKey) {
       state.stats = {};
     }
-    const urls = (archivesPayload.archives || []).slice().reverse();
+    const urls = [...new Set((archivesPayload.archives || []).slice().reverse())];
     if (!urls.length) throw new Error("Chess.com returned no public game archives for this username.");
     const importAll = state.settings.importAllGames;
     const wanted = importAll ? Number.POSITIVE_INFINITY : clamp(num(state.settings.maxGames, 240), 1, 20000);
@@ -903,38 +904,69 @@
       offset += batchSize
     ) {
       const batch = scanUrls.slice(offset, offset + batchSize);
-      const results = await Promise.allSettled(batch.map((archiveUrl) => fetchJson(archiveUrl, { signal }, 22000, 3)));
+      if (signal.aborted) throw new DOMException("Import stopped.", "AbortError");
+      const batchController = new AbortController();
+      const stopBatch = () => batchController.abort(signal.reason);
+      signal.addEventListener("abort", stopBatch, { once: true });
+      // Start the same bounded concurrent batch, but consume each result in
+      // newest-first order without waiting for unused older responses.
+      const observed = [];
+      const results = batch.map((archiveUrl, index) => fetchJson(archiveUrl, { signal: batchController.signal }, 22000, 3).then(
+        (value) => (observed[index] = { status: "fulfilled", value }),
+        (reason) => (observed[index] = { status: "rejected", reason }),
+      ));
       let batchUnknownGames = 0;
       let batchFailures = 0;
-      for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
-        if (signal.aborted) throw new DOMException("Import stopped.", "AbortError");
-        archivesScanned += 1;
-        const result = results[resultIndex];
-        const archiveUrl = batch[resultIndex];
-        pendingRetryUrls.delete(archiveUrl);
-        if (result.status === "rejected") {
-          batchFailures += 1;
-          failedArchiveUrls.add(archiveUrl);
-          warnings.push(`${archiveUrl.split("/").slice(-2).join("-")}: ${result.reason?.message || "archive failed"}`);
-          continue;
-        }
-        failedArchiveUrls.delete(archiveUrl);
-        const archiveGames = (result.value.games || []).slice().reverse();
-        for (let index = 0; index < archiveGames.length && imported.length < wanted; index += 1) {
-          const raw = archiveGames[index];
-          const identity = gameIdentity(raw);
-          if (rawSeen.has(identity) || knownIds.has(identity)) {
-            duplicates += 1;
+      let consumedResults = 0;
+      try {
+        for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+          if (!importAll && imported.length >= wanted && pendingRetryUrls.size === 0) break;
+          const result = await results[resultIndex];
+          consumedResults = resultIndex + 1;
+          if (signal.aborted) throw new DOMException("Import stopped.", "AbortError");
+          archivesScanned += 1;
+          const archiveUrl = batch[resultIndex];
+          pendingRetryUrls.delete(archiveUrl);
+          if (result.status === "rejected") {
+            batchFailures += 1;
+            failedArchiveUrls.add(archiveUrl);
+            warnings.push(`${archiveUrl.split("/").slice(-2).join("-")}: ${result.reason?.message || "archive failed"}`);
             continue;
           }
-          batchUnknownGames += 1;
-          rawSeen.add(identity);
-          if (!state.settings.timeClasses.includes(inferTimeClass(raw, {}))) continue;
-          const parsed = parseGame(raw);
-          if (parsed) imported.push(parsed);
-          else skipped += 1;
-          if (index > 0 && index % 40 === 0) await yieldToMain();
+          failedArchiveUrls.delete(archiveUrl);
+          const archiveGames = (result.value.games || []).slice().reverse();
+          for (let index = 0; index < archiveGames.length && imported.length < wanted; index += 1) {
+            const raw = archiveGames[index];
+            const identity = gameIdentity(raw);
+            if (rawSeen.has(identity) || knownIds.has(identity)) {
+              duplicates += 1;
+              continue;
+            }
+            batchUnknownGames += 1;
+            rawSeen.add(identity);
+            if (!state.settings.timeClasses.includes(inferTimeClass(raw, {}))) continue;
+            const parsed = parseGame(raw);
+            if (parsed) imported.push(parsed);
+            else skipped += 1;
+            if (index > 0 && index % 40 === 0) await yieldToMain();
+          }
         }
+      } finally {
+        signal.removeEventListener("abort", stopBatch);
+        // Retain failures already observed in the concurrent batch, even when
+        // their games are no longer needed. Future refreshes still retry them.
+        if (!signal.aborted) {
+          for (let index = consumedResults; index < observed.length; index += 1) {
+            const result = observed[index];
+            if (result?.status !== "rejected" || result.reason?.name === "AbortError") continue;
+            archivesScanned += 1;
+            failedArchiveUrls.add(batch[index]);
+            warnings.push(`${batch[index].split("/").slice(-2).join("-")}: ${result.reason?.message || "archive failed"}`);
+          }
+        }
+        // Settled result wrappers observe every rejection, including canceled
+        // speculative requests; they never become archive failure warnings.
+        batchController.abort();
       }
       const archiveRatio = importAll
         ? archivesScanned / scanUrls.length

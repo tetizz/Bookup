@@ -2797,3 +2797,8 @@ body, body::before, body::after { animation: none; }
 .workspace-panel:focus-visible { outline: 3px solid var(--product-accent); outline-offset: -3px; }
 [data-tone="error"] { color: var(--product-danger); }
 [data-tone="success"] { color: var(--product-good); }
+
+/* Smooth discrete import updates without a JS animation/render loop. */
+@media (prefers-reduced-motion: no-preference) {
+  .progress-fill:not(.indeterminate) { transition: inline-size 160ms ease-out; }
+}
