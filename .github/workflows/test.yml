@@ -87,3 +87,4 @@ jobs:
           node scripts/web_smart_theory_schema_smoke.cjs
           node scripts/web_smart_theory_generation_smoke.cjs
           node scripts/web_trainer_accessibility_smoke.cjs
+          node scripts/web_training_concealment_regression.cjs

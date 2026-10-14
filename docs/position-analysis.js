@@ -502,6 +502,7 @@
       repeatCount: repeatBestCount,
       repeatMistakeCount,
       valueLostCp,
+      evaluation: { best: { scoreCp: best.scoreCp, mate: best.mate ?? null }, played: { scoreCp: yourScore, mate: (inRoot || playedLine)?.mate ?? null } },
       priority: Math.round(priority * 10) / 10,
       confidence: Math.round(confidence * 10) / 10,
       lineStatus,
@@ -586,6 +587,8 @@
       analyzed,
     };
   }
+
+  if (window.__BOOKUP_TEST__) window.BookupPositionAnalysisTestHooks = { createLesson };
 
   window.BookupPositionAnalysis = {
     analyzeImportedGames,

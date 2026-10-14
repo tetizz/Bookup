@@ -70,6 +70,7 @@
       orientation: "white",
       cursor: 0,
       mistakes: 0,
+      answerRevealed: false,
       boardNodes: new Map(),
       renderedOrientation: "",
       focusedSquare: "",
@@ -1262,11 +1263,10 @@
       ? `<button class="ghost-btn" data-open-lesson="${escapeHtml(lesson.lessonId)}" type="button">Train position</button>`
       : "";
     const date = lesson.lastSeenTime ? new Date(lesson.lastSeenTime * 1000).toLocaleDateString() : "PGN import";
-    const loss = Math.round(num(lesson.valueLostCp));
-    const title = `${lesson.recommendedMove} instead of ${lesson.yourRepeatedMove}`;
-    const body = `You chose ${escapeHtml(lesson.yourRepeatedMove)} in ${count(lesson.repeatMistakeCount)} repeated games. Stockfish prefers ${escapeHtml(lesson.recommendedMove)}${loss ? ` by about ${(loss / 100).toFixed(2)} pawns` : ""}.`;
+    const title = isCorrectionLesson(lesson) ? `Correct your repeated ${lesson.yourRepeatedMove}` : `${lesson.recommendedMove} instead of ${lesson.yourRepeatedMove}`;
+    const body = `You chose ${escapeHtml(lesson.yourRepeatedMove)} in ${count(lesson.repeatMistakeCount)} repeated games. ${escapeHtml(lessonLossText(lesson))}.`;
     const meta = `${lesson.color} · ${lesson.openingName || lesson.lineLabel || "exact position"} · last seen ${date}`;
-    return card(title, `${body}<br><span class="lesson-continuation">${escapeHtml(lesson.continuationSan || "")}</span>`, meta, action);
+    return card(title, `${body}<br><span class="lesson-continuation">${isCorrectionLesson(lesson) ? "Play the position to find its correction." : escapeHtml(lesson.continuationSan || "")}</span>`, meta, action);
   }
 
   function renderSummary() {
@@ -2225,10 +2225,46 @@
     };
   }
 
+  function isCorrectionLesson(lesson) {
+    return ["inaccuracy", "mistake", "blunder"].includes(String(lesson?.classification?.key || "").toLowerCase());
+  }
+
+  function correctionConcealed() {
+    return Boolean(state.selectedLesson && isCorrectionLesson(state.selectedLesson)
+      && !state.trainer.answerRevealed
+      && state.trainer.cursor < (state.selectedLesson.trainingLineUci?.length || 1));
+  }
+
+  function lessonLossText(lesson) {
+    const evaluation = lesson.evaluation;
+    if (Number.isFinite(evaluation?.best?.mate) || Number.isFinite(evaluation?.played?.mate)) {
+      if (Number.isFinite(evaluation?.played?.mate) && evaluation.played.mate <= 0) return "allows forced mate";
+      return "changes a forced-mate continuation";
+    }
+    if (Math.abs(num(lesson.valueLostCp)) >= 90000) return "mate-related evaluation; pawn loss unavailable";
+    return `about ${(num(lesson.valueLostCp) / 100).toFixed(2)} pawns lost`;
+  }
+
+  function lineScore(line, turn = "w") {
+    if (Number.isFinite(line?.mate)) return `#${turn === "w" ? line.mate : -line.mate}`;
+    const cp = turn === "w" ? num(line?.scoreCp) : -num(line?.scoreCp);
+    return `${cp >= 0 ? "+" : ""}${(cp / 100).toFixed(2)}`;
+  }
+
+  function concealCorrection() {
+    setText("boardLine", "Find the correction from this position.");
+    setText("trainerInsight", "Play a move to review the correction.");
+    setText("studyAnalysisMeta", "Practice position");
+    setText("studyEngineLines", "Analysis appears after your attempt.");
+    setText("studyDatabaseMoves", "Move history appears after your attempt.");
+    $("boardArrows")?.replaceChildren();
+  }
+
   function renderTrainerArrows() {
     const layer = $("boardArrows");
     const board = $("board");
     if (!layer || !board) return;
+    if (correctionConcealed()) { layer.replaceChildren(); return; }
     const candidates = (state.localEngineLines || []).slice(0, 3)
       .map((line) => String(line?.pv?.[0] || ""))
       .filter((uci) => uci.length >= 4);
@@ -2270,8 +2306,7 @@
   function cloudScore() {
     const local = state.localEngineLines?.[0];
     if (local) {
-      const cp = state.trainer.chess.turn() === "w" ? num(local.scoreCp) : -num(local.scoreCp);
-      return `${cp >= 0 ? "+" : ""}${(cp / 100).toFixed(2)}`;
+      return lineScore(local, state.trainer.chess.turn());
     }
     const pv = state.cloud?.pvs?.[0];
     if (!pv) return "+0.00";
@@ -2292,6 +2327,7 @@
     state.trainer.focusedSquare = "";
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
+    state.trainer.answerRevealed = false;
     state.trainer.detached = false;
     state.cloud = null;
     state.localEngineLines = [];
@@ -2329,6 +2365,7 @@
     state.trainer.focusedSquare = "";
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
+    state.trainer.answerRevealed = false;
     state.trainer.detached = false;
     state.cloud = null;
     state.localEngineLines = [];
@@ -2340,12 +2377,12 @@
       : `This is the exact position where you repeatedly played ${lesson.yourRepeatedMove}, a ${lesson.classification?.label || "sound"} move. Rehearse your repertoire choice.`);
     setText("boardLine", `${lesson.introLineSan || lesson.lineLabel} · best continuation: ${lesson.continuationSan || lesson.recommendedMove}`);
     setText("trainerFeedback", needsCorrection
-      ? `Your repeated move was ${lesson.yourRepeatedMove}. Find the correction ${lesson.recommendedMove}.`
+      ? `Your repeated move was ${lesson.yourRepeatedMove}. Find the correcting move.`
       : `Your repeated move ${lesson.yourRepeatedMove} is sound. Play it again to reinforce the line.`);
     setText("trainerDecision", startPlan.autoReplyPlies
       ? `You are ${startPlan.color}. Bookup is replaying the opponent move before your decision.`
       : `You are ${startPlan.color}. ${needsCorrection ? "Choose the correcting move" : "Play your repertoire move"} in this position.`);
-    setText("trainerCoach", `${count(lesson.repeatMistakeCount)} repeats · about ${(num(lesson.valueLostCp) / 100).toFixed(2)} pawns lost · ${Math.round(num(lesson.confidence))}% confidence`);
+    setText("trainerCoach", `${count(lesson.repeatMistakeCount)} repeats · ${lessonLossText(lesson)} · ${Math.round(num(lesson.confidence))}% confidence`);
     setText("studyMoveMeta", "Exact position");
     setHtml("studyMoveClassifications", card(
       `${lesson.yourRepeatedMove} was ${lesson.classification?.label || "weaker"}`,
@@ -2396,6 +2433,7 @@
     state.trainer.focusedSquare = "";
     state.trainer.cursor = 0;
     state.trainer.mistakes = 0;
+    state.trainer.answerRevealed = false;
     state.trainer.detached = false;
     state.cloud = null;
     state.localEngineLines = [];
@@ -2456,22 +2494,25 @@
       const correct = moveMatchesUci(move, expectedUci);
       if (!correct) {
         state.trainer.mistakes += 1;
+        state.trainer.answerRevealed = true;
         chess.undo();
         setText("studyMoveMeta", "Try again");
+        const target = new Chess(chess.fen()).move({ from: expectedUci.slice(0, 2), to: expectedUci.slice(2, 4), promotion: expectedUci.slice(4, 5) || "q" });
         setHtml("studyMoveClassifications", card(
           move.san,
-          `${move.san} is legal, but Stockfish's best move here is ${lesson.recommendedMove}. The position remains on the board so you can correct it.`,
+          `${move.san} is legal. The saved correction here is ${target?.san || expectedUci}. The position remains on the board so you can correct it.`,
           lesson.classification?.label || "miss"
         ));
-        setText("trainerFeedback", `${move.san} was not the target. Try ${lesson.recommendedMove}.`);
+        setText("trainerFeedback", `${move.san} was not the target. Try ${target?.san || expectedUci}.`);
         renderBoard();
         return;
       }
       state.trainer.cursor += 1;
+      state.trainer.answerRevealed = false;
       setText("studyMoveMeta", "Best move");
       setHtml("studyMoveClassifications", card(
         move.san,
-        `Correct. ${lesson.continuationSan ? `Continue with ${escapeHtml(lesson.continuationSan)}.` : "The exact-position lesson is complete."}`,
+        "Correct. Continue practicing the line.",
         "Stockfish best"
       ));
       setText("trainerFeedback", `Correct: ${move.san}.`);
@@ -2538,7 +2579,7 @@
           to: expectedUci.slice(2, 4),
           promotion: expectedUci.slice(4, 5) || "q",
         });
-        setText("trainerDecision", `Your move. Find ${expected?.san || "the best continuation"}.`);
+        setText("trainerDecision", `Your move. Find the best continuation.`);
       }
       state.trainer.focusedSquare = "";
       renderBoard();
@@ -2797,6 +2838,7 @@
   async function requestPositionData() {
     const fen = state.trainer.chess.fen();
     const requestId = ++state.positionRequestId;
+    if (correctionConcealed()) { concealCorrection(); return; }
     setText("studyOpeningMeta", "Loading imported-game database and public cloud evaluation...");
     setText("studyDatabaseMeta", "Loading");
     setText("studyAnalysisMeta", "Public cloud");
@@ -2817,6 +2859,7 @@
   }
 
   function renderPositionData() {
+    if (correctionConcealed()) { concealCorrection(); return; }
     const db = state.database;
     if (db) {
       const total = num(db.white) + num(db.draws) + num(db.black);
@@ -2840,7 +2883,7 @@
         const probe = new Chess(state.trainer.chess.fen());
         const uci = String(line.pv?.[0] || "");
         const move = uci ? probe.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || "q" }) : null;
-        return card(`#${index + 1} ${move?.san || uci}`, `${num(line.scoreCp) >= 0 ? "+" : ""}${(num(line.scoreCp) / 100).toFixed(2)} · ${(line.pv || []).join(" ")}`, "local Stockfish");
+        return card(`#${index + 1} ${move?.san || uci}`, `${lineScore(line)} · ${(line.pv || []).join(" ")}`, "local Stockfish");
       }).join(""));
       const top = localLines[0];
       const topUci = String(top?.pv?.[0] || "");
@@ -3887,6 +3930,7 @@
 
   if (window.__BOOKUP_TEST__) {
     window.BookupTrainerTestHooks = Object.freeze({
+      state, openLesson, clickSquare, playOpponentMoves, renderPositionData, renderTrainerArrows, requestPositionData, lessonCard, lessonLossText, lineScore, finishTrainer,
       boardAxes,
       colorForTurn,
       flushSave,
