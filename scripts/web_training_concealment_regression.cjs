@@ -12,8 +12,15 @@ h.clickSquare('e2');h.clickSquare('e4');assert.equal(s.trainer.chess.fen(),lesso
 h.openLesson('saved');h.clickSquare('e2');h.clickSquare('e3');assert.equal(s.trainer.cursor,1);h.playOpponentMoves();assert.equal(s.trainer.cursor,2);assert(!/d4/.test(nodes.get('trainerDecision').textContent+nodes.get('boardLine').textContent));h.clickSquare('d2');h.clickSquare('d4');assert.equal(s.reviews.at(-1).result,'known');
 h.openLesson('saved');h.clickSquare('e2');h.clickSquare('e4');h.clickSquare('e2');h.clickSquare('e3');h.playOpponentMoves();h.clickSquare('d2');h.clickSquare('d4');assert.equal(s.reviews.at(-1).result,'missed');assert.equal(s.reviews.at(-1).streak,0);
 assert.equal(h.lineScore({mate:0,scoreCp:-100000}),'#0');assert.equal(h.lineScore({mate:-2},'b'),'#2');assert.equal(h.lineScore({scoreCp:31}),'+0.31');assert.equal(h.lessonLossText({valueLostCp:31}),'about 0.31 pawns lost');assert.equal(h.lessonLossText({evaluation:{played:{mate:-1}},valueLostCp:99931}),'allows forced mate');
+const ordinaryLarge={valueLostCp:100030,evaluation:{best:{scoreCp:50015,mate:null},played:{scoreCp:-50015,mate:null}}};
+assert.equal(h.lessonLossText(ordinaryLarge),'about 1000.30 pawns lost');
+assert.equal(h.lessonLossText({valueLostCp:89999}),'about 899.99 pawns lost');
+assert.equal(h.lessonLossText({valueLostCp:90000}),'mate-related evaluation; pawn loss unavailable');
+assert.equal(h.lessonLossText({valueLostCp:100030,evaluation:{best:{scoreCp:50015,mate:null},played:{scoreCp:-50015}}}),'mate-related evaluation; pawn loss unavailable');
 vm.runInContext(fs.readFileSync(path.join(root,'docs/position-analysis.js'),'utf8'),context);
 const typed=context.BookupPositionAnalysisTestHooks.createLesson({fen:lesson.decisionFen,key:'position',color:'white',playerMoves:new Map([['f2f3',2]]),playerSan:new Map([['f2f3','f3']]),occurrences:2,introSan:[],introUci:[],results:{}},[{scoreCp:31,mate:null,pv:['e2e3']}],{scoreCp:-99999,mate:-1,pv:['f2f3']});
+const cpLesson=context.BookupPositionAnalysisTestHooks.createLesson({fen:lesson.decisionFen,key:'position',color:'white',playerMoves:new Map([['f2f3',2]]),playerSan:new Map([['f2f3','f3']]),occurrences:2,introSan:[],introUci:[],results:{}},[{scoreCp:50015,mate:null,pv:['e2e3']}],{scoreCp:-50015,mate:null,pv:['f2f3']});
+assert.equal(cpLesson.valueLostCp,typed.valueLostCp);assert.equal(cpLesson.classification.key,typed.classification.key);assert.equal(cpLesson.recommendedMoveUci,typed.recommendedMoveUci);assert.deepEqual(Array.from(cpLesson.trainingLineUci),Array.from(typed.trainingLineUci));assert.equal(h.lessonLossText(cpLesson),'about 1000.30 pawns lost');
 assert.equal(typed.evaluation.played.mate,-1);assert.equal(typed.recommendedMoveUci,'e2e3');assert.equal(typed.valueLostCp,100030);assert.equal(typed.classification.key,'blunder');
 (async()=>{
 let resolve; const result=new Promise(r=>resolve=r);

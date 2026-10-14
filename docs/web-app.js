@@ -2241,7 +2241,9 @@
       if (Number.isFinite(evaluation?.played?.mate) && evaluation.played.mate <= 0) return "allows forced mate";
       return "changes a forced-mate continuation";
     }
-    if (Math.abs(num(lesson.valueLostCp)) >= 90000) return "mate-related evaluation; pawn loss unavailable";
+    const ordinaryCp = [evaluation?.best, evaluation?.played]
+      .every((score) => score?.mate === null && Number.isFinite(score?.scoreCp));
+    if (!ordinaryCp && Math.abs(num(lesson.valueLostCp)) >= 90000) return "mate-related evaluation; pawn loss unavailable";
     return `about ${(num(lesson.valueLostCp) / 100).toFixed(2)} pawns lost`;
   }
 
