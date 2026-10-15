@@ -328,12 +328,11 @@
       return { games: [], summary: summarizeAccuracy([]), cacheHits: 0, analyzed: 0, truncated: false };
     }
 
-    const engine = new BrowserStockfish(options.workerUrl || "./vendor/stockfish/stockfish-18-lite-single.js", options.signal);
+    let engine = null;
     const analyzedGames = [];
     let cacheHits = 0;
     let analyzed = 0;
     let completed = 0;
-    await engine.initialize();
     try {
       for (const game of selected) {
         if (completed >= moveLimit) break;
@@ -356,6 +355,10 @@
           if (evaluation) {
             cacheHits += 1;
           } else {
+            if (!engine) {
+              engine = new BrowserStockfish(options.workerUrl || "./vendor/stockfish/stockfish-18-lite-single.js", options.signal);
+              await engine.initialize();
+            }
             const rootLines = await engine.analyze(fen, {
               multiPv: 3,
               moveTimeMs: options.moveTimeMs || 120,
@@ -432,7 +435,7 @@
         }
       }
     } finally {
-      engine.close();
+      engine?.close();
     }
     return {
       games: analyzedGames,
@@ -533,10 +536,9 @@
     if (!candidates.length) {
       return { candidates: 0, lessons, due: [], fresh: [], known: [], cacheHits: 0, analyzed: 0 };
     }
-    const engine = new BrowserStockfish(options.workerUrl || "./vendor/stockfish/stockfish-18-lite-single.js", options.signal);
+    let engine = null;
     let cacheHits = 0;
     let analyzed = 0;
-    await engine.initialize();
     try {
       for (let index = 0; index < candidates.length; index += 1) {
         if (options.signal?.aborted) throw new DOMException("Analysis stopped.", "AbortError");
@@ -546,6 +548,10 @@
         if (evaluation) {
           cacheHits += 1;
         } else {
+          if (!engine) {
+            engine = new BrowserStockfish(options.workerUrl || "./vendor/stockfish/stockfish-18-lite-single.js", options.signal);
+            await engine.initialize();
+          }
           const rootLines = await engine.analyze(position.fen, {
             multiPv: 3,
             moveTimeMs: options.moveTimeMs || 180,
@@ -574,7 +580,7 @@
         if (index % 4 === 3) await new Promise((resolve) => setTimeout(resolve, 0));
       }
     } finally {
-      engine.close();
+      engine?.close();
     }
     lessons.sort((left, right) => right.priority - left.priority || right.frequency - left.frequency);
     return {
