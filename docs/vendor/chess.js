@@ -679,9 +679,8 @@ var Chess = function(fen) {
     } else if (move.flags & BITS.QSIDE_CASTLE) {
       output = 'O-O-O'
     } else {
-      var disambiguator = get_disambiguator(move, sloppy)
-
       if (move.piece !== PAWN) {
+        var disambiguator = get_disambiguator(move, sloppy)
         output += move.piece.toUpperCase() + disambiguator
       }
 

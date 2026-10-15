@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "bookup-";
-const CACHE_NAME = `${CACHE_PREFIX}shell-v18`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-v19`;
 const APP_SHELL = [
   "./",
   "./index.html",
