@@ -105,6 +105,117 @@
       .slice(0, MAX_POSITIONS);
   }
 
+  const importReplayJobs = new WeakMap();
+
+  function createImportReplayContext(games, options = {}) {
+    const context = { dispose };
+    const selected = new Set(selectAccuracyGames(games, options.gamesPerMode || ACCURACY_GAMES_PER_MODE));
+    const data = { games, gamesPerMode: options.gamesPerMode || ACCURACY_GAMES_PER_MODE, candidates: [], frequency: new Map(), frequencyError: null, timelines: new Map(), disposed: false };
+    importReplayJobs.set(context, data);
+    function dispose() {
+      if (data.disposed) return;
+      data.disposed = true;
+      data.games = null;
+      selected.clear();
+      data.candidates.length = 0;
+      data.frequency.clear();
+      data.frequencyError = null;
+      for (const timeline of data.timelines.values()) { timeline.chess = null; timeline.records.length = 0; }
+      data.timelines.clear();
+    }
+    try {
+      const positions = new Map();
+      games.forEach((game, gameIndex) => {
+        const chess = new Chess();
+        const retain = selected.has(game);
+        const records = [];
+        const playerTurn = game.color === "white" ? "w" : "b";
+        const pathUci = [], pathSan = [];
+        let previousMove = "Start position", ended = false;
+        for (let ply = 0; ply < Math.min(20, game.moves.length); ply += 1) {
+          const fen = chess.fen(), key = fenKey(fen), turn = chess.turn();
+          let position;
+          if (ply < MAX_OPENING_PLIES && turn === playerTurn) {
+            if (!positions.has(key)) {
+              positions.set(key, {
+                key,
+                fen: chess.fen(),
+                color: game.color,
+                ply,
+                triggerMove: previousMove,
+                introUci: [...pathUci],
+                introSan: [...pathSan],
+                occurrences: 0,
+                playerMoves: new Map(),
+                playerSan: new Map(),
+                firstSeenGame: gameIndex + 1,
+                lastSeenGame: gameIndex + 1,
+                firstSeenTime: game.endTime || 0,
+                lastSeenTime: game.endTime || 0,
+                results: { wins: 0, draws: 0, losses: 0 },
+                openingName: game.headers?.Opening || game.headers?.ECOUrl?.split("/").at(-1)?.replaceAll("-", " ") || "Imported opening",
+                openingCode: game.headers?.ECO || "",
+              });
+            }
+            position = positions.get(key);
+          }
+          const material = retain ? materialProfile(chess) : null;
+          let played;
+          try { played = chess.move(game.moves[ply], { sloppy: true }); }
+          catch (error) {
+            if (ply < MAX_OPENING_PLIES) throw error;
+            data.frequencyError ||= error;
+            ended = true;
+            break;
+          }
+          if (retain) records.push({ fen, turn, material, played });
+          if (position && played) {
+            const uci = moveUci(played);
+            position.occurrences += 1;
+            position.playerMoves.set(uci, (position.playerMoves.get(uci) || 0) + 1);
+            position.playerSan.set(uci, played.san);
+            position.lastSeenGame = gameIndex + 1;
+            position.lastSeenTime = game.endTime || position.lastSeenTime;
+            position.results[resultBucket(game)] += 1;
+          }
+          if (!played) { ended = true; break; }
+          const frequencyKey = `${key}:${moveUci(played)}`;
+          data.frequency.set(frequencyKey, (data.frequency.get(frequencyKey) || 0) + 1);
+          previousMove = played.san;
+          pathSan.push(played.san);
+          pathUci.push(moveUci(played));
+        }
+        if (retain) data.timelines.set(game, { chess, records, ended });
+      });
+      data.candidates = [...positions.values()]
+        .filter((position) => position.occurrences >= REPEATED_POSITION_THRESHOLD && position.playerMoves.size)
+        .sort((left, right) => right.occurrences - left.occurrences || left.ply - right.ply || left.key.localeCompare(right.key))
+        .slice(0, MAX_POSITIONS);
+      return context;
+    } catch (error) { dispose(); throw error; }
+  }
+
+  function replayData(context, games, gamesPerMode) {
+    if (!context) return null;
+    const data = importReplayJobs.get(context);
+    if (!data || data.disposed || data.games !== games || (gamesPerMode && data.gamesPerMode !== gamesPerMode)) throw new Error("Import replay context does not belong to this analysis job.");
+    return data;
+  }
+
+  function replayRecord(data, game, ply) {
+    const timeline = data.timelines.get(game);
+    if (!timeline) throw new Error("Accuracy game is outside this replay job.");
+    while (timeline.records.length <= ply && !timeline.ended) {
+      const index = timeline.records.length;
+      if (index >= game.moves.length) { timeline.ended = true; break; }
+      const fen = timeline.chess.fen(), turn = timeline.chess.turn(), material = materialProfile(timeline.chess);
+      const played = timeline.chess.move(game.moves[index], { sloppy: true });
+      timeline.records.push({ fen, turn, material, played });
+      if (!played) timeline.ended = true;
+    }
+    return timeline.records[ply] || null;
+  }
+
   function parseInfo(line) {
     if (!line.startsWith("info ") || !line.includes(" pv ")) return null;
     const depth = Number(line.match(/\bdepth\s+(\d+)/)?.[1] || 0);
@@ -258,7 +369,11 @@
 
   function positionPhase(chess, ply, previousPhase, hasOpeningName) {
     if (previousPhase === "endgame") return "endgame";
-    const material = materialProfile(chess);
+    return phaseFromMaterial(materialProfile(chess), ply, previousPhase, hasOpeningName);
+  }
+
+  function phaseFromMaterial(material, ply, previousPhase, hasOpeningName) {
+    if (previousPhase === "endgame") return "endgame";
     if (
       (material.queens === 0 && material.nonPawn <= 22)
       || material.pieces <= 10
@@ -319,7 +434,9 @@
 
   async function analyzeGameAccuracy(games, options = {}) {
     const selected = selectAccuracyGames(games, options.gamesPerMode || ACCURACY_GAMES_PER_MODE);
-    const openingFrequency = buildOpeningFrequency(games);
+    const replay = replayData(options.replayContext, games, options.gamesPerMode || ACCURACY_GAMES_PER_MODE);
+    if (replay?.frequencyError) throw replay.frequencyError;
+    const openingFrequency = replay ? replay.frequency : buildOpeningFrequency(games);
     const totalPlayerMoves = selected.reduce((sum, game) => (
       sum + game.moves.filter((_, ply) => ply % 2 === (game.color === "white" ? 0 : 1)).length
     ), 0);
@@ -336,16 +453,17 @@
     try {
       for (const game of selected) {
         if (completed >= moveLimit) break;
-        const chess = new Chess();
+        const chess = replay ? null : new Chess();
         const playerTurn = game.color === "white" ? "w" : "b";
         const moveAnalysis = [];
         let phase = "opening";
         const hasOpeningName = Boolean(game.headers?.ECO || game.headers?.Opening || game.headers?.ECOUrl);
         for (let ply = 0; ply < game.moves.length; ply += 1) {
           if (options.signal?.aborted) throw new DOMException("Analysis stopped.", "AbortError");
-          const fen = chess.fen();
-          phase = positionPhase(chess, ply, phase, hasOpeningName);
-          const played = chess.move(game.moves[ply], { sloppy: true });
+          const record = replay ? replayRecord(replay, game, ply) : null;
+          const fen = replay ? record?.fen : chess.fen();
+          phase = replay ? phaseFromMaterial(record.material, ply, phase, hasOpeningName) : positionPhase(chess, ply, phase, hasOpeningName);
+          const played = replay ? record.played : chess.move(game.moves[ply], { sloppy: true });
           if (!played) break;
           if (fen.split(" ")[1] !== playerTurn) continue;
           if (completed >= moveLimit) break;
@@ -531,7 +649,8 @@
   }
 
   async function analyzeImportedGames(games, options = {}) {
-    const candidates = buildPositionCandidates(games);
+    const replay = replayData(options.replayContext, games);
+    const candidates = replay ? replay.candidates : buildPositionCandidates(games);
     const lessons = [];
     if (!candidates.length) {
       return { candidates: 0, lessons, due: [], fresh: [], known: [], cacheHits: 0, analyzed: 0 };
@@ -594,9 +713,10 @@
     };
   }
 
-  if (window.__BOOKUP_TEST__) window.BookupPositionAnalysisTestHooks = { createLesson };
+  if (window.__BOOKUP_TEST__) window.BookupPositionAnalysisTestHooks = { createLesson, buildOpeningFrequency, positionPhase, replayData, replayRecord };
 
   window.BookupPositionAnalysis = {
+    createImportReplayContext,
     analyzeImportedGames,
     analyzeGameAccuracy,
     buildPositionCandidates,

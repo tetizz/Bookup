@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "purpose": "Portable deterministic differential regression fixtures; never shipped in docs or used as user data",
+  "baseline": {
+    "revision": "f2b3039d164bce42653c7c733f669a0e46e97c74",
+    "repository_path": "docs/position-analysis.js",
+    "basis": "Exact Git blob frozen as a test oracle; do not modernize alongside candidate implementation"
+  },
+  "pgn": {
+    "basis": "15 owned public-position synthetic games: five legal standard opening lines across bullet/blitz/rapid; fixture-player vs public-position-opponent; not named human games",
+    "games": 15,
+    "legal_san_plies": 360,
+    "white_player_decisions": 180
+  },
+  "analysis": {
+    "basis": "Exact 90 records from normal real SF18 baseline full-cohort browser primer, Root-approved seed; no invented scores or PVs",
+    "records": 90,
+    "quality": {
+      "lesson_move_time_ms": 180,
+      "accuracy_move_time_ms": 126,
+      "threads": 1,
+      "hash_mib": 32
+    },
+    "original_primer_sha256": "e8795fe15c48cf8110c2dd3d39936f5ca0770bb800af0c62d41c68d7472430c7",
+    "no_private_content": "Only FEN/move cache keys, engine numeric scores/depth/PVs and actual record timestamps; no credentials, URLs, accounts, user histories or storage snapshots"
+  },
+  "files": {
+    "baseline-position-analysis-f2b3039.js": {
+      "bytes": 23991,
+      "sha256": "2cce2933f4618eea1127ddcc51f6b18ef0aa37d9e084739ac5e09e53cc8f5625"
+    },
+    "cohort-15.pgn": {
+      "bytes": 4192,
+      "sha256": "88bd4d8df59f871ac58d0645f54345edf203dbdb3a81ea63799b831032b7b076"
+    },
+    "analysis-seed.json": {
+      "bytes": 141855,
+      "sha256": "ff1b2eec3ad57a68edd0164429cf6f50cc46c77797cfc59db7859d0a20045ca7"
+    }
+  },
+  "line_endings": "Exact source bytes preserved across Git checkouts by local .gitattributes * -text",
+  "scope": "Unit functional oracle; cached payload replay does not claim an engine benchmark or live/public behavior"
+}

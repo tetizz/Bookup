@@ -727,7 +727,15 @@
     return `${raw.end_time || ""}|${raw.white?.username || ""}|${raw.black?.username || ""}|${String(raw.pgn || "").slice(-160)}`;
   }
 
-  async function analyzeImportedPositions(signal, progressStart = 58, progressEnd = 96) {
+  async function analyzeImportedJob(signal, lessonStart, lessonEnd, accuracyStart, accuracyEnd) {
+    const replayJob = { context: null, initialized: false };
+    try {
+      await analyzeImportedPositions(signal, lessonStart, lessonEnd, replayJob);
+      await analyzeImportedAccuracy(signal, accuracyStart, accuracyEnd, replayJob);
+    } finally { replayJob.context?.dispose(); }
+  }
+
+  async function analyzeImportedPositions(signal, progressStart = 58, progressEnd = 96, replayJob) {
     const analyzer = window.BookupPositionAnalysis;
     if (!analyzer?.analyzeImportedGames) {
       throw new Error("The exact-position analyzer did not load. Refresh the page and try again.");
@@ -735,7 +743,12 @@
     const startedAt = Date.now();
     const moveTimeMs = clamp(Math.round(num($("thinkTimeInput")?.value, 0.18) * 1000), 120, 350);
     setImportProgress(0, 0, "Finding repeated decision positions...", progressStart, progressStart);
+    if (replayJob && !replayJob.initialized) {
+      replayJob.context = analyzer.createImportReplayContext?.(state.games, { signal, gamesPerMode: 5 });
+      replayJob.initialized = true;
+    }
     const result = await analyzer.analyzeImportedGames(state.games, {
+      replayContext: replayJob?.context,
       workerUrl: "./vendor/stockfish/stockfish-18-lite-single.js",
       signal,
       moveTimeMs,
@@ -767,7 +780,7 @@
     return result;
   }
 
-  async function analyzeImportedAccuracy(signal, progressStart = 73, progressEnd = 98) {
+  async function analyzeImportedAccuracy(signal, progressStart = 73, progressEnd = 98, replayJob) {
     const analyzer = window.BookupPositionAnalysis;
     if (!analyzer?.analyzeGameAccuracy) {
       throw new Error("The move accuracy analyzer did not load. Refresh the page and try again.");
@@ -776,6 +789,7 @@
     const moveTimeMs = clamp(Math.round(num($("thinkTimeInput")?.value, 0.18) * 700), 90, 220);
     setImportProgress(0, 0, "Preparing move-by-move accuracy analysis...", progressStart, progressStart);
     const result = await analyzer.analyzeGameAccuracy(state.games, {
+      replayContext: replayJob?.context,
       workerUrl: "./vendor/stockfish/stockfish-18-lite-single.js",
       signal,
       moveTimeMs,
@@ -1031,8 +1045,7 @@
       fingerprint: nextFingerprint,
     };
     markDataDirty();
-    await analyzeImportedPositions(signal, 58, 72);
-    await analyzeImportedAccuracy(signal, 73, 98);
+    await analyzeImportedJob(signal, 58, 72, 73, 98);
     markDataDirty();
     setImportProgress(1, 1, "Saving games, lessons, and move accuracy for offline use...", 98, 99);
     await persistAnalysisCache();
@@ -3446,8 +3459,7 @@
         fingerprint: gameFingerprint(state.games),
       };
       markDataDirty();
-      await analyzeImportedPositions(options.signal, 20, 55);
-      await analyzeImportedAccuracy(options.signal, 56, 98);
+      await analyzeImportedJob(options.signal, 20, 55, 56, 98);
       markDataDirty();
       renderAll();
       await persistAnalysisCache();
@@ -3940,8 +3952,7 @@
     if (restored && state.games.length && !state.analysisMeta) {
       status(`Upgrading ${count(state.games.length)} cached games to exact-position lessons...`);
       try {
-        await analyzeImportedPositions(undefined, 5, 45);
-        await analyzeImportedAccuracy(undefined, 46, 98);
+        await analyzeImportedJob(undefined, 5, 45, 46, 98);
         markDataDirty();
         save();
         await persistAnalysisCache();
