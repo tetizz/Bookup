@@ -419,6 +419,10 @@
     }
   }
 
+  function backupWarning(saved) {
+    return saved === false ? " The local backup could not be updated." : "";
+  }
+
   function save() {
     if (state.saveTimer) clearTimeout(state.saveTimer);
     state.saveTimer = window.setTimeout(() => {
@@ -1101,10 +1105,10 @@
     setImportProgress(0, 0, `Starting import for ${state.username}...`, 1, 1);
     try {
       await fetchPublicGames(state.importController.signal);
-      save();
+      const backupSaved = flushSave();
       renderAll();
       const warningText = state.importMeta?.warnings?.length ? ` ${state.importMeta.warnings.length} archive warning(s) were skipped.` : "";
-      status(`Cached ${count(state.games.length)} public games and ${count(state.lessons.filter((lesson) => lesson.lineStatus === "needs_work").length)} due positions offline.${warningText}`, "success");
+      status(`Cached ${count(state.games.length)} public games and ${count(state.lessons.filter((lesson) => lesson.lineStatus === "needs_work").length)} due positions offline.${warningText}${backupWarning(backupSaved)}`, "success");
       setImportProgress(1, 1);
     } catch (error) {
       Object.assign(state, previousWorkspace);
@@ -3435,11 +3439,11 @@
       await analyzeImportedPositions(options.signal, 20, 55);
       await analyzeImportedAccuracy(options.signal, 56, 98);
       markDataDirty();
-      save();
       renderAll();
       await persistAnalysisCache();
-      setImportProgress(1, 1, `Analysis complete: ${count(state.analysisMeta?.due || 0)} exact positions need work.`, 100, 100);
-      return { imported: parsed.length, duplicates, skipped, total: state.games.length };
+      const backupSaved = flushSave();
+      setImportProgress(1, 1, `Analysis complete: ${count(state.analysisMeta?.due || 0)} exact positions need work.${backupWarning(backupSaved)}`, 100, 100);
+      return { imported: parsed.length, duplicates, skipped, total: state.games.length, backupSaved };
     } catch (error) {
       Object.assign(state, previousWorkspace);
       markDataDirty();
@@ -3558,7 +3562,7 @@
       state.importController = new AbortController();
       try {
         const report = await importPgnText($("pgnImportInput")?.value, { source: "Local PGN", signal: state.importController.signal });
-        fieldStatus("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`, "success");
+        fieldStatus("pgnImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.${backupWarning(report.backupSaved)}`, "success");
       } catch (error) { fieldStatus("pgnImportStatus", error.name === "AbortError" ? "Import stopped." : error.message, error.name === "AbortError" ? "" : "error"); }
       finally { state.importController = null; }
     });
@@ -3570,7 +3574,7 @@
           source: "NewChessnut PGN",
           playerColor: $("chessnutPlayerColorInput")?.value || "white",
         });
-        fieldStatus("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.`, "success");
+        fieldStatus("chessnutImportStatus", `Imported ${report.imported}; ignored ${report.duplicates} duplicates; ${report.skipped} failed to parse. ${state.analysisMeta?.due || 0} exact positions need work and are cached offline.${backupWarning(report.backupSaved)}`, "success");
       } catch (error) { fieldStatus("chessnutImportStatus", error.message, "error"); }
     });
     $("trainerResetBtn")?.addEventListener("click", () => {
