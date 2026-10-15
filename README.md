@@ -17,6 +17,10 @@ Bookup includes a GitHub Pages website in `docs/`.
 - GitHub Pages deploys it from `.github/workflows/pages.yml`.
 - The desktop build remains useful for native Stockfish executables, larger local caches, direct filesystem integrations, and NewChessnut database access.
 
+Cached imports now start Stockfish only when analysis is missing and save the current browser backup before reporting completion. In a controlled warm-cache browser test with 15 games, three time controls and 180 player moves, seven paired runs reduced median completed-import time from 1040.1 ms to 682.8 ms (34.35% less elapsed time), with matching saved analysis and backups. This result was measured at `0c4528e`; the same import path is retained in `f2b3039`. It does not measure cold network imports or screen-paint time.
+
+Anonymous training reviews also survive workspace reloads. The `f2b3039` release was checked with two actual public reloads, preserving the saved review and the resulting queue of zero due positions and one new position.
+
 Public URL for this repository:
 
 ```text
