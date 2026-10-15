@@ -1124,8 +1124,22 @@ var Chess = function(fen) {
       }
     }
 
+    // Coordinate-shaped input keeps the existing complete strict/sloppy path.
+    var coordinateShape = sloppy ? matches : clean_move.match(
+      /([pnbrqkPNBRQK])?([a-h][1-8])x?-?([a-h][1-8])([qrbnQRBN])?/
+    )
+    var sanCandidate = !coordinateShape && clean_move.match(
+      /^([NBRQK])?(?:[a-h]?[1-8]?x?)?([a-h][1-8])([NBRQ])?$/
+    )
+    var sanCandidatePiece = sanCandidate && (sanCandidate[1] || 'p').toLowerCase()
+    var sanCandidateTo = sanCandidate && SQUARES[sanCandidate[2]]
+
     var moves = generate_moves()
     for (var i = 0, len = moves.length; i < len; i++) {
+      if (
+        sanCandidate &&
+        (moves[i].piece !== sanCandidatePiece || moves[i].to !== sanCandidateTo)
+      ) continue
       // try the strict parser first, then the sloppy parser if requested
       // by the user
       if (

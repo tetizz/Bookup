@@ -1,0 +1,41 @@
+{
+  "originalCommit": "24b710e8ab0730bb25950e8cf0d048a1e37af8cd",
+  "originalIdentity": "Exact raw pre-edit readable/min and production app bytes; unchanged license retained",
+  "cohort": "../shared-replay/cohort-15.pgn",
+  "inputs": [
+    {
+      "path": "original-chess.cjs",
+      "bytes": 49301,
+      "sha256": "2ccc8f83e7c75d9df86b6f17a750208a887758510e354bf624cb2f6e487c6a4b"
+    },
+    {
+      "path": "original-chess.min.cjs",
+      "bytes": 15141,
+      "sha256": "7aa430df2b9311849040851adef30c4de49f6c8cefdb80645a4262f1f95c445f"
+    },
+    {
+      "path": "original-web-app.js",
+      "bytes": 194536,
+      "sha256": "96975f7c55988a93845bcec705d38671f414317c08fd90aac6a324c3e71907e2"
+    },
+    {
+      "path": "LICENSE.txt",
+      "bytes": 1492,
+      "sha256": "1085e5ff8ba6849d55c059cd3b1bd469f5b41fae6e08747aa6d25fae1407cee0"
+    },
+    {
+      "path": "../shared-replay/cohort-15.pgn",
+      "bytes": 4192,
+      "sha256": "88bd4d8df59f871ac58d0645f54345edf203dbdb3a81ea63799b831032b7b076"
+    }
+  ],
+  "compiler": {
+    "serving": "UTF-8 no BOM, compiler LF normalized to CRLF only",
+    "license": "Complete original license banner retained",
+    "name": "esbuild",
+    "minify": true,
+    "originalAsIsMin": "Preserved distinct from rebuilt original control and candidate",
+    "target": "es2020",
+    "version": "0.28.1"
+  }
+}
