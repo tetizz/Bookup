@@ -393,7 +393,10 @@
   }
 
   function applyUserWorkspace(username) {
-    const saved = state.userWorkspaces[userWorkspaceKey(username)] || {};
+    const key = userWorkspaceKey(username);
+    const entry = Object.prototype.hasOwnProperty.call(state.userWorkspaces, key)
+      ? state.userWorkspaces[key] : null;
+    const saved = entry && typeof entry === "object" && !Array.isArray(entry) ? entry : {};
     state.reviews = Array.isArray(saved.reviews) ? saved.reviews.map((item) => ({ ...item })) : [];
     state.sessions = Array.isArray(saved.sessions) ? saved.sessions.map((item) => ({ ...item })) : [];
     state.snapshots = Array.isArray(saved.snapshots) ? saved.snapshots.map((item) => ({ ...item })) : [];
@@ -477,9 +480,16 @@
       if (Array.isArray(data.gameAnalysis)) state.gameAnalysis = data.gameAnalysis;
       if (data.gameAnalysisMeta) state.gameAnalysisMeta = data.gameAnalysisMeta;
       if (data.stats) state.stats = data.stats;
-      if (data.userWorkspaces && typeof data.userWorkspaces === "object") {
+      if (data.userWorkspaces && typeof data.userWorkspaces === "object" && !Array.isArray(data.userWorkspaces)) {
         state.userWorkspaces = data.userWorkspaces;
-        applyUserWorkspace(state.username);
+        const key = userWorkspaceKey(state.username);
+        const entry = Object.prototype.hasOwnProperty.call(state.userWorkspaces, key)
+          ? state.userWorkspaces[key] : null;
+        if (key && entry && typeof entry === "object" && !Array.isArray(entry)) {
+          applyUserWorkspace(state.username);
+        } else {
+          stashUserWorkspace(state.username);
+        }
       } else {
         stashUserWorkspace(state.username);
       }
